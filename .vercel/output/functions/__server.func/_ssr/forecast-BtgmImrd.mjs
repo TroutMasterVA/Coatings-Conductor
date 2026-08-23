@@ -1,7 +1,7 @@
 import { t as createServerFn } from "./ssr.mjs";
 import { t as createServerRpc } from "./createServerRpc-A6pJPYTF.mjs";
-import { b as scoreHour, i as bundleDays } from "./score-windows-C4N6Vonm.mjs";
-//#region node_modules/.nitro/vite/services/ssr/assets/forecast-C6iF2swj.js
+import { b as scoreHour, i as bundleDays } from "./score-windows-494NVaej.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/forecast-BtgmImrd.js
 var UA = "CoatingsConductor/1.0 (field-qc reference; nws-weather-windows)";
 function cToF(c) {
 	return Math.round(c * 9 / 5 + 32);

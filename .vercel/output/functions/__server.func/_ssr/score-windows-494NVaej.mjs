@@ -1,4 +1,4 @@
-//#region node_modules/.nitro/vite/services/ssr/assets/score-windows-C4N6Vonm.js
+//#region node_modules/.nitro/vite/services/ssr/assets/score-windows-494NVaej.js
 var SUBSTRATES = [
 	{
 		id: "bare_steel",
@@ -74,6 +74,21 @@ var MITIGATIONS = [
 		bodies: [
 			"AMPP",
 			"NACE",
+			"ACI"
+		],
+		disciplines: ["all"],
+		core: true
+	},
+	{
+		id: "rain_tarp",
+		label: "Rain tarping",
+		summary: "Temporary rain fly / poly over the workface. Sheds showers so the film or placement stays dry. Open sides — air, sun, RH, and wind stay field conditions. Not a canopy and not a climate tent.",
+		citation: "AMPP / NACE / SSPC: keep the coating dry until water-resistant. ACI 308R: protect fresh cementitious work from rain. Stake, pitch, and drain — wind-driven rain can still wet the face.",
+		helps: ["rain"],
+		bodies: [
+			"AMPP",
+			"NACE",
+			"SSPC",
 			"ACI"
 		],
 		disciplines: ["all"],
@@ -365,7 +380,7 @@ function isRecommended(m, opts) {
 	if (!helpsNow && opts.limiters.length > 0) return false;
 	if (opts.limiters.length === 0) return substrateById(opts.substrate).peakGainF >= 30 && (m.id === "canopy" || m.id === "night_shift" || m.id === "light_tent");
 	if (m.id === "fog_mist" && !fogMistAllowed(opts.substrate)) return false;
-	return helpsNow && (opts.unlocksHours > 0 || m.id === "canopy" || m.id === "light_tent" || m.id === "night_shift" || m.id === "fog_mist" || m.id === "dehumidify_tent" || m.id === "humidity_tent");
+	return helpsNow && (opts.unlocksHours > 0 || m.id === "canopy" || m.id === "rain_tarp" || m.id === "light_tent" || m.id === "night_shift" || m.id === "fog_mist" || m.id === "dehumidify_tent" || m.id === "humidity_tent");
 }
 function peakExample(substrate, airF = 80) {
 	const sub = substrateById(substrate);
@@ -650,6 +665,9 @@ function hasNumericWindow(env) {
 function wetForecast(text) {
 	return /\b(rain|shower|storm|thunder|snow|sleet|drizzle|precip)/i.test(text);
 }
+function frozenPrecip(text) {
+	return /\b(snow|sleet|ice|freezing rain)\b/i.test(text);
+}
 function round1(n) {
 	return Math.round(n * 10) / 10;
 }
@@ -687,6 +705,7 @@ function scoreHour(raw, env, timeZone = "UTC", site) {
 	let sun = solarEnvelope(z.hour) * sky;
 	const envelope = solarEnvelope(z.hour);
 	if (mits.includes("canopy")) sun *= .12;
+	const rainTarp = mits.includes("rain_tarp");
 	const lightTent = mits.includes("light_tent");
 	const darkTent = mits.includes("dark_tent");
 	const dehu = mits.includes("dehumidify_tent");
@@ -726,6 +745,7 @@ function scoreHour(raw, env, timeZone = "UTC", site) {
 	}
 	if (mits.includes("windscreen") && wind != null) wind *= .4;
 	if (mits.includes("heaters") && air != null && !climate) air = round1(air + 16);
+	if (rainTarp) precipBlocked = false;
 	for (const cm of customActive) {
 		sun *= cm.sunMul > 0 ? cm.sunMul : 1;
 		if (air != null) air = round1(air + (cm.dAirF || 0));
@@ -826,6 +846,14 @@ function scoreHour(raw, env, timeZone = "UTC", site) {
 			hard += 1;
 		} else if (raw.pop != null && raw.pop >= softPop) {
 			reasons.push(`Precip ${raw.pop}%`);
+			soft += 1;
+		}
+	} else if (rainTarp && !lightTent && !darkTent && !dehu && !humid && !climate) {
+		if (frozenPrecip(raw.shortForecast)) {
+			reasons.push("Rain tarp does not cover snow/sleet — hold");
+			hard += 1;
+		} else if (/\b(thunder|severe)\b/i.test(raw.shortForecast) || (wind ?? 0) >= 28 && wetForecast(raw.shortForecast)) {
+			reasons.push("Rain tarp — stake and pitch; wind-driven rain can still wet the face");
 			soft += 1;
 		}
 	}

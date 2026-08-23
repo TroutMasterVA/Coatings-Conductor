@@ -13,6 +13,7 @@ export type SubstrateId =
 
 export type MitigationId =
   | "canopy"
+  | "rain_tarp"
   | "fog_mist"
   | "night_shift"
   | "light_tent"
@@ -135,6 +136,18 @@ export const MITIGATIONS: MitigationDef[] = [
     citation: "AMPP / NACE: keep steel inside the PDS surface-temperature window. ACI 305R: sunshades for hot-weather placement.",
     helps: ["solar", "heat"],
     bodies: ["AMPP", "NACE", "ACI"],
+    disciplines: ["all"],
+    core: true,
+  },
+  {
+    id: "rain_tarp",
+    label: "Rain tarping",
+    summary:
+      "Temporary rain fly / poly over the workface. Sheds showers so the film or placement stays dry. Open sides — air, sun, RH, and wind stay field conditions. Not a canopy and not a climate tent.",
+    citation:
+      "AMPP / NACE / SSPC: keep the coating dry until water-resistant. ACI 308R: protect fresh cementitious work from rain. Stake, pitch, and drain — wind-driven rain can still wet the face.",
+    helps: ["rain"],
+    bodies: ["AMPP", "NACE", "SSPC", "ACI"],
     disciplines: ["all"],
     core: true,
   },
@@ -411,7 +424,7 @@ export function isRecommended(
     return hotFace && (m.id === "canopy" || m.id === "night_shift" || m.id === "light_tent");
   }
   if (m.id === "fog_mist" && !fogMistAllowed(opts.substrate)) return false;
-  return helpsNow && (opts.unlocksHours > 0 || m.id === "canopy" || m.id === "light_tent" || m.id === "night_shift" || m.id === "fog_mist" || m.id === "dehumidify_tent" || m.id === "humidity_tent");
+  return helpsNow && (opts.unlocksHours > 0 || m.id === "canopy" || m.id === "rain_tarp" || m.id === "light_tent" || m.id === "night_shift" || m.id === "fog_mist" || m.id === "dehumidify_tent" || m.id === "humidity_tent");
 }
 
 export function peakExample(substrate: SubstrateId, airF = 80) {

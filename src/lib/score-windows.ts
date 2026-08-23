@@ -82,6 +82,10 @@ function wetForecast(text: string) {
   return /\b(rain|shower|storm|thunder|snow|sleet|drizzle|precip)/i.test(text);
 }
 
+function frozenPrecip(text: string) {
+  return /\b(snow|sleet|ice|freezing rain)\b/i.test(text);
+}
+
 function round1(n: number) {
   return Math.round(n * 10) / 10;
 }
@@ -132,6 +136,7 @@ export function scoreHour(
 
   if (mits.includes("canopy")) sun *= 0.12;
 
+  const rainTarp = mits.includes("rain_tarp");
   const lightTent = mits.includes("light_tent");
   const darkTent = mits.includes("dark_tent");
   const dehu = mits.includes("dehumidify_tent");
@@ -172,6 +177,7 @@ export function scoreHour(
   }
   if (mits.includes("windscreen") && wind != null) wind *= 0.4;
   if (mits.includes("heaters") && air != null && !climate) air = round1(air + 16);
+  if (rainTarp) precipBlocked = false;
 
   for (const cm of customActive) {
     sun *= cm.sunMul > 0 ? cm.sunMul : 1;
@@ -295,6 +301,14 @@ export function scoreHour(
       hard += 1;
     } else if (raw.pop != null && raw.pop >= softPop) {
       reasons.push(`Precip ${raw.pop}%`);
+      soft += 1;
+    }
+  } else if (rainTarp && !lightTent && !darkTent && !dehu && !humid && !climate) {
+    if (frozenPrecip(raw.shortForecast)) {
+      reasons.push("Rain tarp does not cover snow/sleet — hold");
+      hard += 1;
+    } else if (/\b(thunder|severe)\b/i.test(raw.shortForecast) || ((wind ?? 0) >= 28 && wetForecast(raw.shortForecast))) {
+      reasons.push("Rain tarp — stake and pitch; wind-driven rain can still wet the face");
       soft += 1;
     }
   }
