@@ -29,6 +29,7 @@ export type MitigationId =
 export type Discipline = "coatings" | "cementitious" | "sealant" | "adhesive";
 export type Limiter = "heat" | "solar" | "cold" | "rh" | "dew" | "rain" | "wind";
 export type StandardBody = "ACI" | "ASTM" | "AMPP" | "NACE" | "SSPC" | "ICRI";
+export type MitigationKind = "independent" | "package";
 
 export type SiteContext = {
   substrate: SubstrateId;
@@ -113,11 +114,13 @@ export const SUBSTRATES: {
   },
 ];
 
-type MitigationDef = {
+export type MitigationDef = {
   id: MitigationId;
   label: string;
   summary: string;
   citation: string;
+  owns: string;
+  kind: MitigationKind;
   helps: Limiter[];
   avoid?: Limiter[];
   bodies: StandardBody[];
@@ -128,11 +131,13 @@ type MitigationDef = {
   core?: boolean;
 };
 
-export const MITIGATIONS: MitigationDef[] = [
+const RAW_MITIGATIONS: MitigationDef[] = [
   {
     id: "canopy",
     label: "Canopy / sunshade",
-    summary: "Open shade over the workface. Cuts solar gain; air stays ambient.",
+    owns: "Solar only",
+    kind: "independent",
+    summary: "Open shade over the workface. Cuts solar gain; air, rain, and wind stay field conditions.",
     citation: "AMPP / NACE: keep steel inside the PDS surface-temperature window. ACI 305R: sunshades for hot-weather placement.",
     helps: ["solar", "heat"],
     bodies: ["AMPP", "NACE", "ACI"],
@@ -142,8 +147,10 @@ export const MITIGATIONS: MitigationDef[] = [
   {
     id: "rain_tarp",
     label: "Rain tarping",
+    owns: "Rain only",
+    kind: "independent",
     summary:
-      "Temporary rain fly / poly over the workface. Sheds showers so the film or placement stays dry. Open sides — air, sun, RH, and wind stay field conditions. Not a canopy and not a climate tent.",
+      "Temporary rain fly / poly. Sheds showers; open sides — air, sun, RH, and wind stay field. Not a canopy and not a tent.",
     citation:
       "AMPP / NACE / SSPC: keep the coating dry until water-resistant. ACI 308R: protect fresh cementitious work from rain. Stake, pitch, and drain — wind-driven rain can still wet the face.",
     helps: ["rain"],
@@ -152,8 +159,22 @@ export const MITIGATIONS: MitigationDef[] = [
     core: true,
   },
   {
+    id: "windscreen",
+    label: "Wind block",
+    owns: "Wind only",
+    kind: "independent",
+    summary: "Open-face screens. Cuts effective wind for spray and overspray. Does not shade, shed rain, or change air or RH.",
+    citation: "SSPC spray practice; ACI 308 / 305R windbreaks to limit evaporation on concrete.",
+    helps: ["wind"],
+    bodies: ["SSPC", "ACI"],
+    disciplines: ["all"],
+    core: true,
+  },
+  {
     id: "fog_mist",
     label: "Water fog / mist cooldown",
+    owns: "Heat cooldown",
+    kind: "independent",
     summary: "Evaporative cool-down. Metals: mist, wipe dry, re-log dew point before coating. Concrete: ACI fogging — do not puddle under a coating.",
     citation: "NACE / SSPC: surface dry and ≥5°F above dew point before coating. ACI 305R: fogging/misting to cool the placement.",
     helps: ["heat", "solar"],
@@ -164,84 +185,10 @@ export const MITIGATIONS: MitigationDef[] = [
     core: true,
   },
   {
-    id: "night_shift",
-    label: "Night shift",
-    summary: "Work 19:00–06:00 only. Solar gain drops to zero — the usual fix for sun-loaded steel.",
-    citation: "AMPP practice for hot-climate coating. ACI 305R: night placement to dodge peak concrete and ambient temperature.",
-    helps: ["solar", "heat"],
-    bodies: ["AMPP", "NACE", "ACI"],
-    disciplines: ["all"],
-    conflicts: ["early_start"],
-    core: true,
-  },
-  {
-    id: "light_tent",
-    label: "Light-colored tent",
-    summary: "Reflective enclosure. Kills rain and most sun without cooking the interior the way a dark tarp will.",
-    citation: "SSPC / AMPP containment: white or light tarps for hot weather. ACI 305R: light-colored covers over fresh concrete.",
-    helps: ["solar", "heat", "rain", "wind"],
-    bodies: ["AMPP", "SSPC", "ACI", "ASTM"],
-    disciplines: ["all"],
-    conflicts: ["dark_tent"],
-    core: true,
-  },
-  {
-    id: "dark_tent",
-    label: "Dark-colored tent",
-    summary: "Absorptive enclosure. Shades the work but traps heat in the sun — use for cold weather, not a hot steel day.",
-    citation: "ACI 306R: insulated / dark covers to hold heat in cold weather. Avoid in heat — interior air can exceed PDS max.",
-    helps: ["cold", "rain", "wind"],
-    avoid: ["heat", "solar"],
-    bodies: ["ACI", "AMPP"],
-    disciplines: ["all"],
-    conflicts: ["light_tent"],
-    core: true,
-  },
-  {
-    id: "dehumidify_tent",
-    label: "Dehumidify tent",
-    summary: "Enclosed work with mechanical dehumidification. Lowers RH and widens dew-point spread.",
-    citation: "AMPP / NACE: substrate ≥5°F above dew point; SSPC climate control during coating. ASTM D4263 / moisture tests on concrete.",
-    helps: ["rh", "dew", "rain"],
-    bodies: ["AMPP", "NACE", "SSPC", "ASTM"],
-    disciplines: ["coatings", "sealant", "adhesive"],
-    core: true,
-  },
-  {
-    id: "humidity_tent",
-    label: "Humidity / moist-cure tent",
-    summary: "Holds moisture around cementitious work. Wrong for solvent or epoxy coatings that need a dry face.",
-    citation: "ACI 308R: moist curing of cementitious materials. Do not use on AMPP/NACE coating applications that require a dry substrate.",
-    helps: ["wind"],
-    avoid: ["rh", "dew"],
-    bodies: ["ACI", "ASTM"],
-    disciplines: ["cementitious"],
-    conflicts: ["dehumidify_tent"],
-    core: true,
-  },
-  {
-    id: "climate_tent",
-    label: "Climate-control tent",
-    summary: "Conditioned enclosure — temperature, humidity, and weather. The full AMPP environmental-control package.",
-    citation: "AMPP / NACE / SSPC: controlled ambient for coating when field air is out of spec. ACI 305R/306R for extreme hot or cold placement.",
-    helps: ["heat", "cold", "rh", "dew", "rain", "solar", "wind"],
-    bodies: ["AMPP", "NACE", "SSPC", "ACI", "ASTM"],
-    disciplines: ["all"],
-    core: true,
-  },
-  {
-    id: "early_start",
-    label: "Dawn / AM only",
-    summary: "Work 05:00–10:00, before peak solar. Substrate still cool from overnight.",
-    citation: "AMPP hot-weather coating practice. ACI 305R: early-morning placement.",
-    helps: ["solar", "heat"],
-    bodies: ["AMPP", "ACI"],
-    disciplines: ["all"],
-    conflicts: ["night_shift"],
-  },
-  {
     id: "heaters",
     label: "Indirect heaters",
+    owns: "Cold · air",
+    kind: "independent",
     summary: "Raises air and substrate for a cold floor. Watch solvent and combustion moisture.",
     citation: "ACI 306R: heating enclosures. AMPP: indirect heat only around flammable coatings.",
     helps: ["cold"],
@@ -251,6 +198,8 @@ export const MITIGATIONS: MitigationDef[] = [
   {
     id: "preheat",
     label: "Preheat substrate",
+    owns: "Cold · steel",
+    kind: "independent",
     summary: "Blankets or induction on metal to clear the minimum steel temperature.",
     citation: "NACE / AMPP: steel above PDS minimum and dew point before coating.",
     helps: ["cold"],
@@ -259,15 +208,122 @@ export const MITIGATIONS: MitigationDef[] = [
     metalOnly: true,
   },
   {
-    id: "windscreen",
-    label: "Wind screens",
-    summary: "Cuts effective wind for spray and overspray. Does not cool the workface.",
-    citation: "SSPC spray practice; ACI 308 / 305R windbreaks to limit evaporation on concrete.",
-    helps: ["wind"],
-    bodies: ["SSPC", "ACI"],
+    id: "night_shift",
+    label: "Night shift",
+    owns: "Schedule",
+    kind: "independent",
+    summary: "Work 19:00–06:00 only. Solar gain drops to zero — the usual fix for sun-loaded steel.",
+    citation: "AMPP practice for hot-climate coating. ACI 305R: night placement to dodge peak concrete and ambient temperature.",
+    helps: ["solar", "heat"],
+    bodies: ["AMPP", "NACE", "ACI"],
     disciplines: ["all"],
+    conflicts: ["early_start"],
+    core: true,
+  },
+  {
+    id: "early_start",
+    label: "Dawn / AM only",
+    owns: "Schedule",
+    kind: "independent",
+    summary: "Work 05:00–10:00, before peak solar. Substrate still cool from overnight.",
+    citation: "AMPP hot-weather coating practice. ACI 305R: early-morning placement.",
+    helps: ["solar", "heat"],
+    bodies: ["AMPP", "ACI"],
+    disciplines: ["all"],
+    conflicts: ["night_shift"],
+  },
+  {
+    id: "light_tent",
+    label: "Light-colored tent",
+    owns: "Solar + rain + wind",
+    kind: "package",
+    summary: "Reflective enclosure. Already covers canopy, rain tarp, and wind block — those independents cannot stack with it.",
+    citation: "SSPC / AMPP containment: white or light tarps for hot weather. ACI 305R: light-colored covers over fresh concrete.",
+    helps: ["solar", "heat", "rain", "wind"],
+    bodies: ["AMPP", "SSPC", "ACI", "ASTM"],
+    disciplines: ["all"],
+    conflicts: ["dark_tent", "dehumidify_tent", "humidity_tent", "climate_tent", "canopy", "rain_tarp", "windscreen", "fog_mist"],
+    core: true,
+  },
+  {
+    id: "dark_tent",
+    label: "Dark-colored tent",
+    owns: "Cold + rain + wind",
+    kind: "package",
+    summary: "Absorptive enclosure. Covers rain tarp and wind block; traps heat — use for cold weather, not a hot steel day.",
+    citation: "ACI 306R: insulated / dark covers to hold heat in cold weather. Avoid in heat — interior air can exceed PDS max.",
+    helps: ["cold", "rain", "wind"],
+    avoid: ["heat", "solar"],
+    bodies: ["ACI", "AMPP"],
+    disciplines: ["all"],
+    conflicts: ["light_tent", "dehumidify_tent", "humidity_tent", "climate_tent", "canopy", "rain_tarp", "windscreen"],
+    core: true,
+  },
+  {
+    id: "dehumidify_tent",
+    label: "Dehumidify tent",
+    owns: "RH + dew + rain + wind",
+    kind: "package",
+    summary: "Enclosed work with mechanical dehumidification. Covers rain tarp and wind block; lowers RH and widens dew spread.",
+    citation: "AMPP / NACE: substrate ≥5°F above dew point; SSPC climate control during coating. ASTM D4263 / moisture tests on concrete.",
+    helps: ["rh", "dew", "rain", "wind"],
+    bodies: ["AMPP", "NACE", "SSPC", "ASTM"],
+    disciplines: ["coatings", "sealant", "adhesive"],
+    conflicts: ["humidity_tent", "climate_tent", "light_tent", "dark_tent", "canopy", "rain_tarp", "windscreen"],
+    core: true,
+  },
+  {
+    id: "humidity_tent",
+    label: "Humidity / moist-cure tent",
+    owns: "Moist-cure · rain + wind",
+    kind: "package",
+    summary: "Holds moisture around cementitious work. Covers rain tarp and wind block. Wrong for solvent or epoxy that needs a dry face.",
+    citation: "ACI 308R: moist curing of cementitious materials. Do not use on AMPP/NACE coating applications that require a dry substrate.",
+    helps: ["wind", "rain"],
+    avoid: ["rh", "dew"],
+    bodies: ["ACI", "ASTM"],
+    disciplines: ["cementitious"],
+    conflicts: ["dehumidify_tent", "climate_tent", "light_tent", "dark_tent", "canopy", "rain_tarp", "windscreen"],
+    core: true,
+  },
+  {
+    id: "climate_tent",
+    label: "Climate-control tent",
+    owns: "Full environment",
+    kind: "package",
+    summary: "Conditioned enclosure — temperature, humidity, sun, rain, and wind. Replaces all independent covers and other tents.",
+    citation: "AMPP / NACE / SSPC: controlled ambient for coating when field air is out of spec. ACI 305R/306R for extreme hot or cold placement.",
+    helps: ["heat", "cold", "rh", "dew", "rain", "solar", "wind"],
+    bodies: ["AMPP", "NACE", "SSPC", "ACI", "ASTM"],
+    disciplines: ["all"],
+    conflicts: [
+      "light_tent",
+      "dark_tent",
+      "dehumidify_tent",
+      "humidity_tent",
+      "canopy",
+      "rain_tarp",
+      "windscreen",
+      "fog_mist",
+      "heaters",
+      "preheat",
+    ],
+    core: true,
   },
 ];
+
+function symmetrizeConflicts(list: MitigationDef[]): MitigationDef[] {
+  const sets = new Map<MitigationId, Set<MitigationId>>();
+  for (const m of list) sets.set(m.id, new Set(m.conflicts ?? []));
+  for (const [id, set] of sets) {
+    for (const other of set) {
+      sets.get(other)?.add(id);
+    }
+  }
+  return list.map((m) => ({ ...m, conflicts: [...(sets.get(m.id) ?? [])] }));
+}
+
+export const MITIGATIONS: MitigationDef[] = symmetrizeConflicts(RAW_MITIGATIONS);
 
 export function substrateById(id: SubstrateId) {
   return SUBSTRATES.find((s) => s.id === id) ?? SUBSTRATES[0];
@@ -275,6 +331,50 @@ export function substrateById(id: SubstrateId) {
 
 export function mitigationById(id: MitigationId) {
   return MITIGATIONS.find((m) => m.id === id);
+}
+
+export function coveringPackage(id: MitigationId, selected: MitigationId[]): MitigationDef | undefined {
+  const def = mitigationById(id);
+  if (!def || def.kind === "package") return undefined;
+  for (const s of selected) {
+    const p = mitigationById(s);
+    if (p?.kind === "package" && p.conflicts?.includes(id)) return p;
+  }
+  return undefined;
+}
+
+export function isConflicted(id: MitigationId, selected: MitigationId[]) {
+  if (selected.includes(id)) return false;
+  const def = mitigationById(id);
+  if (!def) return false;
+  if (def.kind === "package") {
+    return Boolean(def.conflicts?.some((c) => selected.includes(c) && mitigationById(c)?.kind === "package"));
+  }
+  return Boolean(def.conflicts?.some((c) => selected.includes(c)));
+}
+
+export function sanitizeMitigations(selected: MitigationId[]): MitigationId[] {
+  const uniq = [...new Set(selected.filter((id) => Boolean(mitigationById(id))))];
+  const packages = uniq.filter((id) => mitigationById(id)?.kind === "package");
+  let keepPackage: MitigationId | undefined;
+  if (packages.includes("climate_tent")) keepPackage = "climate_tent";
+  else if (packages.length) keepPackage = packages[0];
+  let next = uniq;
+  if (keepPackage) {
+    const drop = new Set(mitigationById(keepPackage)?.conflicts ?? []);
+    next = uniq.filter((id) => id === keepPackage || !drop.has(id));
+  }
+  if (next.includes("night_shift") && next.includes("early_start")) {
+    next = next.filter((id) => id !== "early_start");
+  }
+  return next;
+}
+
+export function selectMitigation(selected: MitigationId[], id: MitigationId): MitigationId[] {
+  const def = mitigationById(id);
+  if (!def) return sanitizeMitigations(selected);
+  if (def.kind !== "package" && coveringPackage(id, selected)) return sanitizeMitigations(selected);
+  return sanitizeMitigations([...selected.filter((m) => m !== id && !def.conflicts?.includes(m)), id]);
 }
 
 function matchSubstrate(blob: string): SubstrateId | null {
@@ -399,6 +499,17 @@ export function compatibleMitigations(opts: {
   });
 }
 
+function limiterFamilies(limiters: Limiter[]) {
+  const cover = new Set(limiters);
+  return {
+    solar: cover.has("heat") || cover.has("solar"),
+    rain: cover.has("rain"),
+    wind: cover.has("wind"),
+    moisture: cover.has("rh") || cover.has("dew"),
+    cold: cover.has("cold"),
+  };
+}
+
 export function isRecommended(
   m: MitigationDef,
   opts: {
@@ -414,17 +525,31 @@ export function isRecommended(
   if (m.id === "dark_tent" && (opts.limiters.includes("heat") || opts.limiters.includes("solar")) && !opts.limiters.includes("cold")) {
     return false;
   }
-  if (m.id === "climate_tent") {
-    return opts.limiters.length >= 3 && opts.unlocksHours > 0;
-  }
-  const helpsNow = m.helps.some((l) => opts.limiters.includes(l));
-  if (!helpsNow && opts.limiters.length > 0) return false;
+  if (m.id === "fog_mist" && !fogMistAllowed(opts.substrate)) return false;
+
+  const fam = limiterFamilies(opts.limiters);
+  const familyCount = [fam.solar, fam.rain, fam.wind, fam.moisture, fam.cold].filter(Boolean).length;
+
   if (opts.limiters.length === 0) {
     const hotFace = substrateById(opts.substrate).peakGainF >= 30;
-    return hotFace && (m.id === "canopy" || m.id === "night_shift" || m.id === "light_tent");
+    return hotFace && (m.id === "canopy" || m.id === "night_shift");
   }
-  if (m.id === "fog_mist" && !fogMistAllowed(opts.substrate)) return false;
-  return helpsNow && (opts.unlocksHours > 0 || m.id === "canopy" || m.id === "rain_tarp" || m.id === "light_tent" || m.id === "night_shift" || m.id === "fog_mist" || m.id === "dehumidify_tent" || m.id === "humidity_tent");
+
+  if (m.kind === "package") {
+    if (m.id === "climate_tent") return familyCount >= 3 && opts.unlocksHours > 0;
+    if (m.id === "light_tent") {
+      const n = [fam.solar, fam.rain, fam.wind].filter(Boolean).length;
+      return n >= 2 && opts.unlocksHours > 0;
+    }
+    if (m.id === "dark_tent") return fam.cold && (fam.rain || fam.wind) && opts.unlocksHours > 0;
+    if (m.id === "dehumidify_tent") return fam.moisture && opts.unlocksHours > 0;
+    if (m.id === "humidity_tent") return (fam.wind || fam.rain) && opts.unlocksHours > 0;
+    return familyCount >= 2 && opts.unlocksHours > 0;
+  }
+
+  const helpsNow = m.helps.some((l) => opts.limiters.includes(l));
+  if (!helpsNow) return false;
+  return opts.unlocksHours > 0 || m.id === "canopy" || m.id === "rain_tarp" || m.id === "windscreen" || m.id === "night_shift" || m.id === "fog_mist";
 }
 
 export function peakExample(substrate: SubstrateId, airF = 80) {

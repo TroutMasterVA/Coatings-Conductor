@@ -1,20 +1,34 @@
-import { r as __exportAll } from "../_runtime.mjs";
+import { r as __exportAll$1 } from "../_runtime.mjs";
 import { n as require_react } from "../_libs/@radix-ui/react-compose-refs+[...].mjs";
-import { A as invariant, D as resolveManifestCssLink, E as resolveManifestAssetLink, F as isResolvedRedirect, I as parseRedirect, L as rootRouteId, O as _getRenderedMatches, P as isRedirect, R as isNotFound, T as getStylesheetHref, a as isSsrResponse, c as stripSsrResponseBody, f as RouterProvider, i as disposeSsrResponseDetached, k as executeRewriteInput, n as bindSsrResponseToRequest, o as normalizeSsrResponse, r as defineHandlerCallback, s as replaceSsrResponse, t as renderRouterToStream, w as getScriptPreloadAttrs, y as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
+import { A as _getRenderedMatches, B as isNotFound, D as getStylesheetHref, E as getScriptPreloadAttrs, I as isRedirect, L as isResolvedRedirect, M as invariant, O as resolveManifestAssetLink, R as parseRedirect, a as isSsrResponse, c as stripSsrResponseBody, f as RouterProvider, i as disposeSsrResponseDetached, j as executeRewriteInput, k as resolveManifestCssLink, n as bindSsrResponseToRequest, o as normalizeSsrResponse, r as defineHandlerCallback, s as replaceSsrResponse, t as renderRouterToStream, x as require_jsx_runtime, z as rootRouteId } from "../_libs/@tanstack/react-router+[...].mjs";
 import { n as createMemoryHistory } from "../_libs/tanstack__history.mjs";
 import { a as getOrigin, c as createSerializationAdapter, d as toCrossJSONAsync, f as toCrossJSONStream, i as getNormalizedURL, l as makeSerovalPlugin, n as mergeHeaders, o as defaultSerovalPlugins, r as attachRouterServerSsrUtils, s as createRawStreamRPCPlugin, t as waitForRequest, u as fromJSON } from "../_libs/@tanstack/router-core+[...].mjs";
-import { n as toResponse, t as H3Event } from "../_libs/h3-v2+rou3.mjs";
+import { n as setCookie, r as toResponse, t as H3Event } from "../_libs/h3-v2+rou3.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
 //#region node_modules/.nitro/vite/services/ssr/index.js
-var ssr_exports = /* @__PURE__ */ __exportAll({
+var ssr_exports = /* @__PURE__ */ __exportAll$1({
+	a: () => getServerFnById,
 	createServerEntry: () => createServerEntry,
 	default: () => server_default,
-	n: () => TSS_SERVER_FUNCTION,
-	r: () => getServerFnById,
-	t: () => createServerFn
+	i: () => TSS_SERVER_FUNCTION,
+	n: () => createMiddleware,
+	o: () => getRequest,
+	r: () => createServerFn,
+	s: () => __exportAll,
+	t: () => server_exports
 });
 require_react();
 var import_jsx_runtime = require_jsx_runtime();
+var __defProp = Object.defineProperty;
+var __exportAll = (all, no_symbols) => {
+	let target = {};
+	for (var name in all) __defProp(target, name, {
+		get: all[name],
+		enumerable: true
+	});
+	if (!no_symbols) __defProp(target, Symbol.toStringTag, { value: "Module" });
+	return target;
+};
 function StartServer(props) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RouterProvider, { router: props.router });
 }
@@ -74,6 +88,21 @@ function getH3Event() {
 	if (!event) throw new Error(`No StartEvent found in AsyncLocalStorage. Make sure you are using the function within the server runtime.`);
 	return event.h3Event;
 }
+function getRequest() {
+	return getH3Event().req;
+}
+/**
+* Set a cookie value by name.
+* @param name Name of the cookie to set
+* @param value Value of the cookie to set
+* @param options {CookieSerializeOptions} Options for serializing the cookie
+* ```ts
+* setCookie('Authorization', '1234567')
+* ```
+*/
+function setCookie$1(name, value, options) {
+	setCookie(getH3Event(), name, value, options);
+}
 function getResponse() {
 	return getH3Event().res;
 }
@@ -88,7 +117,7 @@ var HEADERS = { TSS_SHELL: "X-TSS_SHELL" };
 * the dev styles URL for route-scoped CSS collection.
 */
 async function getStartManifest(matchedRoutes) {
-	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-CSBRiKzS.mjs");
+	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-DdFwrc8I.mjs");
 	const startManifest = tsrStartManifest();
 	let routes = startManifest.routes;
 	routes[rootRouteId];
@@ -108,13 +137,45 @@ async function getStartManifest(matchedRoutes) {
 	};
 }
 var manifest = {
+	"4001ac0e3fa599c3b6c16c48953b32dac17e23933b616d2cea3c469261cd5f49": {
+		functionName: "loadWorkspace_createServerFn_handler",
+		importer: () => import("./project-store-Bdsau4Pu.mjs")
+	},
+	"72bfc25ca4f03357ce5a466c4c096b74d0695e4dc106a7fb1554274cfb388e91": {
+		functionName: "saveCustomMitigation_createServerFn_handler",
+		importer: () => import("./project-store-Bdsau4Pu.mjs")
+	},
+	"73a1e3c2816431146f1b7b790b1ace9f8c5cbec6445b879d7c2f87998b278d29": {
+		functionName: "archiveProject_createServerFn_handler",
+		importer: () => import("./project-store-Bdsau4Pu.mjs")
+	},
+	"9462225899c15c0146fedd3d47a0e833584fad49706095c307688725a605cd01": {
+		functionName: "importGuestWorkspace_createServerFn_handler",
+		importer: () => import("./project-store-Bdsau4Pu.mjs")
+	},
 	"a1bccce983c3465caaf01eba3c27c8b93bb9183ed308a2efa75abbde3fc0552d": {
 		functionName: "extractPds_createServerFn_handler",
-		importer: () => import("./extract-pds-BTtYs2gs.mjs")
+		importer: () => import("./extract-pds-DfT5SyRX.mjs")
+	},
+	"da134c65dd91b188214ccc07961ee0b663b094462ec1770a33c47c7739e45f95": {
+		functionName: "deleteProject_createServerFn_handler",
+		importer: () => import("./project-store-Bdsau4Pu.mjs")
+	},
+	"db3e85134a404be42369235757524fccdce0e01215ffef27e9590cec13abc0cf": {
+		functionName: "createProject_createServerFn_handler",
+		importer: () => import("./project-store-Bdsau4Pu.mjs")
 	},
 	"dd0ffdd043195dddbd4cbc41ec11e49f69e12dfaf5d4c9ae5ca40747acb4b9d9": {
 		functionName: "loadForecast_createServerFn_handler",
-		importer: () => import("./forecast-BtgmImrd.mjs")
+		importer: () => import("./forecast-D1nTtyjN.mjs")
+	},
+	"e63f4109eba5f70c326f3399b4ccb7ad4f3be4c1f66ea9b7fa8fc6d09af684cf": {
+		functionName: "saveProject_createServerFn_handler",
+		importer: () => import("./project-store-Bdsau4Pu.mjs")
+	},
+	"fbc1b91a1fda83a921c988a17311cd4f481a048a5f131b4f426adeb0e4d3a274": {
+		functionName: "openProject_createServerFn_handler",
+		importer: () => import("./project-store-Bdsau4Pu.mjs")
 	}
 };
 async function getServerFnById(id, access) {
@@ -1384,7 +1445,7 @@ var getBaseManifest = getProdBaseManifest;
 var createEarlyHintsForRequest = createEarlyHintsCollector;
 async function loadEntries() {
 	const [routerEntry, startEntry, pluginAdapters] = await Promise.all([
-		import("./router-CsF7bizq.mjs").then((n) => n.t),
+		import("./router-DNTh6cKA.mjs").then((n) => n.t),
 		import("./start-5Z2QO8AU.mjs"),
 		import("./empty-plugin-adapters-D9UWiqvJ.mjs")
 	]);
@@ -1822,6 +1883,7 @@ async function handleServerRoutes({ getRouter, request, url, executeRouter, cont
 	}
 	return normalizeSsrResponse(response);
 }
+var server_exports = /* @__PURE__ */ __exportAll({ setCookie: () => setCookie$1 });
 var fetch = createStartHandler(defaultStreamHandler);
 function createServerEntry(entry) {
 	return { async fetch(...args) {
@@ -1830,4 +1892,4 @@ function createServerEntry(entry) {
 }
 var server_default = createServerEntry({ fetch });
 //#endregion
-export { createServerEntry, server_default as default, ssr_exports as i, TSS_SERVER_FUNCTION as n, getServerFnById as r, createServerFn as t };
+export { getServerFnById as a, ssr_exports as c, createServerEntry, server_default as default, TSS_SERVER_FUNCTION as i, createMiddleware as n, getRequest as o, createServerFn as r, __exportAll as s, server_exports as t };

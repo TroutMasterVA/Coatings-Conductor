@@ -56,26 +56,9 @@ function read(): LearningStore {
   }
 }
 
-function write(store: LearningStore) {
-  localStorage.setItem(KEY, JSON.stringify(store));
-}
-
-export function loadLearning(): LearningStore {
+/** One-time lift of pre-project local learning into the first signed-in project. */
+export function loadLegacyLearning(): LearningStore {
   return read();
-}
-
-export function saveCalibration(calibration: Calibration) {
-  const s = read();
-  s.calibration = calibration;
-  write(s);
-}
-
-export function loadCustomMitigations() {
-  return read().custom;
-}
-
-export function loadOutcomes() {
-  return read().outcomes;
 }
 
 export function tightnessLabel(v: number) {
@@ -207,27 +190,35 @@ export function applyOutcomeToCalibration(cal: Calibration, outcome: FieldOutcom
   return next;
 }
 
-export function recordOutcome(outcome: Omit<FieldOutcome, "id" | "at">, cal: Calibration) {
+export function recordOutcome(
+  outcome: Omit<FieldOutcome, "id" | "at">,
+  cal: Calibration,
+  outcomes: FieldOutcome[],
+) {
   const full: FieldOutcome = {
     ...outcome,
     id: crypto.randomUUID(),
     at: new Date().toISOString(),
   };
-  const s = read();
-  s.outcomes = [full, ...s.outcomes].slice(0, 200);
-  s.calibration = applyOutcomeToCalibration(cal, full);
-  write(s);
-  return { outcome: full, calibration: s.calibration, count: s.outcomes.length };
+  const nextOutcomes = [full, ...outcomes].slice(0, 200);
+  return {
+    outcome: full,
+    calibration: applyOutcomeToCalibration(cal, full),
+    outcomes: nextOutcomes,
+    count: nextOutcomes.length,
+  };
 }
 
-export function upsertCustomMitigation(input: {
+export type CustomMitigationInput = {
   label: string;
   summary: string;
   helps: Limiter[];
   before: { air: number | null; steel: number | null; rh: number | null; dew: number | null; wind: number | null };
   after: { air: number | null; steel: number | null; rh: number | null; dew: number | null; wind: number | null };
   notes: string;
-}) {
+};
+
+export function mergeCustomMitigation(list: CustomMitigation[], input: CustomMitigationInput) {
   const d = (a: number | null, b: number | null) => (a != null && b != null ? b - a : 0);
   const dAir = d(input.before.air, input.after.air);
   const dSteel = d(input.before.steel, input.after.steel);
@@ -241,22 +232,23 @@ export function upsertCustomMitigation(input: {
     if (g0 > 2) sunMul = Math.min(1.15, Math.max(0.05, g1 / g0));
   }
 
-  const s = read();
-  const existing = s.custom.find((c) => c.label.trim().toLowerCase() === input.label.trim().toLowerCase());
+  const existing = list.find((c) => c.label.trim().toLowerCase() === input.label.trim().toLowerCase());
   if (existing) {
     const n = existing.samples + 1;
-    existing.samples = n;
-    existing.dAirF = existing.dAirF + (dAir - existing.dAirF) / n;
-    existing.dSubstrateF = existing.dSubstrateF + (dSteel - existing.dSubstrateF) / n;
-    existing.dRh = existing.dRh + (dRh - existing.dRh) / n;
-    existing.dDewF = existing.dDewF + (dDew - existing.dDewF) / n;
-    existing.dWindMph = existing.dWindMph + (dWind - existing.dWindMph) / n;
-    existing.sunMul = existing.sunMul + (sunMul - existing.sunMul) / n;
-    existing.summary = input.summary || existing.summary;
-    existing.notes = input.notes || existing.notes;
-    existing.helps = input.helps.length ? input.helps : existing.helps;
-    write(s);
-    return existing;
+    const saved: CustomMitigation = {
+      ...existing,
+      samples: n,
+      dAirF: existing.dAirF + (dAir - existing.dAirF) / n,
+      dSubstrateF: existing.dSubstrateF + (dSteel - existing.dSubstrateF) / n,
+      dRh: existing.dRh + (dRh - existing.dRh) / n,
+      dDewF: existing.dDewF + (dDew - existing.dDewF) / n,
+      dWindMph: existing.dWindMph + (dWind - existing.dWindMph) / n,
+      sunMul: existing.sunMul + (sunMul - existing.sunMul) / n,
+      summary: input.summary || existing.summary,
+      notes: input.notes || existing.notes,
+      helps: input.helps.length ? input.helps : existing.helps,
+    };
+    return { list: list.map((c) => (c.id === saved.id ? saved : c)), saved };
   }
 
   const created: CustomMitigation = {
@@ -274,9 +266,7 @@ export function upsertCustomMitigation(input: {
     sunMul,
     notes: input.notes.trim(),
   };
-  s.custom = [created, ...s.custom].slice(0, 40);
-  write(s);
-  return created;
+  return { list: [created, ...list].slice(0, 40), saved: created };
 }
 
 export function catalogHelps(): Limiter[] {
@@ -284,8 +274,5 @@ export function catalogHelps(): Limiter[] {
 }
 
 export function mitigationLabels(ids: string[], custom: CustomMitigation[], customIds: string[]) {
-  return [
-    ...ids,
-    ...custom.filter((c) => customIds.includes(c.id)).map((c) => c.label),
-  ];
+  return [...ids, ...custom.filter((c) => customIds.includes(c.id)).map((c) => c.label)];
 }

@@ -1,16 +1,20 @@
 import { useMemo, useState } from "react";
-import { CloudSun, Loader2, MapPin, X } from "lucide-react";
+import { Check, CloudSun, Loader2, MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   compatibleMitigations,
+  coveringPackage,
+  isConflicted,
   isRecommended,
   mitigationById,
   peakExample,
+  selectMitigation,
   SUBSTRATES,
   substrateById,
+  type MitigationDef,
   type MitigationId,
   type SiteContext,
   type SubstrateId,
@@ -120,6 +124,88 @@ function Limit({
   );
 }
 
+function MitPickGrid({
+  title,
+  blurb,
+  items,
+  selectedIds,
+  recommendedIds,
+  locked,
+  reasonFor,
+  blockedFor,
+  gainedFor,
+  onToggle,
+}: {
+  title: string;
+  blurb: string;
+  items: MitigationDef[];
+  selectedIds: MitigationId[];
+  recommendedIds: MitigationId[];
+  locked?: boolean;
+  reasonFor: (m: MitigationDef) => string;
+  blockedFor: (m: MitigationDef) => boolean;
+  gainedFor: (id: MitigationId) => number | null;
+  onToggle: (id: MitigationId) => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <div className="mt-3">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted">{title}</p>
+      <p className="mt-0.5 text-xs leading-relaxed text-muted">{blurb}</p>
+      <ul className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {items.map((m) => {
+          const selected = selectedIds.includes(m.id);
+          const rec = recommendedIds.includes(m.id);
+          const reason = reasonFor(m);
+          const blocked = !selected && blockedFor(m);
+          const gained = !selected && !blocked ? gainedFor(m.id) : null;
+          return (
+            <li key={m.id} className="min-w-0">
+              <button
+                type="button"
+                disabled={locked || blocked}
+                aria-pressed={selected}
+                title={m.summary}
+                onClick={() => onToggle(m.id)}
+                className={cn(
+                  "flex min-h-11 w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition-[box-shadow] duration-150",
+                  selected
+                    ? "bg-go/20 shadow-[0_0_0_1px_rgba(63,125,92,0.65)]"
+                    : rec
+                      ? "bg-go/10 shadow-[0_0_0_1px_rgba(63,125,92,0.4)]"
+                      : "bg-surface-2 shadow-[0_0_0_1px_rgba(255,255,255,0.08)] hover:shadow-[0_0_0_1px_rgba(255,255,255,0.13)]",
+                  (locked || blocked) && "cursor-not-allowed opacity-45 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]",
+                )}
+              >
+                {selected ? (
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-go-soft" />
+                ) : (
+                  <span className="mt-0.5 size-3.5 shrink-0 rounded-sm shadow-[0_0_0_1px_rgba(255,255,255,0.18)]" />
+                )}
+                <span className="min-w-0">
+                  <span
+                    className={cn(
+                      "block text-xs font-medium leading-snug",
+                      selected || rec ? "text-go-soft" : "text-fg",
+                    )}
+                  >
+                    {m.label}
+                  </span>
+                  <span className="mt-0.5 block text-xs leading-snug text-muted">
+                    {m.owns}
+                    {reason ? ` · ${reason}` : ""}
+                    {gained && gained > 0 ? ` · +${gained}h` : ""}
+                  </span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export function WeatherPanel({
   zip,
   onZip,
@@ -163,11 +249,13 @@ export function WeatherPanel({
     return available
       .filter((m) => {
         if (site.mitigations.includes(m.id)) return false;
+        if (isConflicted(m.id, site.mitigations)) return false;
+        const next = selectMitigation(site.mitigations, m.id);
         const unlocks =
           forecast && environmentals
             ? unlockedGoHours(forecast, environmentals, {
                 ...site,
-                mitigations: [...site.mitigations, m.id],
+                mitigations: next,
               })
             : 0;
         return isRecommended(m, {
@@ -187,20 +275,47 @@ export function WeatherPanel({
   }, [forecast, days]);
 
   function addMitigation(id: MitigationId) {
-    const def = mitigationById(id);
-    const next = site.mitigations.filter((m) => !def?.conflicts?.includes(m) && m !== id);
-    next.push(id);
-    onSite({ ...site, mitigations: next });
+    onSite({ ...site, mitigations: selectMitigation(site.mitigations, id) });
+  }
+
+  function toggleMitigation(id: MitigationId) {
+    if (site.mitigations.includes(id)) {
+      onSite({ ...site, mitigations: site.mitigations.filter((x) => x !== id) });
+      return;
+    }
+    addMitigation(id);
   }
 
   function hoursGained(id: MitigationId) {
     if (!forecast || !environmentals) return null;
-    const withIt: SiteContext = {
-      ...site,
-      mitigations: [...new Set([...site.mitigations, id])],
-    };
+    const next = selectMitigation(site.mitigations, id);
+    if (next.length === site.mitigations.length && next.every((m, i) => m === site.mitigations[i])) return 0;
+    const withIt: SiteContext = { ...site, mitigations: next };
     return unlockedGoHours(forecast, environmentals, withIt) - unlockedGoHours(forecast, environmentals, site);
   }
+
+  function pickReason(m: MitigationDef) {
+    if (site.mitigations.includes(m.id)) return "";
+    const cover = coveringPackage(m.id, site.mitigations);
+    if (cover) return `covered by ${cover.label}`;
+    if (m.kind !== "package" && isConflicted(m.id, site.mitigations)) return "conflicts";
+    if (m.kind === "package") {
+      const other = site.mitigations
+        .map((id) => mitigationById(id))
+        .find((x) => x?.kind === "package" && x.id !== m.id && m.conflicts?.includes(x.id));
+      if (other) return `replaces ${other.label}`;
+    }
+    return "";
+  }
+
+  function isBlocked(m: MitigationDef) {
+    if (site.mitigations.includes(m.id)) return false;
+    if (m.kind === "package") return false;
+    return isConflicted(m.id, site.mitigations);
+  }
+
+  const independent = available.filter((m) => m.kind === "independent");
+  const packages = available.filter((m) => m.kind === "package");
 
   return (
     <aside className="flex flex-col gap-4">
@@ -269,13 +384,17 @@ export function WeatherPanel({
 
         <div className="mt-4">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <Label htmlFor="mitigation">Mitigation strategy</Label>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted">Mitigation strategy</p>
             {site.bodies?.length ? (
               <p className="text-xs text-muted">
                 {site.discipline ?? "coatings"} · {site.bodies.join(" · ")}
               </p>
             ) : null}
           </div>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted">
+            Independent = one limiter. Package = enclosure that already covers those independents — you cannot stack
+            both. Pick a package and it replaces the open kit it covers.
+          </p>
           {recommendedIds.length ? (
             <div className="mt-2">
               <p className="text-xs font-medium text-go-soft">Recommended this week</p>
@@ -287,10 +406,11 @@ export function WeatherPanel({
                     <li key={id}>
                       <button
                         type="button"
-                        className="inline-flex h-9 items-center gap-1.5 rounded-md bg-go/20 px-2.5 text-xs font-medium text-go-soft shadow-[0_0_0_1px_rgba(63,125,92,0.65)]"
+                        className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-go/20 px-2.5 py-1.5 text-xs font-medium text-go-soft shadow-[0_0_0_1px_rgba(63,125,92,0.65)]"
                         onClick={() => addMitigation(id)}
                       >
                         {m?.label ?? id}
+                        <span className="font-normal opacity-80">{m?.owns}</span>
                         {gained && gained > 0 ? <span className="font-mono opacity-80">+{gained}h</span> : null}
                       </button>
                     </li>
@@ -306,88 +426,44 @@ export function WeatherPanel({
               </p>
             </div>
           ) : null}
-          <select
-            id="mitigation"
-            className={cn(selectClass, "mt-2")}
-            value=""
-            disabled={disabled}
-            onChange={(e) => {
-              const id = e.target.value as MitigationId;
-              if (id) addMitigation(id);
-            }}
-          >
-            <option value="">Add a compatible mitigation…</option>
-            {available
-              .slice()
-              .sort((a, b) => Number(recommendedIds.includes(b.id)) - Number(recommendedIds.includes(a.id)))
-              .map((m) => {
-                const selected = site.mitigations.includes(m.id);
-                const conflicted = m.conflicts?.some((c) => site.mitigations.includes(c));
-                const rec = recommendedIds.includes(m.id);
-                const gained = selected ? 0 : hoursGained(m.id);
-                const extra = selected
-                  ? " · on"
-                  : conflicted
-                    ? " · conflicts"
-                    : rec
-                      ? gained && gained > 0
-                        ? ` · recommended · +${gained}h`
-                        : " · recommended"
-                      : gained && gained > 0
-                        ? ` · +${gained}h this week`
-                        : "";
-                return (
-                  <option key={m.id} value={m.id} disabled={selected || conflicted}>
-                    {rec ? "● " : ""}
-                    {m.label}
-                    {extra}
-                  </option>
-                );
-              })}
-          </select>
+          <MitPickGrid
+            title="Independent"
+            blurb="One limiter each. Canopy + rain tarp + wind block is a valid open kit — it is not a tent."
+            items={independent}
+            selectedIds={site.mitigations}
+            recommendedIds={recommendedIds}
+            locked={disabled}
+            reasonFor={pickReason}
+            blockedFor={isBlocked}
+            gainedFor={hoursGained}
+            onToggle={toggleMitigation}
+          />
+          <MitPickGrid
+            title="Package"
+            blurb="Enclosure. Fulfills the independents it owns — those stay blocked while the package is on."
+            items={packages}
+            selectedIds={site.mitigations}
+            recommendedIds={recommendedIds}
+            locked={disabled}
+            reasonFor={pickReason}
+            blockedFor={isBlocked}
+            gainedFor={hoursGained}
+            onToggle={toggleMitigation}
+          />
           {site.mitigations.length ? (
-            <>
-              <ul className="mt-2 flex flex-wrap gap-2">
-                {site.mitigations.map((id) => {
-                  const m = mitigationById(id);
-                  const rec =
-                    m &&
-                    isRecommended(m, {
-                      substrate: site.substrate,
-                      discipline: site.discipline,
-                      limiters,
-                      unlocksHours: 1,
-                    });
-                  return (
-                    <li key={id}>
-                      <button
-                        type="button"
-                        className={cn(
-                          "inline-flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs",
-                          rec
-                            ? "bg-go/20 font-medium text-go-soft shadow-[0_0_0_1px_rgba(63,125,92,0.65)]"
-                            : "bg-surface-2 text-fg shadow-[0_0_0_1px_rgba(255,255,255,0.08)]",
-                        )}
-                        onClick={() => onSite({ ...site, mitigations: site.mitigations.filter((x) => x !== id) })}
-                      >
-                        {m?.label ?? id}
-                        <X className={cn("size-3.5", rec ? "text-go-soft" : "text-muted")} />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-              <div className="mt-2 space-y-1">
-                {site.mitigations.map((id) => {
-                  const m = mitigationById(id);
-                  return m ? (
-                    <p key={`${id}-note`} className="text-xs text-muted">
-                      {m.summary} {m.citation}
-                    </p>
-                  ) : null;
-                })}
-              </div>
-            </>
+            <div className="mt-3 space-y-1">
+              {site.mitigations.map((id) => {
+                const m = mitigationById(id);
+                return m ? (
+                  <p key={`${id}-note`} className="text-xs text-muted">
+                    <span className="font-medium text-fg">
+                      {m.kind === "package" ? "Package" : "Independent"} · {m.owns}.
+                    </span>{" "}
+                    {m.summary} {m.citation}
+                  </p>
+                ) : null;
+              })}
+            </div>
           ) : (
             <p className="mt-2 text-xs text-muted">None selected — calendar is unmitigated field conditions.</p>
           )}

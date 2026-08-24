@@ -1,6 +1,7 @@
 import {
   inShift,
   mitigationById,
+  sanitizeMitigations,
   skyFactor,
   solarEnvelope,
   substrateById,
@@ -117,7 +118,7 @@ export function scoreHour(
   let hard = 0;
   let soft = 0;
 
-  const mits = (site?.mitigations ?? []).filter((id) => Boolean(mitigationById(id)));
+  const mits = sanitizeMitigations((site?.mitigations ?? []).filter((id) => Boolean(mitigationById(id))));
   const sub = substrateById(site?.substrate ?? "bare_steel");
   const shiftOk = inShift(z.hour, mits);
   const discipline = site?.discipline ?? "coatings";
@@ -134,50 +135,45 @@ export function scoreHour(
   let sun = solarEnvelope(z.hour) * sky;
   const envelope = solarEnvelope(z.hour);
 
-  if (mits.includes("canopy")) sun *= 0.12;
-
   const rainTarp = mits.includes("rain_tarp");
   const lightTent = mits.includes("light_tent");
   const darkTent = mits.includes("dark_tent");
   const dehu = mits.includes("dehumidify_tent");
   const humid = mits.includes("humidity_tent");
   const climate = mits.includes("climate_tent");
+  const canopy = mits.includes("canopy");
+  const windBlock = mits.includes("windscreen");
+  const enclosed = climate || lightTent || darkTent || dehu || humid;
 
-  if (lightTent) {
-    sun *= 0.08;
-    wind = wind != null ? wind * 0.25 : wind;
-    precipBlocked = false;
-    if (air != null) air = round1(air + 2 * envelope);
+  // One owner per axis — never multiply the same limiter twice.
+  if (climate) sun = 0;
+  else if (lightTent) sun *= 0.08;
+  else if (darkTent) sun *= 0.12;
+  else if (dehu || humid) sun *= 0.1;
+  else if (canopy) sun *= 0.12;
+
+  if (climate) wind = 0;
+  else if (lightTent || darkTent || dehu || humid) wind = wind != null ? wind * 0.25 : wind;
+  else if (windBlock) wind = wind != null ? wind * 0.4 : wind;
+
+  if (enclosed || rainTarp) precipBlocked = false;
+
+  if (climate && air != null) air = round1(air + (72 - air) * 0.65);
+  else if (mits.includes("heaters") && air != null) air = round1(air + 16);
+  else if (lightTent && air != null) air = round1(air + 2 * envelope);
+  else if (darkTent && air != null) {
+    air = round1(air + 12 * Math.max(envelope, sky > 0.4 && z.hour >= 8 && z.hour <= 18 ? 0.35 : 0));
   }
-  if (darkTent) {
-    sun *= 0.12;
-    wind = wind != null ? wind * 0.25 : wind;
-    precipBlocked = false;
-    if (air != null) air = round1(air + 12 * Math.max(envelope, sky > 0.4 && z.hour >= 8 && z.hour <= 18 ? 0.35 : 0));
-  }
-  if (dehu) {
-    if (!lightTent && !darkTent && !climate) sun *= 0.1;
-    wind = wind != null ? wind * 0.2 : wind;
-    precipBlocked = false;
-    if (rh != null) rh = Math.max(20, rh - 18);
-    if (dew != null) dew = round1(dew - 4);
-  }
-  if (humid) {
-    if (!lightTent && !darkTent && !climate) sun *= 0.12;
-    precipBlocked = false;
-    if (rh != null) rh = Math.max(rh, discipline === "cementitious" ? 70 : 85);
-  }
+
   if (climate) {
-    sun = 0;
-    wind = 0;
-    precipBlocked = false;
-    if (air != null) air = round1(air + (72 - air) * 0.65);
     if (rh != null) rh = round1(rh + (48 - rh) * 0.7);
     if (dew != null && air != null) dew = round1(Math.min(dew, air - 8));
+  } else if (dehu) {
+    if (rh != null) rh = Math.max(20, rh - 18);
+    if (dew != null) dew = round1(dew - 4);
+  } else if (humid) {
+    if (rh != null) rh = Math.max(rh, discipline === "cementitious" ? 70 : 85);
   }
-  if (mits.includes("windscreen") && wind != null) wind *= 0.4;
-  if (mits.includes("heaters") && air != null && !climate) air = round1(air + 16);
-  if (rainTarp) precipBlocked = false;
 
   for (const cm of customActive) {
     sun *= cm.sunMul > 0 ? cm.sunMul : 1;
@@ -191,7 +187,7 @@ export function scoreHour(
   if (z.hour >= 4 && z.hour <= 7) solarGain -= 2;
 
   let substrateF = air != null ? round1(air + solarGain) : null;
-  if (mits.includes("preheat") && sub.metal && substrateF != null) {
+  if (mits.includes("preheat") && sub.metal && substrateF != null && !climate) {
     substrateF = round1(substrateF + 14);
   }
   if (mits.includes("heaters") && substrateF != null && !climate) {
