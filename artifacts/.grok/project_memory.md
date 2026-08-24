@@ -1,0 +1,5 @@
+- Coatings Conductor will be project-scoped: each project has name + ZIP + its own nudged calibration/outcomes; scoring catalog stays global. [2026-08-23]
+- Persistence intent: user wants projects to survive new sessions and browser cache clear; chose account/sign-in (option B) so models travel with the user, not device-local only. [2026-08-23]
+- Custom mitigations are a user-level library (reusable across all of that user’s projects). Per-project is only which ones are selected on that job. [2026-08-23]
+- New project starts at factory calibration (no silent clone). Archive keeps memory; remove deletes that project only. ZIP edit updates the open project. [2026-08-23]
+- App work stays gated until a project is created or selected. [2026-08-23]
