@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { heuristicExtract } from "./heuristic-extract";
+import { refineExtractedCard } from "./pds-application-table";
 import type { FieldCardData } from "./types";
 
 /** Local PDS extract — no model, no credits. Kept as a server fn for callers that already POST. */
@@ -12,7 +13,7 @@ export const extractPds = createServerFn({ method: "POST" })
   })
   .handler(async ({ data }): Promise<{ ok: true; card: FieldCardData; usedAi: boolean } | { ok: false; error: string }> => {
     try {
-      const card = heuristicExtract(data.text);
+      const card = refineExtractedCard(heuristicExtract(data.text), data.text);
       return { ok: true, card, usedAi: false };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : "Extract failed" };

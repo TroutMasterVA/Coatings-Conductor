@@ -2,7 +2,6 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { BootShell } from "@/components/boot-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,7 +14,7 @@ export const Route = createFileRoute("/login")({
 });
 
 function Login() {
-  const { user, isPending } = useCurrentUserState();
+  const { user } = useCurrentUserState();
   const search = Route.useSearch();
   const [mode, setMode] = useState<"in" | "up">(search.mode);
   const [email, setEmail] = useState("");
@@ -23,7 +22,6 @@ function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (isPending) return <BootShell message="Opening the stand…" />;
   if (user) return <Navigate to="/" />;
 
   async function handleEmail(e: FormEvent) {
