@@ -11,7 +11,7 @@ import { ProjectHome } from "@/components/project-home";
 import { WeatherPanel } from "@/components/weather-panel";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
-import { extractPds } from "@/lib/extract-pds";
+import { heuristicExtract } from "@/lib/heuristic-extract";
 import { loadForecast } from "@/lib/forecast";
 import {
   DEFAULT_CALIBRATION,
@@ -269,15 +269,20 @@ function App({ user }: { user: AppUser | null }) {
   async function handleExtract() {
     setExtracting(true);
     try {
-      const result = await extractPds({ data: { text } });
-      if (!result.ok) {
-        toast.error(result.error);
+      const trimmed = text.trim();
+      if (trimmed.length < 40) {
+        toast.error("PDS text is too short.");
         return;
       }
-      applyCard(result.card);
-      remember(result.card, zip);
-      toast.success(result.usedAi ? "Card on the stand." : "Card built with a fallback parse — review every field.");
-      if (zip.length === 5) void handleForecast(result.card, zip);
+      const next = heuristicExtract(trimmed.slice(0, 24000));
+      applyCard(next);
+      remember(next, zip);
+      toast.success(
+        next.confidence === "low"
+          ? "Card built locally — some fields are thin. Check them against the PDS."
+          : `Card on the stand · ${next.confidence} local extract. Confirm numbers on the PDS.`,
+      );
+      if (zip.length === 5) void handleForecast(next, zip);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Extract failed");
     } finally {

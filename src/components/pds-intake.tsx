@@ -55,7 +55,7 @@ export function PdsIntake({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <Label htmlFor="pds">Product data sheet</Label>
-          <p className="mt-1 text-sm text-muted">Paste the PDS, or drop a PDF. Samples skip the wait.</p>
+          <p className="mt-1 text-sm text-muted">Paste the PDS, or drop a PDF. Samples skip the wait. Extract runs locally — no AI credits.</p>
         </div>
         <div className="flex gap-2">
           <input
