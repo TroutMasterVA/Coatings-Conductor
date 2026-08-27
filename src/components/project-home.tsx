@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Archive, FolderOpen, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ProjectSummary } from "@/lib/project-store";
 import { cn } from "@/lib/utils";
+
+function digitsZip(raw: string): string {
+  return raw.replace(/\D/g, "").slice(0, 5);
+}
 
 export function ProjectHome({
   projects,
@@ -28,9 +32,20 @@ export function ProjectHome({
 }) {
   const [name, setName] = useState("");
   const [zip, setZip] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const active = projects.filter((p) => !p.archived);
   const archived = projects.filter((p) => p.archived);
+  const zipOk = zip.length === 5;
+  const nameOk = name.trim().length > 0;
+  const ready = nameOk && zipOk && !creating;
+
+  const hint = useMemo(() => {
+    if (!nameOk && !zipOk) return "Name the job and enter a 5-digit US ZIP.";
+    if (!nameOk) return "Project name is required.";
+    if (!zipOk) return `ZIP needs 5 digits (${zip.length}/5).`;
+    return "Ready — create this job without signing in.";
+  }, [nameOk, zipOk, zip.length]);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:px-6">
@@ -45,7 +60,8 @@ export function ProjectHome({
       {guest ? (
         <aside className="flex flex-col gap-3 rounded-xl bg-surface p-4 shadow-[0_0_0_1px_rgba(255,183,3,0.28)] sm:flex-row sm:items-center sm:justify-between sm:p-5">
           <p className="max-w-xl text-sm leading-relaxed text-muted">
-            Working on this device. Create an account if you want these jobs to follow you after a cache clear.
+            Working on this device. Sign-in is optional — you can create a project right now. Create an account only if
+            you want these jobs to follow you after a cache clear.
           </p>
           <Button asChild size="sm" className="shrink-0">
             <Link to="/login" search={{ mode: "up" }}>
@@ -61,7 +77,18 @@ export function ProjectHome({
           className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end"
           onSubmit={(e) => {
             e.preventDefault();
-            onCreate(name, zip);
+            const nextName = name.trim();
+            const nextZip = digitsZip(zip);
+            if (!nextName) {
+              setLocalError("Project name is required.");
+              return;
+            }
+            if (nextZip.length !== 5) {
+              setLocalError("Enter a 5-digit US ZIP (digits only).");
+              return;
+            }
+            setLocalError(null);
+            onCreate(nextName, nextZip);
           }}
         >
           <label className="min-w-0 flex-1">
@@ -71,29 +98,48 @@ export function ProjectHome({
               className="mt-1.5"
               placeholder="Tank farm — Houston"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              autoComplete="off"
+              onChange={(e) => {
+                setName(e.target.value);
+                setLocalError(null);
+              }}
               required
             />
           </label>
-          <label className="sm:w-32">
-            <Label htmlFor="proj-zip">ZIP</Label>
+          <label className="sm:w-36">
+            <Label htmlFor="proj-zip">ZIP (5 digits)</Label>
             <Input
               id="proj-zip"
+              type="text"
               inputMode="numeric"
+              autoComplete="postal-code"
+              pattern="[0-9]*"
               maxLength={5}
               className="mt-1.5 font-mono tracking-widest"
-              placeholder="77002"
+              placeholder="70808"
               value={zip}
-              onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))}
+              onChange={(e) => {
+                setZip(digitsZip(e.target.value));
+                setLocalError(null);
+              }}
               required
             />
           </label>
-          <Button type="submit" disabled={creating || name.trim() === "" || zip.length !== 5}>
+          <Button
+            type="submit"
+            className={cn(
+              "h-11 w-full sm:w-auto",
+              ready && "shadow-[0_0_0_2px_rgba(255,183,3,0.55)]",
+            )}
+            disabled={!ready}
+            aria-disabled={!ready}
+          >
             <Plus />
-            Create
+            {creating ? "Creating…" : "Create"}
           </Button>
         </form>
-        {error ? <p className="mt-3 text-sm text-nogo">{error}</p> : null}
+        <p className={cn("mt-3 text-sm", ready ? "text-accent" : "text-muted")}>{hint}</p>
+        {localError || error ? <p className="mt-2 text-sm text-nogo">{localError || error}</p> : null}
       </section>
 
       <section>
