@@ -21,6 +21,17 @@ function empty(): GuestStore {
   return { lastProjectId: null, projects: [], custom: [] };
 }
 
+function newId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    /* fall through */
+  }
+  return `job-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function read(): GuestStore {
   if (typeof window === "undefined") return empty();
   try {
@@ -38,7 +49,14 @@ function read(): GuestStore {
 }
 
 function write(store: GuestStore) {
-  localStorage.setItem(KEY, JSON.stringify(store));
+  if (typeof window === "undefined") {
+    throw new Error("Saving is only available in the browser.");
+  }
+  try {
+    localStorage.setItem(KEY, JSON.stringify(store));
+  } catch {
+    throw new Error("This device blocked saving. Allow site data, or create an account.");
+  }
 }
 
 function summaryOf(p: ProjectFull): ProjectSummary {
@@ -75,7 +93,6 @@ export function guestHasData(): boolean {
   return s.projects.length > 0 || s.custom.length > 0;
 }
 
-/** First sign-in with an empty account lifts this device’s jobs. Account jobs win if both exist. */
 export async function migrateGuestToAccount(): Promise<"imported" | "skipped" | "empty"> {
   const dump = read();
   if (dump.projects.length === 0 && dump.custom.length === 0) return "empty";
@@ -98,7 +115,7 @@ export function guestCreateProject(name: string, zip: string, seed?: Partial<Pro
   if (zipped.length !== 5) throw new Error("Enter a 5-digit US ZIP.");
   const now = new Date().toISOString();
   const full: ProjectFull = {
-    id: crypto.randomUUID(),
+    id: newId(),
     name: trimmed,
     zip: zipped,
     archived: false,
