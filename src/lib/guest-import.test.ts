@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { accountRejectsGuestImport, guestMigrateResult } from "./guest-import.ts";
+import {
+  accountRejectsGuestImport,
+  guestMigrateResult,
+  NOT_YOUR_JOB_MESSAGE,
+  remapGuestImportInput,
+} from "./guest-import.ts";
 
 describe("guest import skip signal", () => {
   it("imports only into an empty account", () => {
@@ -38,5 +43,36 @@ describe("guest import is one-way", () => {
     const result = guestMigrateResult({ guestHasData: false, skipped: false });
     assert.equal(result.outcome, "empty");
     assert.equal(result.clearGuest, false);
+  });
+});
+
+describe("guest import mints server ids", () => {
+  it("never persists the device ids", () => {
+    let n = 0;
+    const minted = remapGuestImportInput(
+      {
+        projects: [
+          {
+            id: "guest-job",
+            site: { customMitigationIds: ["guest-custom"] },
+          },
+        ],
+        custom: [{ id: "guest-custom" }],
+        lastProjectId: "guest-job",
+      },
+      () => `srv-${++n}`,
+    );
+    assert.equal(minted.custom[0]?.id, "srv-1");
+    assert.equal(minted.projects[0]?.id, "srv-2");
+    assert.equal(minted.lastProjectId, "srv-2");
+    assert.deepEqual(minted.projects[0]?.site?.customMitigationIds, ["srv-1"]);
+    assert.equal(
+      minted.projects.some((p) => p.id.startsWith("guest-")),
+      false,
+    );
+  });
+
+  it("does not leak another person's job as a distinct error", () => {
+    assert.equal(NOT_YOUR_JOB_MESSAGE, "Project not found.");
   });
 });
