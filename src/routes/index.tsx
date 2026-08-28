@@ -9,6 +9,7 @@ import { LearningPanel } from "@/components/learning-panel";
 import { PdsIntake } from "@/components/pds-intake";
 import { ProjectHome } from "@/components/project-home";
 import { WeatherPanel } from "@/components/weather-panel";
+import { isUnauthorized, returnToLogin } from "@/lib/auth/expired";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
 import { buildCardFromPds } from "@/lib/on-device-extract";
@@ -57,6 +58,16 @@ import { loadZip } from "@/lib/storage";
 import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, ForecastBundle, SavedCard } from "@/lib/types";
 
 export const Route = createFileRoute("/")({ component: Home });
+
+function bounceExpired<T>(promise: Promise<T>): Promise<T> {
+  return promise.catch((err: unknown) => {
+    if (isUnauthorized(err)) {
+      returnToLogin();
+      return new Promise<T>(() => {});
+    }
+    throw err;
+  });
+}
 
 function siteFromCard(card: FieldCardData, prev?: SiteContext): SiteContext {
   const notes = [
@@ -201,6 +212,10 @@ function App({ user }: { user: AppUser | null }) {
         }
       } catch (err) {
         if (cancelled) return;
+        if (isUnauthorized(err)) {
+          returnToLogin();
+          return;
+        }
         toast.error(err instanceof Error ? err.message : "Could not load projects.");
         setMode("home");
       } finally {
@@ -230,6 +245,10 @@ function App({ user }: { user: AppUser | null }) {
         setProjects((prev) => prev.map((p) => (p.id === summary.id ? { ...p, ...summary } : p)));
       })
       .catch((err) => {
+        if (isUnauthorized(err)) {
+          returnToLogin();
+          return;
+        }
         toast.error(err instanceof Error ? err.message : "Could not save project.");
       });
   }, [api, projectId, projectName, zip, calibration, site, card, text, recents, outcomes]);
@@ -346,6 +365,10 @@ function App({ user }: { user: AppUser | null }) {
       applyFull(full);
       toast.success(`${full.name} is on the stand — factory model, this ZIP only.`);
     } catch (err) {
+      if (isUnauthorized(err)) {
+        returnToLogin();
+        return;
+      }
       setHomeError(err instanceof Error ? err.message : "Could not create project.");
     } finally {
       setCreating(false);
@@ -371,6 +394,10 @@ function App({ user }: { user: AppUser | null }) {
       const full = await api.open(id);
       applyFull(full);
     } catch (err) {
+      if (isUnauthorized(err)) {
+        returnToLogin();
+        return;
+      }
       toast.error(err instanceof Error ? err.message : "Could not open project.");
     }
   }
@@ -386,6 +413,10 @@ function App({ user }: { user: AppUser | null }) {
       }
       toast.success(archived ? "Archived. Memory kept." : "Restored.");
     } catch (err) {
+      if (isUnauthorized(err)) {
+        returnToLogin();
+        return;
+      }
       toast.error(err instanceof Error ? err.message : "Could not update project.");
     }
   }
@@ -401,6 +432,10 @@ function App({ user }: { user: AppUser | null }) {
       }
       toast.success("Project removed.");
     } catch (err) {
+      if (isUnauthorized(err)) {
+        returnToLogin();
+        return;
+      }
       toast.error(err instanceof Error ? err.message : "Could not remove project.");
     }
   }
@@ -581,7 +616,13 @@ function App({ user }: { user: AppUser | null }) {
                     });
                     toast.success(`${created.label} is in your library and on for this job.`);
                   })
-                  .catch((err) => toast.error(err instanceof Error ? err.message : "Could not save mitigation."));
+                  .catch((err) => {
+                    if (isUnauthorized(err)) {
+                      returnToLogin();
+                      return;
+                    }
+                    toast.error(err instanceof Error ? err.message : "Could not save mitigation.");
+                  });
               }}
               onLogOutcome={(input) => {
                 const result = recordOutcome(input, calibration, outcomes);
@@ -620,27 +661,28 @@ function toSummary(full: ProjectFull): ProjectSummary {
 }
 
 function workspaceApi(signedIn: boolean) {
+  const wrap = <T,>(p: Promise<T>) => (signedIn ? bounceExpired(p) : p);
   return {
     load() {
-      return signedIn ? loadWorkspace() : Promise.resolve(guestLoadWorkspace());
+      return wrap(signedIn ? loadWorkspace() : Promise.resolve(guestLoadWorkspace()));
     },
     create(data: { name: string; zip: string; seed?: Partial<ProjectFull> }) {
-      return signedIn ? createProject({ data }) : Promise.resolve(guestCreateProject(data.name, data.zip, data.seed));
+      return wrap(signedIn ? createProject({ data }) : Promise.resolve(guestCreateProject(data.name, data.zip, data.seed)));
     },
     open(id: string) {
-      return signedIn ? openProject({ data: id }) : Promise.resolve(guestOpenProject(id));
+      return wrap(signedIn ? openProject({ data: id }) : Promise.resolve(guestOpenProject(id)));
     },
     save(data: Parameters<typeof guestSaveProject>[0]) {
-      return signedIn ? saveProject({ data }) : Promise.resolve(guestSaveProject(data));
+      return wrap(signedIn ? saveProject({ data }) : Promise.resolve(guestSaveProject(data)));
     },
     archive(id: string, archived: boolean) {
-      return signedIn ? archiveProject({ data: { id, archived } }) : Promise.resolve(guestArchiveProject(id, archived));
+      return wrap(signedIn ? archiveProject({ data: { id, archived } }) : Promise.resolve(guestArchiveProject(id, archived)));
     },
     remove(id: string) {
-      return signedIn ? deleteProject({ data: id }) : Promise.resolve(guestDeleteProject(id));
+      return wrap(signedIn ? deleteProject({ data: id }) : Promise.resolve(guestDeleteProject(id)));
     },
     saveCustom(data: CustomMitigationInput) {
-      return signedIn ? saveCustomMitigation({ data }) : Promise.resolve(guestSaveCustom(data));
+      return wrap(signedIn ? saveCustomMitigation({ data }) : Promise.resolve(guestSaveCustom(data)));
     },
   };
 }
