@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
-import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
+import { authClient, authEnabled } from "@/lib/auth/client";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { BootShell } from "@/components/boot-shell";
 import { Button } from "@/components/ui/button";
@@ -127,31 +127,6 @@ function Login() {
               >
                 {mode === "in" ? "New here? Create an account" : "Have an account? Sign in"}
               </button>
-              <div className="mt-5 flex items-center gap-3 text-xs text-subtle">
-                <span className="h-px flex-1 bg-border" />
-                or
-                <span className="h-px flex-1 bg-border" />
-              </div>
-              <div className="mt-3 space-y-2">
-                {GROK_PROVIDERS.map((p) => (
-                  <Button
-                    key={p.providerId}
-                    type="button"
-                    variant="secondary"
-                    className="w-full"
-                    disabled={busy}
-                    onClick={() => {
-                      setBusy(true);
-                      void signIn(p.providerId, { callbackURL: "/" }).catch((err) => {
-                        setError(err instanceof Error ? err.message : "Sign-in failed.");
-                        setBusy(false);
-                      });
-                    }}
-                  >
-                    Continue with {p.label}
-                  </Button>
-                ))}
-              </div>
             </>
           ) : (
             <p className="mt-4 text-sm text-muted">Sign-in is disabled.</p>
