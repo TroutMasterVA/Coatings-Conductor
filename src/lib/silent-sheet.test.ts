@@ -75,6 +75,13 @@ DFT 2-4 mils. Ambient 50-90 F.
 Do not apply if rain is imminent before the coating is water-resistant.
 `;
 
+const PROTECT_RAIN = `
+Product data sheet — structural epoxy adhesive
+Mix ratio 1:1 by volume. Pot life 45 minutes.
+DFT paste. Ambient 40-95 F.
+Moisture-tolerant. Protect from rain until tack-free.
+`;
+
 const ALLOW_RAIN = `
 Product data sheet — moisture-cure primer
 Mix ratio 1:1 by volume. Pot life 1 hour.
@@ -101,9 +108,9 @@ describe("silent sheet extract", () => {
     assert.equal(card.environmentals.precipitationAllowed, false);
   });
 
-  it("forbids rain when the sheet says do not apply", () => {
-    const card = heuristicExtract(FORBID_RAIN);
-    assert.equal(card.environmentals.precipitationAllowed, false);
+  it("forbids rain when the sheet says do not apply or protect from rain", () => {
+    assert.equal(heuristicExtract(FORBID_RAIN).environmentals.precipitationAllowed, false);
+    assert.equal(heuristicExtract(PROTECT_RAIN).environmentals.precipitationAllowed, false);
   });
 
   it("allows rain only when the sheet says it may be applied in rain", () => {
@@ -126,6 +133,7 @@ describe("silent sheet extract", () => {
   });
 
   it("throws Could not read this sheet for garbage paste", () => {
+    assert.ok(GARBAGE.length >= 80);
     assert.throws(() => buildCardFromPds(GARBAGE), /Could not read this sheet/i);
   });
 });
@@ -140,7 +148,7 @@ describe("silent sheet windows", () => {
   it("scores wet hours nogo when rain is unstated", () => {
     const scored = scoreHour(
       hour({ shortForecast: "Rain showers", pop: 80, precipIn: 0.1 }),
-      env({ dewPointSpreadMinF: 5, precipitationAllowed: false }),
+      env({ dewPointSpreadMinF: null, precipitationAllowed: false }),
     );
     assert.equal(scored.status, "nogo");
   });
