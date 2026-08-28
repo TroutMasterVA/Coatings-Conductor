@@ -1,10 +1,10 @@
 /**
  * Self-hosted Better Auth for THIS app (server-only).
  *
- * Email and password only. The Grok auth broker is not in the running app:
- * no genericOAuth plugin, no GROK_AUTH_* federation, no auth.grok.me hops.
- * Provider buttons live on the login card (Frontend); this file must not
- * register broker upstreams even if a leftover popup hits /auth/popup.
+ * Email and password only. No OAuth federation plugin, no broker issuer, no
+ * broker client credentials. Provider buttons live on the login card
+ * (Frontend); this file must not register broker upstreams even if a leftover
+ * popup hits /auth/popup.
  *
  * Tri-mode:
  *   - Deployed: the deployer injects `BETTER_AUTH_URL` + `BETTER_AUTH_SECRET`
