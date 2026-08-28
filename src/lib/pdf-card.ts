@@ -2,19 +2,27 @@ import { mitigationById, substrateById, type SiteContext } from "./mitigations";
 import type { DayWindow, FieldCardData, ForecastBundle } from "./types";
 
 function wrap(doc: import("jspdf").jsPDF, text: string, maxWidth: number): string[] {
-  const t = (text || "—").replace(/\s+/g, " ").trim();
+  const t = (text || "\u2014").replace(/\s+/g, " ").trim();
   return doc.splitTextToSize(t, maxWidth) as string[];
 }
 
-function join(items: string[] | undefined, fallback = "—") {
+function join(items: string[] | undefined, fallback = "\u2014") {
   const list = (items ?? []).map((s) => s.trim()).filter(Boolean);
-  return list.length ? list.join(" · ") : fallback;
+  return list.length ? list.join(" \u00b7 ") : fallback;
+}
+
+export function selectedMitigationLabels(site?: SiteContext): string[] {
+  const builtIn = (site?.mitigations ?? []).map((id) => mitigationById(id)?.label ?? id);
+  const customIds = new Set(site?.customMitigationIds ?? []);
+  const custom = (site?.customMitigations ?? []).filter((c) => customIds.has(c.id)).map((c) => c.label);
+  return [...builtIn, ...custom];
 }
 
 export async function downloadFieldCard(
   card: FieldCardData,
   forecast: ForecastBundle | null,
   site?: SiteContext,
+  jobZip?: string,
 ) {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "letter", orientation: "portrait" });
@@ -38,7 +46,7 @@ export async function downloadFieldCard(
   doc.setTextColor(rail.r, rail.g, rail.b);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
-  doc.text("COATINGS CONDUCTOR  ·  FIELD CARD", margin, y);
+  doc.text("COATINGS CONDUCTOR  \u00b7  FIELD CARD", margin, y);
 
   doc.setTextColor(muted.r, muted.g, muted.b);
   doc.setFont("helvetica", "normal");
@@ -58,9 +66,19 @@ export async function downloadFieldCard(
   doc.setTextColor(muted.r, muted.g, muted.b);
   const sub = [card.product.manufacturer, card.product.productType, card.product.service]
     .filter(Boolean)
-    .join("  ·  ");
-  doc.text(wrap(doc, sub || "—", width), margin, y);
+    .join("  \u00b7  ");
+  doc.text(wrap(doc, sub || "\u2014", width), margin, y);
   y += 18;
+
+  const zipLine = (jobZip || forecast?.zip || "").trim() || "Not stated";
+  const headline = (forecast?.headline || "").trim() || "Not stated";
+  const mitLine = selectedMitigationLabels(site).join(", ") || "None selected";
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(ink.r, ink.g, ink.b);
+  const standLines = wrap(doc, `ZIP ${zipLine}  \u00b7  ${headline}  \u00b7  Mitigations: ${mitLine}`, width);
+  doc.text(standLines, margin, y);
+  y += standLines.length * 12 + 8;
 
   doc.setDrawColor(rail.r, rail.g, rail.b);
   doc.setLineWidth(1.2);
@@ -71,31 +89,31 @@ export async function downloadFieldCard(
   const env = card.environmentals;
   const envBits = [
     env.ambientTempMinF != null || env.ambientTempMaxF != null
-      ? `Air ${env.ambientTempMinF ?? "—"}–${env.ambientTempMaxF ?? "—"}°F`
+      ? `Air ${env.ambientTempMinF ?? "\u2014"}\u2013${env.ambientTempMaxF ?? "\u2014"}\u00b0F`
       : "",
     env.substrateTempMinF != null || env.substrateTempMaxF != null
-      ? `Substrate ${env.substrateTempMinF ?? "—"}–${env.substrateTempMaxF ?? "—"}°F`
+      ? `Substrate ${env.substrateTempMinF ?? "\u2014"}\u2013${env.substrateTempMaxF ?? "\u2014"}\u00b0F`
       : "",
-    env.dewPointSpreadMinF != null ? `Dew spread ≥ ${env.dewPointSpreadMinF}°F` : "",
-    env.relativeHumidityMax != null ? `RH ≤ ${env.relativeHumidityMax}%` : "",
+    env.dewPointSpreadMinF != null ? `Dew spread \u2265 ${env.dewPointSpreadMinF}\u00b0F` : "",
+    env.relativeHumidityMax != null ? `RH \u2264 ${env.relativeHumidityMax}%` : "",
     env.precipitationAllowed === false ? "No precip" : "",
-    env.windMaxMph != null ? `Wind ≤ ${env.windMaxMph} mph` : "",
+    env.windMaxMph != null ? `Wind \u2264 ${env.windMaxMph} mph` : "",
   ]
     .filter(Boolean)
-    .join("  ·  ");
+    .join("  \u00b7  ");
 
   const rows: Row[] = [
     {
       n: "01",
       title: "STORE",
-      body: [card.storage.temperatureRange, join(card.storage.conditions, ""), card.storage.notes, `Shelf unopened: ${card.shelfLife.unopened || "—"}`, card.shelfLife.notes]
+      body: [card.storage.temperatureRange, join(card.storage.conditions, ""), card.storage.notes, `Shelf unopened: ${card.shelfLife.unopened || "\u2014"}`, card.shelfLife.notes]
         .filter(Boolean)
-        .join(" — "),
+        .join(" \u2014 "),
     },
     {
       n: "02",
       title: "QUALIFY",
-      body: [join(card.credentials.required), card.credentials.notes].filter(Boolean).join(" — "),
+      body: [join(card.credentials.required), card.credentials.notes].filter(Boolean).join(" \u2014 "),
     },
     {
       n: "03",
@@ -109,12 +127,12 @@ export async function downloadFieldCard(
         card.surfacePrep.notes,
       ]
         .filter(Boolean)
-        .join(" — "),
+        .join(" \u2014 "),
     },
     {
       n: "04",
       title: "AMBIENT",
-      body: [envBits, env.notes, env.directSunNotes, ...(env.additional ?? [])].filter(Boolean).join(" — "),
+      body: [envBits, env.notes, env.directSunNotes, ...(env.additional ?? [])].filter(Boolean).join(" \u2014 "),
     },
     {
       n: "05",
@@ -125,11 +143,11 @@ export async function downloadFieldCard(
         card.mixing.inductionTime ? `Induction ${card.mixing.inductionTime}` : "",
         card.mixing.potLife ? `Pot life ${card.mixing.potLife}` : "",
         card.mixing.thinning,
-        `Mixed life ${card.shelfLife.mixedPotLife || "—"}`,
+        `Mixed life ${card.shelfLife.mixedPotLife || "\u2014"}`,
         card.mixing.notes,
       ]
         .filter(Boolean)
-        .join(" — "),
+        .join(" \u2014 "),
     },
     {
       n: "06",
@@ -143,13 +161,13 @@ export async function downloadFieldCard(
         card.installation.notes,
       ]
         .filter(Boolean)
-        .join(" — "),
+        .join(" \u2014 "),
     },
     {
       n: "07",
       title: "HOLD",
       body: card.holdPoints
-        .map((h) => `${h.step}. ${h.name} — ${h.criteria} (${h.owner}; ${h.timing}${h.source === "inferred" ? "; inferred" : ""})`)
+        .map((h) => `${h.step}. ${h.name} \u2014 ${h.criteria} (${h.owner}; ${h.timing}${h.source === "inferred" ? "; inferred" : ""})`)
         .join("  |  "),
     },
     {
@@ -157,7 +175,7 @@ export async function downloadFieldCard(
       title: "INSPECT",
       body: [join(card.inspection.methods), join(card.inspection.acceptance, ""), card.inspection.documentation]
         .filter(Boolean)
-        .join(" — "),
+        .join(" \u2014 "),
     },
     {
       n: "09",
@@ -172,12 +190,12 @@ export async function downloadFieldCard(
         card.cure.temperatureDependence,
       ]
         .filter(Boolean)
-        .join(" — "),
+        .join(" \u2014 "),
     },
     {
       n: "10",
       title: "SAFETY",
-      body: [join(card.safety.ppe), card.safety.ventilation, join(card.safety.hazards, "")].filter(Boolean).join(" — "),
+      body: [join(card.safety.ppe), card.safety.ventilation, join(card.safety.hazards, "")].filter(Boolean).join(" \u2014 "),
     },
   ];
 
@@ -185,7 +203,7 @@ export async function downloadFieldCard(
 
   for (const row of rows) {
     const titleW = 78;
-    const bodyLines = wrap(doc, row.body || "—", width - titleW - 8);
+    const bodyLines = wrap(doc, row.body || "\u2014", width - titleW - 8);
     const needed = Math.max(22, bodyLines.length * 11 + 14);
     if (y + needed > bottom) {
       footer(doc, card, 1);
@@ -230,7 +248,7 @@ export async function downloadFieldCard(
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
     doc.setTextColor(rail.r, rail.g, rail.b);
-    doc.text("APPLICATION WINDOWS  ·  NOAA", margin, y);
+    doc.text("APPLICATION WINDOWS  \u00b7  NOAA", margin, y);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.setFontSize(8);
@@ -246,13 +264,11 @@ export async function downloadFieldCard(
     doc.setTextColor(muted.r, muted.g, muted.b);
     const siteLine = [
       site ? `Substrate: ${substrateById(site.substrate).label}` : null,
-      site?.mitigations.length
-        ? `Mitigations: ${site.mitigations.map((id) => mitigationById(id)?.label ?? id).join(", ")}`
-        : "Mitigations: none",
+      `Mitigations: ${selectedMitigationLabels(site).join(", ") || "none"}`,
       "Est. substrate = air + solar gain (not a substitute for a surface thermometer)",
     ]
       .filter(Boolean)
-      .join("  ·  ");
+      .join("  \u00b7  ");
     doc.text(wrap(doc, siteLine, width), margin, y);
     y += 22;
 
@@ -265,7 +281,7 @@ export async function downloadFieldCard(
     doc.text("FIELD AMBIENT LOG  (fill in)", margin, y);
     y += 12;
 
-    const cols = ["Date / time", "Air °F", "Steel °F", "RH %", "Dew °F", "Spread", "Sky / wind", "Initials"];
+    const cols = ["Date / time", "Air \u00b0F", "Steel \u00b0F", "RH %", "Dew \u00b0F", "Spread", "Sky / wind", "Initials"];
     const colW = width / cols.length;
     doc.setFillColor(22, 24, 28);
     doc.rect(margin, y, width, 16, "F");
@@ -289,7 +305,7 @@ export async function downloadFieldCard(
     doc.setTextColor(muted.r, muted.g, muted.b);
     const caveats = wrap(
       doc,
-      "Forecast is air at the ZIP. Substrate temperature is estimated from solar load and selected mitigations — measure steel at the workface. Windows are guidance — the PDS and project spec govern. " +
+      "Forecast is air at the ZIP. Substrate temperature is estimated from solar load and selected mitigations \u2014 measure steel at the workface. Windows are guidance \u2014 the PDS and project spec govern. " +
         (forecast.source || ""),
       width,
     );
@@ -356,7 +372,7 @@ function drawCalendar(
     doc.setTextColor(92, 97, 104);
     doc.setFontSize(6.5);
     doc.text(`${d.goHours}h go`, cx + w / 2, y + 82, { align: "center" });
-    const limit = (d.limiting[0] || "—").slice(0, 28);
+    const limit = (d.limiting[0] || "\u2014").slice(0, 28);
     const lines = doc.splitTextToSize(limit, w - 8) as string[];
     doc.text(lines.slice(0, 3), cx + w / 2, y + 100, { align: "center" });
 
