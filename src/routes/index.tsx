@@ -29,7 +29,7 @@ import {
   type Limiter,
   type SiteContext,
 } from "@/lib/mitigations";
-import { downloadFieldCard } from "@/lib/pdf-card";
+import { downloadFieldCard, selectedMitigationLabels } from "@/lib/pdf-card";
 import {
   guestCreateProject,
   guestLoadWorkspace,
@@ -313,7 +313,7 @@ function App({ user }: { user: AppUser | null }) {
     if (!card) return;
     setDownloading(true);
     try {
-      await downloadFieldCard(card, scored, site);
+      await downloadFieldCard(card, scored, scoringSite, zip);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "PDF failed");
     } finally {
@@ -519,7 +519,16 @@ function App({ user }: { user: AppUser | null }) {
           </div>
 
           <div className="min-w-0 lg:col-start-1 lg:row-start-2">
-            {card ? <FieldCardView card={card} /> : <EmptyCardSkeleton />}
+            {card ? (
+              <FieldCardView
+                card={card}
+                zip={zip}
+                headline={scored?.headline}
+                mitigations={selectedMitigationLabels(scoringSite)}
+              />
+            ) : (
+              <EmptyCardSkeleton />
+            )}
           </div>
 
           <div className="no-print space-y-4 lg:col-start-2 lg:row-start-1 lg:row-span-2">
