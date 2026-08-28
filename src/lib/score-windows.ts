@@ -341,6 +341,10 @@ export function scoreHour(
   if (!hasNumericWindow(env)) status = "unknown";
   else if (hard > 0) status = "nogo";
   else if (soft > 0) status = "caution";
+  else if (env.dewPointSpreadMinF == null && !skipDew) {
+    status = "unknown";
+    reasons.push("Dew spread not stated");
+  }
 
   if (status === "go" && reasons.length === 0) {
     const extra = mits.length ? ` after ${mits.map((id) => mitigationById(id)?.label ?? id).join(", ")}` : "";
