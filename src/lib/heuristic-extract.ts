@@ -31,6 +31,20 @@ function toF(value: number, unit: string | undefined): number {
   return value;
 }
 
+/** Rain is not allowed unless the sheet says it is. Forbid wins. */
+function precipitationAllowedFromText(t: string): boolean {
+  if (
+    /do not apply.{0,80}(rain|wet|precipitation|snow|fog)|not apply.{0,40}(rain|wet|precipitation)|protect.{0,50}from rain|avoid rain|no rain/i.test(
+      t,
+    )
+  ) {
+    return false;
+  }
+  return /(?:may|can)\s+(?:be\s+)?appl(?:y|ied).{0,48}(rain|wet)|appl(?:y|ied).{0,24}(?:in|during|to)\s+(?:the\s+)?(?:rain|wet\s+surface)|(?:rain|wet(?:\s+surfaces?)?|precipitation)\s+(?:is\s+)?(?:allowed|permitted|acceptable)/i.test(
+    t,
+  );
+}
+
 export function heuristicExtract(text: string): FieldCardData {
   const t = text.replace(/\u00a0/g, " ").replace(/\s+\n/g, "\n");
   const lines = t
@@ -92,7 +106,7 @@ export function heuristicExtract(text: string): FieldCardData {
     relativeHumidityMax: null,
     relativeHumidityMin: null,
     dewPointSpreadMinF: null,
-    precipitationAllowed: !/not apply.{0,40}(rain|wet|precipitation)/i.test(t),
+    precipitationAllowed: precipitationAllowedFromText(t),
     windMaxMph: num(t.match(/wind[^\n]{0,30}?(\d+)\s*(?:mph|miles)/i)),
     directSunNotes: "",
     notes: "",
@@ -127,7 +141,6 @@ export function heuristicExtract(text: string): FieldCardData {
 
   const dew = t.match(/(\d+(?:\.\d+)?)\s*°?\s*([CF])?\s*(?:above|over|higher than)\s+(?:the\s+)?dew/i);
   if (dew) env.dewPointSpreadMinF = toF(Number(dew[1]), dew[2]);
-  else if (/dew\s*point/i.test(t)) env.dewPointSpreadMinF = 5;
 
   const storageRange = firstMatch(t, [
     /stor(?:e|age)[^\n]{0,40}?(\d+\s*°?\s*[CF][^\n]{0,20}\d+\s*°?\s*[CF])/i,
@@ -152,9 +165,7 @@ export function heuristicExtract(text: string): FieldCardData {
     id: crypto.randomUUID(),
     extractedAt: new Date().toISOString(),
     confidence: "low",
-    extractionNotes: [
-      "Heuristic extract only — AI was unavailable or returned unusable JSON. Review every field against the PDS.",
-    ],
+    extractionNotes: ["Heuristic extract only. Review every field against the PDS."],
     product: {
       name: name.slice(0, 120),
       manufacturer: manufacturer.slice(0, 120),
