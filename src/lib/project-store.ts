@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
+import { accountRejectsGuestImport } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
 import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, SavedCard } from "@/lib/types";
@@ -317,7 +318,7 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
   })
   .handler(async ({ context, data }): Promise<{ imported: number; skipped: boolean }> => {
     const [existing, existingCustom] = await Promise.all([listRows(context.userId), loadCustom(context.userId)]);
-    if (existing.length > 0 || existingCustom.length > 0) {
+    if (accountRejectsGuestImport(existing.length, existingCustom.length)) {
       return { imported: 0, skipped: true };
     }
     const sql = await getSql();
