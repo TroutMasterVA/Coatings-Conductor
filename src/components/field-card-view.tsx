@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 function join(items: string[] | undefined) {
-  return (items ?? []).filter(Boolean).join(" · ");
+  return (items ?? []).filter(Boolean).join(" \u00b7 ");
 }
 
 function Cell({ label, value }: { label: string; value?: string | null }) {
@@ -40,20 +40,36 @@ function Section({
   );
 }
 
-export function FieldCardView({ card }: { card: FieldCardData }) {
+export function FieldCardView({
+  card,
+  zip,
+  headline,
+  mitigations,
+}: {
+  card: FieldCardData;
+  zip?: string;
+  headline?: string;
+  mitigations?: string[];
+}) {
   const env = card.environmentals;
+  const em = "\u2014";
+  const en = "\u2013";
+  const deg = "\u00b0";
+  const ge = "\u2265";
+  const le = "\u2264";
+  const mid = "\u00b7";
   const envLine = [
     env.ambientTempMinF != null || env.ambientTempMaxF != null
-      ? `Air ${env.ambientTempMinF ?? "\u2014"}\u2013${env.ambientTempMaxF ?? "\u2014"}\u00b0F`
+      ? `Air ${env.ambientTempMinF ?? em}${en}${env.ambientTempMaxF ?? em}${deg}F`
       : null,
     env.substrateTempMinF != null || env.substrateTempMaxF != null
-      ? `Substrate ${env.substrateTempMinF ?? "\u2014"}\u2013${env.substrateTempMaxF ?? "\u2014"}\u00b0F`
+      ? `Substrate ${env.substrateTempMinF ?? em}${en}${env.substrateTempMaxF ?? em}${deg}F`
       : null,
-    env.dewPointSpreadMinF != null ? `Dew spread \u2265 ${env.dewPointSpreadMinF}\u00b0F` : "Dew spread not stated",
-    env.relativeHumidityMax != null ? `RH \u2264 ${env.relativeHumidityMax}%` : null,
-    env.relativeHumidityMin != null ? `RH \u2265 ${env.relativeHumidityMin}%` : null,
+    env.dewPointSpreadMinF != null ? `Dew spread ${ge} ${env.dewPointSpreadMinF}${deg}F` : "Dew spread not stated",
+    env.relativeHumidityMax != null ? `RH ${le} ${env.relativeHumidityMax}%` : null,
+    env.relativeHumidityMin != null ? `RH ${ge} ${env.relativeHumidityMin}%` : null,
     env.precipitationAllowed === false ? "No precipitation" : null,
-    env.windMaxMph != null ? `Wind \u2264 ${env.windMaxMph} mph` : null,
+    env.windMaxMph != null ? `Wind ${le} ${env.windMaxMph} mph` : null,
   ].filter(Boolean);
 
   return (
@@ -67,12 +83,12 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
         <div className="min-w-0 flex-1 p-5 sm:p-7">
           <header className="flex flex-wrap items-start justify-between gap-3 border-b border-rail/80 pb-4">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">Coatings Conductor \u00b7 field card</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">{`Coatings Conductor ${mid} field card`}</p>
               <h2 className="mt-2 font-sans text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-3xl">
                 {card.product.name || "Unnamed product"}
               </h2>
               <p className="mt-1 text-sm text-ink-muted">
-                {[card.product.manufacturer, card.product.productType, card.product.service].filter(Boolean).join(" \u00b7 ") ||
+                {[card.product.manufacturer, card.product.productType, card.product.service].filter(Boolean).join(` ${mid} `) ||
                   "Not stated"}
               </p>
             </div>
@@ -83,6 +99,21 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
               ) : null}
             </div>
           </header>
+
+          <dl className="print-only mt-3 space-y-1 border-b border-rail/80 pb-3 text-xs text-ink">
+            <div>
+              <dt className="inline font-semibold uppercase tracking-[0.14em] text-ink-muted">ZIP </dt>
+              <dd className="inline">{zip?.trim() || "Not stated"}</dd>
+            </div>
+            <div>
+              <dt className="inline font-semibold uppercase tracking-[0.14em] text-ink-muted">Window </dt>
+              <dd className="inline">{headline?.trim() || "Not stated"}</dd>
+            </div>
+            <div>
+              <dt className="inline font-semibold uppercase tracking-[0.14em] text-ink-muted">Mitigations </dt>
+              <dd className="inline">{mitigations?.length ? mitigations.join(", ") : "None selected"}</dd>
+            </div>
+          </dl>
 
           <nav className="no-print mt-4 flex gap-1 overflow-x-auto pb-1" aria-label="Card sections">
             {STEP_RAIL.map((s) => (
@@ -114,7 +145,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
             </Section>
 
             <div id="step-creds" />
-            <Section n="02" title="Qualify \u00b7 credentials">
+            <Section n="02" title={`Qualify ${mid} credentials`}>
               {card.credentials.required.length ? (
                 <ul className="space-y-1 text-sm">
                   {card.credentials.required.map((c) => (
@@ -125,7 +156,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
                   ))}
                 </ul>
               ) : (
-                <p className="text-sm text-ink-muted">None stated in the PDS \u2014 follow the project spec.</p>
+                <p className="text-sm text-ink-muted">{`None stated in the PDS ${em} follow the project spec.`}</p>
               )}
               {card.credentials.notes ? <p className="text-sm text-ink-muted">{card.credentials.notes}</p> : null}
             </Section>
@@ -206,7 +237,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
                         <span className="font-medium">{h.name}</span>
                         <span className="text-xs text-ink-muted">
                           {h.owner}
-                          {h.source === "inferred" ? " \u00b7 inferred" : ""}
+                          {h.source === "inferred" ? ` ${mid} inferred` : ""}
                         </span>
                       </div>
                       <p className="text-ink-muted">{h.criteria}</p>
@@ -257,6 +288,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
 }
 
 export function EmptyCardSkeleton() {
+  const mid = "\u00b7";
   return (
     <article className="overflow-hidden rounded-xl bg-paper text-ink shadow-[0_0_0_1px_rgba(22,24,28,0.08)]">
       <div className="caution-stripe h-1.5 w-full" />
@@ -266,7 +298,7 @@ export function EmptyCardSkeleton() {
           <div className="flex items-start gap-3">
             <img src="/mascot.jpg" alt="" className="size-14 rounded-md object-cover object-top" />
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">Coatings Conductor \u00b7 waiting on PDS</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">{`Coatings Conductor ${mid} waiting on PDS`}</p>
               <h2 className="mt-2 text-2xl font-semibold tracking-tight">Whistle ready. Paste a PDS.</h2>
             </div>
           </div>
