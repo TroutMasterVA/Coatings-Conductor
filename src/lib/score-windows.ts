@@ -7,9 +7,9 @@ import {
   substrateById,
   type Limiter,
   type SiteContext,
-} from "./mitigations";
-import { axes, DEFAULT_CALIBRATION, lerp } from "./learning";
-import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "./types";
+} from "./mitigations.ts";
+import { axes, DEFAULT_CALIBRATION, lerp } from "./learning.ts";
+import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "./types.ts";
 
 export type RawHour = {
   startIso: string;

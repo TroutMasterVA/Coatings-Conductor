@@ -1,7 +1,7 @@
-import type { Limiter } from "./mitigations";
-import type { Calibration, CustomMitigation, FieldOutcome } from "./types";
+import type { Limiter } from "./mitigations.ts";
+import type { Calibration, CustomMitigation, FieldOutcome } from "./types.ts";
 
-export type { Calibration, CustomMitigation, FieldOutcome } from "./types";
+export type { Calibration, CustomMitigation, FieldOutcome } from "./types.ts";
 
 const KEY = "fieldcard.learning.v1";
 

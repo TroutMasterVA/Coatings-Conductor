@@ -1,5 +1,5 @@
-import { mitigationById, substrateById, type SiteContext } from "./mitigations";
-import type { DayWindow, FieldCardData, ForecastBundle } from "./types";
+import { mitigationById, substrateById, type SiteContext } from "./mitigations.ts";
+import type { DayWindow, FieldCardData, ForecastBundle } from "./types.ts";
 
 function wrap(doc: import("jspdf").jsPDF, text: string, maxWidth: number): string[] {
   const t = (text || "\u2014").replace(/\s+/g, " ").trim();
@@ -88,15 +88,23 @@ export async function downloadFieldCard(
   type Row = { n: string; title: string; body: string };
   const env = card.environmentals;
   const envBits = [
-    env.ambientTempMinF != null || env.ambientTempMaxF != null
-      ? `Air ${env.ambientTempMinF ?? "\u2014"}\u2013${env.ambientTempMaxF ?? "\u2014"}\u00b0F`
-      : "",
-    env.substrateTempMinF != null || env.substrateTempMaxF != null
-      ? `Substrate ${env.substrateTempMinF ?? "\u2014"}\u2013${env.substrateTempMaxF ?? "\u2014"}\u00b0F`
-      : "",
-    env.dewPointSpreadMinF != null ? `Dew spread \u2265 ${env.dewPointSpreadMinF}\u00b0F` : "",
+    env.ambientTempMinF != null && env.ambientTempMaxF != null
+      ? `Air ${env.ambientTempMinF}\u2013${env.ambientTempMaxF}\u00b0F`
+      : env.ambientTempMinF != null
+        ? `Air \u2265 ${env.ambientTempMinF}\u00b0F`
+        : env.ambientTempMaxF != null
+          ? `Air \u2264 ${env.ambientTempMaxF}\u00b0F`
+          : "",
+    env.substrateTempMinF != null && env.substrateTempMaxF != null
+      ? `Substrate ${env.substrateTempMinF}\u2013${env.substrateTempMaxF}\u00b0F`
+      : env.substrateTempMinF != null
+        ? `Substrate \u2265 ${env.substrateTempMinF}\u00b0F`
+        : env.substrateTempMaxF != null
+          ? `Substrate \u2264 ${env.substrateTempMaxF}\u00b0F`
+          : "",
+    env.dewPointSpreadMinF != null ? `Dew spread \u2265 ${env.dewPointSpreadMinF}\u00b0F` : "Dew spread not stated",
     env.relativeHumidityMax != null ? `RH \u2264 ${env.relativeHumidityMax}%` : "",
-    env.precipitationAllowed === false ? "No precip" : "",
+    env.precipitationAllowed === false ? "Dry application \u2014 no precip" : "",
     env.windMaxMph != null ? `Wind \u2264 ${env.windMaxMph} mph` : "",
   ]
     .filter(Boolean)
