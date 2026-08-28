@@ -12,9 +12,7 @@ export function buildCardFromPds(text: string): FieldCardData {
   const raw = (text ?? "").trim();
   if (raw.length < 40) throw new Error("Could not read this sheet.");
   if (raw.length > 40000) throw new Error("PDS text exceeds 40,000 characters.");
-  const slice = raw.slice(0, 24000);
+  const slice = raw.slice(0, 40000);
   if (!looksLikeCoatingSheet(slice)) throw new Error("Could not read this sheet.");
-  const card = heuristicExtract(slice);
-  card.extractionNotes = ["Review every field against the current manufacturer revision before use."];
-  return card;
+  return heuristicExtract(slice);
 }

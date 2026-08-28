@@ -14,6 +14,7 @@ import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
 import { buildCardFromPds } from "@/lib/on-device-extract";
 import { loadForecast } from "@/lib/forecast";
+import { rescoreForecast } from "@/lib/score-windows";
 import {
   DEFAULT_CALIBRATION,
   loadLegacyLearning,
@@ -53,7 +54,7 @@ import {
   type ProjectFull,
   type ProjectSummary,
 } from "@/lib/project-store";
-import { rescoreForecast } from "@/lib/score-windows";
+import { loadPdsDraft, savePdsDraft } from "@/lib/pds-draft";
 import { loadZip } from "@/lib/storage";
 import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, ForecastBundle, SavedCard } from "@/lib/types";
 
@@ -99,8 +100,15 @@ function siteFromCard(card: FieldCardData, prev?: SiteContext): SiteContext {
 
 function Home() {
   const { user, isPending } = useCurrentUserState();
-  if (isPending) return <BootShell message="Opening the stand…" />;
-  return <App key={user?.id ?? "guest"} user={user} />;
+  const [guestFallback, setGuestFallback] = useState(false);
+  useEffect(() => {
+    if (!isPending) return;
+    const t = window.setTimeout(() => setGuestFallback(true), 2500);
+    return () => window.clearTimeout(t);
+  }, [isPending]);
+  if (isPending && !guestFallback) return <BootShell message="Opening the stand…" />;
+  const account = user && !user.isDevFallback ? user : null;
+  return <App key={account?.id ?? "guest"} user={account} />;
 }
 
 function App({ user }: { user: AppUser | null }) {
@@ -253,12 +261,62 @@ function App({ user }: { user: AppUser | null }) {
       });
   }, [api, projectId, projectName, zip, calibration, site, card, text, recents, outcomes]);
 
+  const persistNow = useCallback(
+    (next: { card: FieldCardData; text: string; recents: SavedCard[] }) => {
+      if (!projectId || !hydrated.current) return;
+      window.clearTimeout(persistTimer.current);
+      void api
+        .save({
+          id: projectId,
+          name: projectName,
+          zip,
+          calibration,
+          site: siteFromCard(next.card, site),
+          card: next.card,
+          pdsText: next.text,
+          recents: next.recents,
+          outcomes,
+        })
+        .catch((err) => {
+          if (isUnauthorized(err)) {
+            returnToLogin();
+            return;
+          }
+          toast.error(err instanceof Error ? err.message : "Could not save project.");
+        });
+    },
+    [api, projectId, projectName, zip, calibration, site, outcomes],
+  );
+
   useEffect(() => {
     if (!projectId || !hydrated.current || mode !== "job") return;
     window.clearTimeout(persistTimer.current);
     persistTimer.current = window.setTimeout(() => persist(), 600);
     return () => window.clearTimeout(persistTimer.current);
   }, [projectId, projectName, zip, calibration, site, card, text, recents, outcomes, mode, persist]);
+
+  useEffect(() => {
+    if (mode !== "job" || !hydrated.current) return;
+    const draft = loadPdsDraft();
+    if (!draft?.text || draft.text.trim().length < 80) return;
+    if (Date.now() - draft.at > 5 * 60_000) return;
+    if (draft.projectId && projectId && draft.projectId !== projectId) return;
+    if (!draft.projectId && text.length > 80 && card?.confidence === "high") return;
+    if (text === draft.text && card?.product.name) return;
+    try {
+      const next = draft.card ?? buildCardFromPds(draft.text);
+      setText(draft.text);
+      applyCard(next);
+      remember(next, zip);
+      if (next.confidence === "high") {
+        toast.success("High extract — stated fields only.");
+      }
+    } catch {
+      /* keep project */
+    }
+    // Once per job entry after a file-picker remount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, projectId]);
 
   useEffect(() => {
     if (!card) return;
@@ -288,13 +346,24 @@ function App({ user }: { user: AppUser | null }) {
     setSite((prev) => siteFromCard(next, prev));
   }
 
-  function handleExtract() {
+  function handleExtract(raw?: string) {
+    const source = (typeof raw === "string" && raw.trim() ? raw : text).trim();
+    savePdsDraft({ projectId, text: source });
     setExtracting(true);
     try {
-      const next = buildCardFromPds(text);
+      if (source !== text) setText(source);
+      const next = buildCardFromPds(source);
       applyCard(next);
-      remember(next, zip);
-      toast.success("Review every field.");
+      const entry: SavedCard = { id: next.id, savedAt: new Date().toISOString(), card: next, zip };
+      const nextRecents = [entry, ...recents.filter((r) => r.card.product.name !== next.product.name)].slice(0, 8);
+      setRecents(nextRecents);
+      savePdsDraft({ projectId, text: source, card: next });
+      persistNow({ card: next, text: source, recents: nextRecents });
+      if (next.confidence === "high") {
+        toast.success("High extract — stated fields only. Dew, rain, and service limits were not invented.");
+      } else {
+        toast("Medium extract. Blank fields were not on this sheet — confirm against the current PDS.");
+      }
       if (zip.length === 5) void handleForecast(next, zip);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Extract failed");
@@ -543,13 +612,8 @@ function App({ user }: { user: AppUser | null }) {
             <PdsIntake
               text={text}
               onText={setText}
-              onExtract={() => void handleExtract()}
-              onSample={(next, raw) => {
-                setText(raw);
-                applyCard(next);
-                remember(next, zip);
-                if (zip.length === 5) void handleForecast(next, zip);
-              }}
+              onExtract={(raw) => void handleExtract(raw)}
+              projectId={projectId}
               loading={extracting}
               recents={recents}
               onOpenRecent={(next) => applyCard(next)}
@@ -676,10 +740,18 @@ function workspaceApi(signedIn: boolean) {
       return wrap(signedIn ? saveProject({ data }) : Promise.resolve(guestSaveProject(data)));
     },
     archive(id: string, archived: boolean) {
-      return wrap(signedIn ? archiveProject({ data: { id, archived } }) : Promise.resolve(guestArchiveProject(id, archived)));
+      return wrap(
+        signedIn
+          ? archiveProject({ data: { id, archived } }).then(() => undefined)
+          : Promise.resolve(guestArchiveProject(id, archived)).then(() => undefined),
+      );
     },
     remove(id: string) {
-      return wrap(signedIn ? deleteProject({ data: id }) : Promise.resolve(guestDeleteProject(id)));
+      return wrap(
+        signedIn
+          ? deleteProject({ data: id }).then(() => undefined)
+          : Promise.resolve(guestDeleteProject(id)).then(() => undefined),
+      );
     },
     saveCustom(data: CustomMitigationInput) {
       return wrap(signedIn ? saveCustomMitigation({ data }) : Promise.resolve(guestSaveCustom(data)));

@@ -59,16 +59,24 @@ export function FieldCardView({
   const le = "\u2264";
   const mid = "\u00b7";
   const envLine = [
-    env.ambientTempMinF != null || env.ambientTempMaxF != null
-      ? `Air ${env.ambientTempMinF ?? em}${en}${env.ambientTempMaxF ?? em}${deg}F`
-      : null,
-    env.substrateTempMinF != null || env.substrateTempMaxF != null
-      ? `Substrate ${env.substrateTempMinF ?? em}${en}${env.substrateTempMaxF ?? em}${deg}F`
-      : null,
+    env.ambientTempMinF != null && env.ambientTempMaxF != null
+      ? `Air ${env.ambientTempMinF}${en}${env.ambientTempMaxF}${deg}F`
+      : env.ambientTempMinF != null
+        ? `Air ${ge} ${env.ambientTempMinF}${deg}F`
+        : env.ambientTempMaxF != null
+          ? `Air ${le} ${env.ambientTempMaxF}${deg}F`
+          : null,
+    env.substrateTempMinF != null && env.substrateTempMaxF != null
+      ? `Substrate ${env.substrateTempMinF}${en}${env.substrateTempMaxF}${deg}F`
+      : env.substrateTempMinF != null
+        ? `Substrate ${ge} ${env.substrateTempMinF}${deg}F`
+        : env.substrateTempMaxF != null
+          ? `Substrate ${le} ${env.substrateTempMaxF}${deg}F`
+          : null,
     env.dewPointSpreadMinF != null ? `Dew spread ${ge} ${env.dewPointSpreadMinF}${deg}F` : "Dew spread not stated",
     env.relativeHumidityMax != null ? `RH ${le} ${env.relativeHumidityMax}%` : null,
     env.relativeHumidityMin != null ? `RH ${ge} ${env.relativeHumidityMin}%` : null,
-    env.precipitationAllowed === false ? "No precipitation" : null,
+    env.precipitationAllowed === false ? "Dry application — no precipitation" : env.precipitationAllowed ? "Wet application allowed" : null,
     env.windMaxMph != null ? `Wind ${le} ${env.windMaxMph} mph` : null,
   ].filter(Boolean);
 
@@ -93,7 +101,7 @@ export function FieldCardView({
               </p>
             </div>
             <div className="flex flex-col items-end gap-1.5">
-              <Badge variant="paper">{card.confidence} extract</Badge>
+              <Badge variant={card.confidence === "high" ? "go" : "caution"}>{card.confidence} extract</Badge>
               {card.product.mixRatio ? (
                 <span className="font-mono text-xs text-ink-muted">{card.product.mixRatio}</span>
               ) : null}
@@ -190,6 +198,15 @@ export function FieldCardView({
                 <p className="text-sm text-ink-muted">Not stated</p>
               )}
               {env.notes ? <p className="text-sm text-ink-muted">{env.notes}</p> : null}
+              {env.additional.length
+                ? env.additional
+                    .filter((n) => n !== env.notes)
+                    .map((n) => (
+                      <p key={n} className="text-sm text-ink-muted">
+                        {n}
+                      </p>
+                    ))
+                : null}
               {env.directSunNotes ? <p className="text-sm text-ink-muted">{env.directSunNotes}</p> : null}
             </Section>
 
@@ -279,7 +296,14 @@ export function FieldCardView({
           </div>
 
           {card.extractionNotes.length ? (
-            <p className={cn("mt-4 text-xs leading-relaxed text-ink-muted")}>{card.extractionNotes.join(" ")}</p>
+            <p
+              className={cn(
+                "mt-4 text-xs leading-relaxed",
+                card.confidence === "high" ? "text-ink-muted" : "rounded-md bg-paper-edge px-3 py-2 text-ink",
+              )}
+            >
+              {card.extractionNotes.join(" ")}
+            </p>
           ) : null}
         </div>
       </div>
