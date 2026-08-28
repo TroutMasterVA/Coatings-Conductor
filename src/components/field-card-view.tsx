@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 function join(items: string[] | undefined) {
-  return (items ?? []).filter(Boolean).join(" · ");
+  return (items ?? []).filter(Boolean).join(" \u00b7 ");
 }
 
 function Cell({ label, value }: { label: string; value?: string | null }) {
@@ -40,7 +40,17 @@ function Section({
   );
 }
 
-export function FieldCardView({ card }: { card: FieldCardData }) {
+export function FieldCardView({
+  card,
+  zip,
+  headline,
+  mitigations,
+}: {
+  card: FieldCardData;
+  zip?: string;
+  headline?: string;
+  mitigations?: string[];
+}) {
   const env = card.environmentals;
   const envLine = [
     env.ambientTempMinF != null || env.ambientTempMaxF != null
@@ -83,6 +93,21 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
               ) : null}
             </div>
           </header>
+
+          <dl className="print-only mt-3 space-y-1 border-b border-rail/80 pb-3 text-xs text-ink">
+            <div>
+              <dt className="inline font-semibold uppercase tracking-[0.14em] text-ink-muted">ZIP </dt>
+              <dd className="inline">{zip?.trim() || "Not stated"}</dd>
+            </div>
+            <div>
+              <dt className="inline font-semibold uppercase tracking-[0.14em] text-ink-muted">Window </dt>
+              <dd className="inline">{headline?.trim() || "Not stated"}</dd>
+            </div>
+            <div>
+              <dt className="inline font-semibold uppercase tracking-[0.14em] text-ink-muted">Mitigations </dt>
+              <dd className="inline">{mitigations?.length ? mitigations.join(", ") : "None selected"}</dd>
+            </div>
+          </dl>
 
           <nav className="no-print mt-4 flex gap-1 overflow-x-auto pb-1" aria-label="Card sections">
             {STEP_RAIL.map((s) => (
