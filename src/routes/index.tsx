@@ -144,6 +144,9 @@ function App({ user }: { user: AppUser | null }) {
           const lifted = await migrateGuestToAccount();
           if (cancelled) return;
           if (lifted === "imported") toast.success("Moved this device’s jobs into your account.");
+          if (lifted === "skipped") {
+            toast("This account already has jobs, so work from this browser was not added.");
+          }
         }
         const ws = await api.load();
         if (cancelled) return;

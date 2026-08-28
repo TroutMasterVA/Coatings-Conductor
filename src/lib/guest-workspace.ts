@@ -1,3 +1,4 @@
+import { guestMigrateResult } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import {
   defaultSite,
@@ -16,6 +17,10 @@ type GuestStore = {
   projects: ProjectFull[];
   custom: CustomMitigation[];
 };
+
+type GuestImporter = (args: {
+  data: { projects: ProjectFull[]; custom: CustomMitigation[]; lastProjectId?: string | null };
+}) => Promise<{ imported: number; skipped: boolean }>;
 
 function empty(): GuestStore {
   return { lastProjectId: null, projects: [], custom: [] };
@@ -76,19 +81,22 @@ export function guestHasData(): boolean {
 }
 
 /** First sign-in with an empty account lifts this device’s jobs. Account jobs win if both exist. */
-export async function migrateGuestToAccount(): Promise<"imported" | "skipped" | "empty"> {
+export async function migrateGuestToAccount(
+  importer: GuestImporter = importGuestWorkspace,
+): Promise<"imported" | "skipped" | "empty"> {
   const dump = read();
-  if (dump.projects.length === 0 && dump.custom.length === 0) return "empty";
-  const result = await importGuestWorkspace({
+  const guestHasData = dump.projects.length > 0 || dump.custom.length > 0;
+  if (!guestHasData) return "empty";
+  const result = await importer({
     data: {
       projects: dump.projects,
       custom: dump.custom,
       lastProjectId: dump.lastProjectId,
     },
   });
-  if (result.skipped) return "skipped";
-  write(empty());
-  return "imported";
+  const decided = guestMigrateResult({ guestHasData: true, skipped: result.skipped });
+  if (decided.clearGuest) write(empty());
+  return decided.outcome;
 }
 
 export function guestCreateProject(name: string, zip: string, seed?: Partial<ProjectFull>): ProjectFull {
