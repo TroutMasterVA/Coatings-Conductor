@@ -17,6 +17,10 @@ type GuestStore = {
   custom: CustomMitigation[];
 };
 
+type GuestImporter = (args: {
+  data: { projects: ProjectFull[]; custom: CustomMitigation[]; lastProjectId?: string | null };
+}) => Promise<{ imported: number; skipped: boolean }>;
+
 function empty(): GuestStore {
   return { lastProjectId: null, projects: [], custom: [] };
 }
@@ -76,10 +80,12 @@ export function guestHasData(): boolean {
 }
 
 /** First sign-in with an empty account lifts this device’s jobs. Account jobs win if both exist. */
-export async function migrateGuestToAccount(): Promise<"imported" | "skipped" | "empty"> {
+export async function migrateGuestToAccount(
+  importer: GuestImporter = importGuestWorkspace,
+): Promise<"imported" | "skipped" | "empty"> {
   const dump = read();
   if (dump.projects.length === 0 && dump.custom.length === 0) return "empty";
-  const result = await importGuestWorkspace({
+  const result = await importer({
     data: {
       projects: dump.projects,
       custom: dump.custom,
