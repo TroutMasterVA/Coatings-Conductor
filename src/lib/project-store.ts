@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
-import { accountRejectsGuestImport } from "@/lib/guest-import";
+import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
 import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, SavedCard } from "@/lib/types";
@@ -193,7 +193,7 @@ export const openProject = createServerFn({ method: "POST" })
                 recents_json, outcomes_json, last_opened_at, updated_at
     `;
     const row = rows[0];
-    if (!row) throw new Error("Project not found.");
+    if (!row) throw new Error(NOT_YOUR_JOB_MESSAGE);
     await sql`
       insert into user_prefs (user_id, last_project_id) values (${context.userId}, ${id})
       on conflict (user_id) do update set last_project_id = ${id}
@@ -224,7 +224,7 @@ export const saveProject = createServerFn({ method: "POST" })
       from projects where id = ${data.id} and user_id = ${context.userId}
     `;
     const row = existing[0];
-    if (!row) throw new Error("Project not found.");
+    if (!row) throw new Error(NOT_YOUR_JOB_MESSAGE);
     const name = data.name?.trim() || row.name;
     const zip = data.zip != null ? data.zip.replace(/\D/g, "").slice(0, 5) : row.zip;
     const cal = data.calibration ?? parseJson(row.calibration_json, DEFAULT_CALIBRATION);
@@ -262,7 +262,7 @@ export const archiveProject = createServerFn({ method: "POST" })
       where id = ${data.id} and user_id = ${context.userId}
       returning id
     `;
-    if (!rows[0]) throw new Error("Project not found.");
+    if (!rows[0]) throw new Error(NOT_YOUR_JOB_MESSAGE);
     if (data.archived) {
       await sql`
         update user_prefs set last_project_id = null
@@ -280,7 +280,7 @@ export const deleteProject = createServerFn({ method: "POST" })
     const rows = await sql<{ id: string }>`
       delete from projects where id = ${id} and user_id = ${context.userId} returning id
     `;
-    if (!rows[0]) throw new Error("Project not found.");
+    if (!rows[0]) throw new Error(NOT_YOUR_JOB_MESSAGE);
     await sql`
       update user_prefs set last_project_id = null
       where user_id = ${context.userId} and last_project_id = ${id}
@@ -321,14 +321,19 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
     if (accountRejectsGuestImport(existing.length, existingCustom.length)) {
       return { imported: 0, skipped: true };
     }
+    const minted = remapGuestImportInput({
+      projects: data.projects,
+      custom: data.custom,
+      lastProjectId: data.lastProjectId,
+    });
     const sql = await getSql();
     const now = new Date().toISOString();
     let imported = 0;
-    for (const p of data.projects) {
+    for (const p of minted.projects) {
       const name = String(p.name ?? "").trim();
       const zip = String(p.zip ?? "").replace(/\D/g, "").slice(0, 5);
       if (!name || zip.length !== 5) continue;
-      const id = typeof p.id === "string" && p.id.length > 0 ? p.id : crypto.randomUUID();
+      const id = p.id;
       const cal = p.calibration ?? DEFAULT_CALIBRATION;
       const site = p.site ?? defaultSite();
       const card = p.card ?? null;
@@ -351,7 +356,7 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
       `;
       imported += 1;
     }
-    for (const c of data.custom) {
+    for (const c of minted.custom) {
       if (!c?.id || !c?.label) continue;
       await sql`
         insert into custom_mitigations (id, user_id, label, payload_json, created_at, updated_at)
@@ -359,10 +364,7 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
         on conflict (id) do nothing
       `;
     }
-    const last =
-      (data.lastProjectId && data.projects.some((p) => p.id === data.lastProjectId) ? data.lastProjectId : null) ??
-      data.projects[0]?.id ??
-      null;
+    const last = minted.lastProjectId ?? minted.projects[0]?.id ?? null;
     if (last) {
       await sql`
         insert into user_prefs (user_id, last_project_id) values (${context.userId}, ${last})

@@ -1,8 +1,36 @@
 import { createServerFn } from "@tanstack/react-start";
 import { bundleDays, scoreHour, type RawHour } from "./score-windows";
+import {
+  FORECAST_RATE_LIMIT_MESSAGE,
+  forecastCacheFresh,
+  takeForecastSlot,
+} from "./forecast-cap";
 import type { Environmentals, ForecastBundle } from "./types";
 
 const UA = "CoatingsConductor/1.0 (field-qc reference; nws-weather-windows)";
+
+type ForecastMem = {
+  stamps: Map<string, number[]>;
+  cache: Map<string, { at: number; forecast: ForecastBundle }>;
+};
+
+const globalForecast = globalThis as typeof globalThis & { __ccForecastCap__?: ForecastMem };
+function forecastStore(): ForecastMem {
+  globalForecast.__ccForecastCap__ ??= { stamps: new Map(), cache: new Map() };
+  return globalForecast.__ccForecastCap__;
+}
+
+async function forecastClientKey(): Promise<string> {
+  try {
+    const { getRequest } = await import("@tanstack/react-start/server");
+    const req = getRequest();
+    const fwd = req?.headers.get("x-forwarded-for");
+    if (fwd) return fwd.split(",")[0]!.trim() || "local";
+    return req?.headers.get("x-real-ip") ?? "local";
+  } catch {
+    return "local";
+  }
+}
 
 function cToF(c: number) {
   return Math.round((c * 9) / 5 + 32);
@@ -152,6 +180,28 @@ export const loadForecast = createServerFn({ method: "POST" })
   })
   .handler(async ({ data }): Promise<{ ok: true; forecast: ForecastBundle } | { ok: false; error: string }> => {
     try {
+      const { assertSameSiteRequest } = await import("@/lib/auth/isolation.server");
+      assertSameSiteRequest();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Forbidden";
+      return { ok: false, error: message };
+    }
+
+    const now = Date.now();
+    const store = forecastStore();
+    const cached = store.cache.get(data.zip);
+    if (cached && forecastCacheFresh(cached.at, now)) {
+      return { ok: true, forecast: cached.forecast };
+    }
+
+    const capKey = `${await forecastClientKey()}:${data.zip}`;
+    const slot = takeForecastSlot(now, store.stamps.get(capKey) ?? []);
+    store.stamps.set(capKey, slot.stamps);
+    if (!slot.ok) {
+      return { ok: false, error: FORECAST_RATE_LIMIT_MESSAGE };
+    }
+
+    try {
       const geo = await geocodeZip(data.zip);
       let pack = await nwsHourly(geo.lat, geo.lon).catch(() => null);
       if (!pack || pack.hours.length < 12) {
@@ -173,6 +223,7 @@ export const loadForecast = createServerFn({ method: "POST" })
         },
         data.environmentals,
       );
+      store.cache.set(data.zip, { at: now, forecast });
       return { ok: true, forecast };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : "Forecast failed" };
