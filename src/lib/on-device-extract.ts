@@ -1,5 +1,5 @@
-import { heuristicExtract } from "./heuristic-extract";
-import type { FieldCardData } from "./types";
+import { heuristicExtract } from "./heuristic-extract.ts";
+import type { FieldCardData } from "./types.ts";
 
 function looksLikeCoatingSheet(t: string): boolean {
   return /(product data|pds\b|dft|wft|\bmils?\b|pot\s*life|recoat|voc\b|sspc|nace|ampp|dew\s*point|relative humidity|mix(?:ing)?\s+ratio|epoxy|polyurethane|polyurea|zinc|coating|primer|blast|substrate|ambient|sealant|adhesive)/i.test(
