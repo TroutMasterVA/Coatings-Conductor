@@ -139,7 +139,9 @@ export function heuristicExtract(text: string): FieldCardData {
   const rh = t.match(/relative humidity[^\n]{0,40}?(\d+)\s*%/i);
   if (rh) env.relativeHumidityMax = Number(rh[1]);
 
-  const dew = t.match(/(\d+(?:\.\d+)?)\s*°?\s*([CF])?\s*(?:above|over|higher than)\s+(?:the\s+)?dew/i);
+  const dew = t.match(
+    /(\d+(?:\.\d+)?)\s*°?\s*([CF])?(?:\s*\([^)]{0,16}\))?\s*(?:above|over|higher than)\s+(?:the\s+)?dew/i,
+  );
   if (dew) env.dewPointSpreadMinF = toF(Number(dew[1]), dew[2]);
 
   const storageRange = firstMatch(t, [
