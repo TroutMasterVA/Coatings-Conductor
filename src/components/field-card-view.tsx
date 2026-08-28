@@ -9,11 +9,13 @@ function join(items: string[] | undefined) {
 }
 
 function Cell({ label, value }: { label: string; value?: string | null }) {
-  if (!value) return null;
+  const stated = Boolean(value && value.trim());
   return (
     <div className="min-w-0">
       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">{label}</div>
-      <div className="mt-0.5 text-sm leading-snug text-ink">{value}</div>
+      <div className={cn("mt-0.5 text-sm leading-snug", stated ? "text-ink" : "text-ink-muted")}>
+        {stated ? value : "Not stated"}
+      </div>
     </div>
   );
 }
@@ -42,16 +44,16 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
   const env = card.environmentals;
   const envLine = [
     env.ambientTempMinF != null || env.ambientTempMaxF != null
-      ? `Air ${env.ambientTempMinF ?? "—"}–${env.ambientTempMaxF ?? "—"}°F`
+      ? `Air ${env.ambientTempMinF ?? "\u2014"}\u2013${env.ambientTempMaxF ?? "\u2014"}\u00b0F`
       : null,
     env.substrateTempMinF != null || env.substrateTempMaxF != null
-      ? `Substrate ${env.substrateTempMinF ?? "—"}–${env.substrateTempMaxF ?? "—"}°F`
+      ? `Substrate ${env.substrateTempMinF ?? "\u2014"}\u2013${env.substrateTempMaxF ?? "\u2014"}\u00b0F`
       : null,
-    env.dewPointSpreadMinF != null ? `Dew spread ≥ ${env.dewPointSpreadMinF}°F` : null,
-    env.relativeHumidityMax != null ? `RH ≤ ${env.relativeHumidityMax}%` : null,
-    env.relativeHumidityMin != null ? `RH ≥ ${env.relativeHumidityMin}%` : null,
+    env.dewPointSpreadMinF != null ? `Dew spread \u2265 ${env.dewPointSpreadMinF}\u00b0F` : "Dew spread not stated",
+    env.relativeHumidityMax != null ? `RH \u2264 ${env.relativeHumidityMax}%` : null,
+    env.relativeHumidityMin != null ? `RH \u2265 ${env.relativeHumidityMin}%` : null,
     env.precipitationAllowed === false ? "No precipitation" : null,
-    env.windMaxMph != null ? `Wind ≤ ${env.windMaxMph} mph` : null,
+    env.windMaxMph != null ? `Wind \u2264 ${env.windMaxMph} mph` : null,
   ].filter(Boolean);
 
   return (
@@ -65,13 +67,13 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
         <div className="min-w-0 flex-1 p-5 sm:p-7">
           <header className="flex flex-wrap items-start justify-between gap-3 border-b border-rail/80 pb-4">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">Coatings Conductor · field card</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">Coatings Conductor \u00b7 field card</p>
               <h2 className="mt-2 font-sans text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-3xl">
                 {card.product.name || "Unnamed product"}
               </h2>
               <p className="mt-1 text-sm text-ink-muted">
-                {[card.product.manufacturer, card.product.productType, card.product.service].filter(Boolean).join(" · ") ||
-                  "Manufacturer not stated"}
+                {[card.product.manufacturer, card.product.productType, card.product.service].filter(Boolean).join(" \u00b7 ") ||
+                  "Not stated"}
               </p>
             </div>
             <div className="flex flex-col items-end gap-1.5">
@@ -112,7 +114,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
             </Section>
 
             <div id="step-creds" />
-            <Section n="02" title="Qualify · credentials">
+            <Section n="02" title="Qualify \u00b7 credentials">
               {card.credentials.required.length ? (
                 <ul className="space-y-1 text-sm">
                   {card.credentials.required.map((c) => (
@@ -123,7 +125,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
                   ))}
                 </ul>
               ) : (
-                <p className="text-sm text-ink-muted">None stated in the PDS — follow the project spec.</p>
+                <p className="text-sm text-ink-muted">None stated in the PDS \u2014 follow the project spec.</p>
               )}
               {card.credentials.notes ? <p className="text-sm text-ink-muted">{card.credentials.notes}</p> : null}
             </Section>
@@ -154,7 +156,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-ink-muted">No numeric application window found.</p>
+                <p className="text-sm text-ink-muted">Not stated</p>
               )}
               {env.notes ? <p className="text-sm text-ink-muted">{env.notes}</p> : null}
               {env.directSunNotes ? <p className="text-sm text-ink-muted">{env.directSunNotes}</p> : null}
@@ -204,7 +206,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
                         <span className="font-medium">{h.name}</span>
                         <span className="text-xs text-ink-muted">
                           {h.owner}
-                          {h.source === "inferred" ? " · inferred" : ""}
+                          {h.source === "inferred" ? " \u00b7 inferred" : ""}
                         </span>
                       </div>
                       <p className="text-ink-muted">{h.criteria}</p>
@@ -264,7 +266,7 @@ export function EmptyCardSkeleton() {
           <div className="flex items-start gap-3">
             <img src="/mascot.jpg" alt="" className="size-14 rounded-md object-cover object-top" />
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">Coatings Conductor · waiting on PDS</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">Coatings Conductor \u00b7 waiting on PDS</p>
               <h2 className="mt-2 text-2xl font-semibold tracking-tight">Whistle ready. Paste a PDS.</h2>
             </div>
           </div>
