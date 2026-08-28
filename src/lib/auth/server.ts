@@ -31,6 +31,7 @@ import { Pool } from "pg";
 import { ensureDbReady, getPglite } from "../db";
 import { emailAndPasswordEnabled } from "./email-password";
 import { GATE_PROVIDER_ID, gateIdentitySessions } from "./gate-session.server";
+import { loginLockout } from "./login-lockout.server";
 import { pgliteDialect } from "./pglite-dialect";
 import { PREVIEW_ALLOWED_HOSTS } from "./preview";
 
@@ -130,7 +131,7 @@ export const auth = betterAuth({
   trustedOrigins,
 
   // No broker OAuth. Keep account linking only for the Grok Build preview gate
-  // (x-grok-identity), not federated Google/X. Rate-limit / lockout is #11.
+  // (x-grok-identity), not federated Google/X.
   account: {
     encryptOAuthTokens: true,
     accountLinking: {
@@ -169,6 +170,7 @@ export const auth = betterAuth({
 
   plugins: [
     gateIdentitySessions(),
+    loginLockout(),
 
     // Accept `Authorization: Bearer <session-token>` as an alternative to the
     // cookie. Needed for the LIVE PREVIEW: the app runs in an embedded iframe

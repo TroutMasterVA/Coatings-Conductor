@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { authClient, authEnabled } from "@/lib/auth/client";
+import { loginCardMessage } from "@/lib/auth/login-lockout";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { BootShell } from "@/components/boot-shell";
 import { Button } from "@/components/ui/button";
@@ -42,10 +43,10 @@ function Login() {
           password,
           name: mail.split("@")[0] || "Conductor",
         });
-        if (err) throw new Error(err.message ?? "Could not create the account.");
+        if (err) throw new Error(loginCardMessage(err, "Could not create the account."));
       } else {
         const { error: err } = await authClient.signIn.email({ email: mail, password });
-        if (err) throw new Error(err.message ?? "Sign-in failed.");
+        if (err) throw new Error(loginCardMessage(err, "Sign-in failed."));
       }
       await authClient.getSession();
       window.location.href = "/";
