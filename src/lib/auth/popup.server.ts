@@ -1,9 +1,9 @@
 /**
  * Live-preview popup leftover — server-only (NEVER import from the client).
  *
- * Email/password is the only sign-in. OAuth to the Grok broker is gone, so this
- * handler never starts genericOAuth / signInWithOAuth2. A leftover `?done=1`
- * completion page can still close a stale popup; `?providerId=` is refused.
+ * Email/password is the only sign-in. This handler never starts an OAuth
+ * round-trip. A leftover `?done=1` completion page can still close a stale
+ * popup; `?providerId=` is refused.
  *
  * Wired automatically by the Vite `authPopupPlugin` in `vite.config.ts` during
  * `npm run dev`. Do NOT create `src/routes/auth/popup.tsx`.
