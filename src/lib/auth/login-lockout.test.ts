@@ -7,6 +7,7 @@ import {
   RATE_LIMITED,
   clearLoginFailures,
   evaluateLock,
+  loginCardMessage,
   normalizeLoginEmail,
   recordLoginFailure,
   takeLoginRateSlot,
@@ -60,5 +61,31 @@ describe("account lock after repeated failures", () => {
     state = clearLoginFailures();
     assert.equal(evaluateLock(2, state), "ok");
     assert.equal(state.failures.length, 0);
+  });
+});
+
+describe("login card red line", () => {
+  it("maps RATE_LIMITED by code, status, or message", () => {
+    assert.equal(loginCardMessage({ code: "RATE_LIMITED" }), RATE_LIMITED.message);
+    assert.equal(loginCardMessage({ status: 429, message: "Too many requests" }), RATE_LIMITED.message);
+    assert.equal(loginCardMessage({ code: "TOO_MANY_REQUESTS" }), RATE_LIMITED.message);
+    assert.equal(loginCardMessage({ message: RATE_LIMITED.message }), RATE_LIMITED.message);
+  });
+
+  it("maps ACCOUNT_LOCKED by code or message, not every 403", () => {
+    assert.equal(loginCardMessage({ code: "ACCOUNT_LOCKED" }), ACCOUNT_LOCKED.message);
+    assert.equal(
+      loginCardMessage({ message: ACCOUNT_LOCKED.message, status: 403 }),
+      ACCOUNT_LOCKED.message,
+    );
+    assert.equal(
+      loginCardMessage({ status: 403, code: "FORBIDDEN", message: "Invalid origin" }),
+      "Invalid origin",
+    );
+  });
+
+  it("keeps ordinary sign-in failure on that same line", () => {
+    assert.equal(loginCardMessage({ message: "Invalid email or password" }), "Invalid email or password");
+    assert.equal(loginCardMessage(null, "Sign-in failed."), "Sign-in failed.");
   });
 });

@@ -58,3 +58,33 @@ export function recordLoginFailure(
 export function clearLoginFailures(): EmailLockState {
   return { failures: [], lockUntil: null };
 }
+
+/** Shape Better Auth's client `{ error }` actually gives us. */
+export type LoginCardError = {
+  message?: string | null;
+  code?: string | null;
+  status?: number | string | null;
+};
+
+/** Copy for the existing login-card nogo line. Do not invent a new screen. */
+export function loginCardMessage(
+  err: LoginCardError | null | undefined,
+  fallback = "Sign-in failed.",
+): string {
+  if (!err) return fallback;
+  const code = String(err.code ?? "");
+  const status = err.status;
+  const message = err.message ?? "";
+  if (
+    code === RATE_LIMITED.code ||
+    status === RATE_LIMITED.status ||
+    code === "TOO_MANY_REQUESTS" ||
+    message === RATE_LIMITED.message
+  ) {
+    return RATE_LIMITED.message;
+  }
+  if (code === ACCOUNT_LOCKED.code || message === ACCOUNT_LOCKED.message) {
+    return ACCOUNT_LOCKED.message;
+  }
+  return message || fallback;
+}
