@@ -1,3 +1,4 @@
+import { guestMigrateResult } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import {
   defaultSite,
@@ -84,7 +85,8 @@ export async function migrateGuestToAccount(
   importer: GuestImporter = importGuestWorkspace,
 ): Promise<"imported" | "skipped" | "empty"> {
   const dump = read();
-  if (dump.projects.length === 0 && dump.custom.length === 0) return "empty";
+  const guestHasData = dump.projects.length > 0 || dump.custom.length > 0;
+  if (!guestHasData) return "empty";
   const result = await importer({
     data: {
       projects: dump.projects,
@@ -92,9 +94,9 @@ export async function migrateGuestToAccount(
       lastProjectId: dump.lastProjectId,
     },
   });
-  if (result.skipped) return "skipped";
-  write(empty());
-  return "imported";
+  const decided = guestMigrateResult({ guestHasData: true, skipped: result.skipped });
+  if (decided.clearGuest) write(empty());
+  return decided.outcome;
 }
 
 export function guestCreateProject(name: string, zip: string, seed?: Partial<ProjectFull>): ProjectFull {
