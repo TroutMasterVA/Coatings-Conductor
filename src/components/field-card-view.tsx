@@ -9,11 +9,13 @@ function join(items: string[] | undefined) {
 }
 
 function Cell({ label, value }: { label: string; value?: string | null }) {
-  if (!value) return null;
+  const stated = Boolean(value && value.trim());
   return (
     <div className="min-w-0">
       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">{label}</div>
-      <div className="mt-0.5 text-sm leading-snug text-ink">{value}</div>
+      <div className={cn("mt-0.5 text-sm leading-snug", stated ? "text-ink" : "text-ink-muted")}>
+        {stated ? value : "Not stated"}
+      </div>
     </div>
   );
 }
@@ -71,7 +73,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
               </h2>
               <p className="mt-1 text-sm text-ink-muted">
                 {[card.product.manufacturer, card.product.productType, card.product.service].filter(Boolean).join(" · ") ||
-                  "Manufacturer not stated"}
+                  "Not stated"}
               </p>
             </div>
             <div className="flex flex-col items-end gap-1.5">
@@ -154,7 +156,7 @@ export function FieldCardView({ card }: { card: FieldCardData }) {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-ink-muted">No numeric application window found.</p>
+                <p className="text-sm text-ink-muted">Not stated</p>
               )}
               {env.notes ? <p className="text-sm text-ink-muted">{env.notes}</p> : null}
               {env.directSunNotes ? <p className="text-sm text-ink-muted">{env.directSunNotes}</p> : null}

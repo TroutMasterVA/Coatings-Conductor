@@ -35,13 +35,13 @@ export function PdsIntake({
       try {
         const extracted = await extractPdfText(file);
         if (extracted.replace(/\s/g, "").length < 80) {
-          setFileNote("This PDF has little extractable text (likely scanned). Paste the PDS text instead.");
+          setFileNote("Could not read this sheet.");
           return;
         }
         onText(extracted);
         setFileNote(`Loaded ${file.name} (${extracted.length.toLocaleString()} characters).`);
       } catch {
-        setFileNote("Could not read that PDF. Paste the text instead.");
+        setFileNote("Could not read this sheet.");
       }
       return;
     }
