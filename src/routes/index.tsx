@@ -11,7 +11,7 @@ import { ProjectHome } from "@/components/project-home";
 import { WeatherPanel } from "@/components/weather-panel";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
-import { extractPds } from "@/lib/extract-pds";
+import { buildCardFromPds } from "@/lib/on-device-extract";
 import { loadForecast } from "@/lib/forecast";
 import {
   DEFAULT_CALIBRATION,
@@ -266,18 +266,14 @@ function App({ user }: { user: AppUser | null }) {
     setSite((prev) => siteFromCard(next, prev));
   }
 
-  async function handleExtract() {
+  function handleExtract() {
     setExtracting(true);
     try {
-      const result = await extractPds({ data: { text } });
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
-      }
-      applyCard(result.card);
-      remember(result.card, zip);
-      toast.success(result.usedAi ? "Card on the stand." : "Card built with a fallback parse — review every field.");
-      if (zip.length === 5) void handleForecast(result.card, zip);
+      const next = buildCardFromPds(text);
+      applyCard(next);
+      remember(next, zip);
+      toast.success("Review every field.");
+      if (zip.length === 5) void handleForecast(next, zip);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Extract failed");
     } finally {
