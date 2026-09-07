@@ -5,14 +5,13 @@ import { buildLaymanBullets } from "./layman-bullets.ts";
 import { SAMPLE_PDS_TEXT } from "./samples.ts";
 
 describe("layman bullets from on-device extract", () => {
-  it("covers substrates, service, gates, and standards for Macropoxy", () => {
+  it("covers substrates, prep gates, and go gates for Macropoxy", () => {
     const card = buildCardFromPds(SAMPLE_PDS_TEXT.macropoxy);
     const bullets = buildLaymanBullets(card);
     const text = bullets.join(" | ");
     assert.match(text, /Macropoxy/i);
     assert.match(text, /Substrates:/i);
-    assert.match(text, /Service:/i);
-    assert.match(text, /Standards:/i);
+    assert.match(text, /Prep gates:/i);
     assert.match(text, /SSPC|NACE|AMPP/i);
     assert.match(text, /Go gates:/i);
     assert.match(text, /dew spread/i);

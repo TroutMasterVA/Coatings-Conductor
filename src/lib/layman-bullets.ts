@@ -1,8 +1,8 @@
 import type { FieldCardData } from "./types.ts";
 
 /**
- * Tight stated attributes for the primary job card face.
- * Only what drives go-gates / windows or a clear decision — no soft paraphrase, no filler.
+ * Tight stated attributes for extract notes / tooling.
+ * Primary card face is FieldCardView (prep gates + go gates) — this is not the default UI dump.
  */
 export function buildLaymanBullets(card: FieldCardData): string[] {
   const bullets: string[] = [];
@@ -21,12 +21,13 @@ export function buildLaymanBullets(card: FieldCardData): string[] {
   const substrates = (card.surfacePrep.substrates ?? []).filter(Boolean);
   if (substrates.length) bullets.push(`Substrates: ${substrates.join(", ")}.`);
 
-  const standards = [
+  const prep = [
     ...(card.surfacePrep.methods ?? []),
     ...(card.credentials.required ?? []),
-  ].filter((s) => /SSPC|NACE|AMPP|ASTM|ISO|ICR|PCI|CIP/i.test(s));
-  const uniqStandards = [...new Set(standards.map((s) => s.trim()).filter(Boolean))];
-  if (uniqStandards.length) bullets.push(`Standards: ${uniqStandards.slice(0, 6).join("; ")}.`);
+  ].filter((s) => /SSPC|NACE|AMPP|ASTM|ISO|ICR|PCI|CIP|SP\s?\d+/i.test(s));
+  const uniqPrep = [...new Set(prep.map((s) => s.trim()).filter(Boolean))];
+  if (card.surfacePrep.profile?.trim()) uniqPrep.push(`profile ${card.surfacePrep.profile.trim()}`);
+  if (uniqPrep.length) bullets.push(`Prep gates: ${uniqPrep.slice(0, 8).join("; ")}.`);
 
   const env = card.environmentals;
   const gates: string[] = [];

@@ -76,12 +76,16 @@ function goGateChips(card: FieldCardData): string[] {
   return chips;
 }
 
-function standardGates(card: FieldCardData): string {
-  const standards = [
+/** Stated prep gold bars (SSPC/NACE/ICRI/… + profile) — decision gates, not a dump. */
+function prepGateChips(card: FieldCardData): string[] {
+  const chips = [
     ...(card.surfacePrep.methods ?? []),
     ...(card.credentials.required ?? []),
-  ].filter((s) => /SSPC|NACE|AMPP|ASTM|ISO|ICR|PCI|CIP/i.test(s));
-  return [...new Set(standards.map((s) => s.trim()).filter(Boolean))].slice(0, 8).join(" · ");
+  ].filter((s) => /SSPC|NACE|AMPP|ASTM|ISO|ICR|PCI|CIP|SP\s?\d+/i.test(s));
+  const uniq = [...new Set(chips.map((s) => s.trim()).filter(Boolean))];
+  if (stated(card.surfacePrep.profile)) uniq.push(`Profile ${card.surfacePrep.profile!.trim()}`);
+  if (stated(card.surfacePrep.cleanliness)) uniq.push(card.surfacePrep.cleanliness!.trim());
+  return uniq.slice(0, 12);
 }
 
 function FullSheetDump({ card }: { card: FieldCardData }) {
@@ -252,8 +256,8 @@ export function FieldCardView({
   mitigations?: string[];
 }) {
   const mid = "·";
-  const gates = goGateChips(card);
-  const standards = standardGates(card);
+  const envGates = goGateChips(card);
+  const prepGates = prepGateChips(card);
   const mix = card.product.mixRatio || card.mixing.ratio;
   const recoat = [card.cure.recoatMin && `min ${card.cure.recoatMin}`, card.cure.recoatMax && `max ${card.cure.recoatMax}`]
     .filter(Boolean)
@@ -300,9 +304,24 @@ export function FieldCardView({
             </div>
           </dl>
 
+          {/* Primary face: BE gold-bar prep + window-driving attrs only. */}
+          <div className="mt-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Prep gates</p>
+            {prepGates.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {prepGates.map((item) => (
+                  <span key={item} className="rounded-sm bg-paper-edge px-2 py-1 font-mono text-xs text-ink">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-ink-muted">Not stated</p>
+            )}
+          </div>
+
           <div className="mt-4 space-y-1">
             <Attr label="Substrates" value={join(card.surfacePrep.substrates)} />
-            <Attr label="Standards / gates" value={standards} />
             <Attr label="Mix" value={mix} />
             <Attr label="Film" value={card.installation.filmThickness} />
             <Attr label="Recoat" value={recoat || null} />
@@ -311,7 +330,7 @@ export function FieldCardView({
           <div className="mt-4">
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Go gates</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {gates.map((item) => (
+              {envGates.map((item) => (
                 <span
                   key={item}
                   className={cn(
@@ -324,17 +343,6 @@ export function FieldCardView({
               ))}
             </div>
           </div>
-
-          {card.extractionNotes.length ? (
-            <ul className="mt-4 space-y-1.5 rounded-lg bg-paper-edge/60 px-3 py-3 text-sm leading-snug text-ink">
-              {card.extractionNotes.map((note) => (
-                <li key={note} className="flex gap-2">
-                  <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
-                  <span>{note}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
 
           <details className="no-print mt-5 rounded-lg border border-paper-edge/80 bg-paper-edge/30">
             <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-ink-muted">
@@ -382,7 +390,7 @@ export function EmptyCardSkeleton() {
             </div>
           </div>
           <p className="mt-3 max-w-md text-sm text-ink-muted">
-            The job card will show stated go-gates and decision attributes only — then NOAA windows score against them.
+            Prep gates and go-gates only on the job card — then NOAA windows score against them.
           </p>
         </div>
       </div>
