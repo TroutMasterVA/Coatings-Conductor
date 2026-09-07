@@ -50,6 +50,24 @@ function precipitationAllowedFromText(t: string): boolean {
   );
 }
 
+/** Stated dew-point spread only — never invent 5°F from a bare dew mention. */
+function dewPointSpreadFromText(t: string): number | null {
+  const patterns: RegExp[] = [
+    // "5°F above the dew point"
+    /(\d+(?:\.\d+)?)\s*°?\s*([CF])?(?:\s*\([^)]{0,16}\))?\s*(?:above|over|higher than)\s+(?:the\s+)?dew/i,
+    // "Dew point spread 5 F minimum" / "dew-point spread: 5°F"
+    /dew[\s-]?point\s+spread[:\s]+(\d+(?:\.\d+)?)\s*°?\s*([CF])?/i,
+    // "minimum dew point spread of 5 F" / "dew point spread of at least 5°F"
+    /(?:minimum|min\.?)\s+dew[\s-]?point\s+spread(?:\s+of)?[:\s]+(\d+(?:\.\d+)?)\s*°?\s*([CF])?/i,
+    /dew[\s-]?point\s+spread(?:\s+of)?\s+(?:at\s+least\s+)?(\d+(?:\.\d+)?)\s*°?\s*([CF])?/i,
+  ];
+  for (const p of patterns) {
+    const m = t.match(p);
+    if (m?.[1]) return toF(Number(m[1]), m[2]);
+  }
+  return null;
+}
+
 export function heuristicExtract(text: string): FieldCardData {
   const t = text.replace(/\u00a0/g, " ").replace(/\s+\n/g, "\n");
   const lines = t
@@ -145,10 +163,7 @@ export function heuristicExtract(text: string): FieldCardData {
   const rh = t.match(/relative humidity[^\n]{0,40}?(\d+)\s*%/i);
   if (rh) env.relativeHumidityMax = Number(rh[1]);
 
-  const dew = t.match(
-    /(\d+(?:\.\d+)?)\s*°?\s*([CF])?(?:\s*\([^)]{0,16}\))?\s*(?:above|over|higher than)\s+(?:the\s+)?dew/i,
-  );
-  if (dew) env.dewPointSpreadMinF = toF(Number(dew[1]), dew[2]);
+  env.dewPointSpreadMinF = dewPointSpreadFromText(t);
 
   const storageRange = firstMatch(t, [
     /stor(?:e|age)[^\n]{0,40}?(\d+\s*°?\s*[CF][^\n]{0,20}\d+\s*°?\s*[CF])/i,
