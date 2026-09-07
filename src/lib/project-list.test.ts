@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { dedupeProjectsById, upsertProjectSummary } from "../routes/index.tsx";
+import { dedupeProjectsById, upsertProjectSummary } from "./project-list.ts";
 import type { ProjectSummary } from "./project-store.ts";
 
 function row(id: string, name: string): ProjectSummary {
