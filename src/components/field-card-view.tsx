@@ -5,16 +5,31 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 function join(items: string[] | undefined) {
-  return (items ?? []).filter(Boolean).join(" \u00b7 ");
+  return (items ?? []).filter(Boolean).join(" · ");
+}
+
+function stated(value?: string | null) {
+  return Boolean(value && value.trim());
+}
+
+/** Row only when the PDS stated a value — silent fields stay off the primary face. */
+function Attr({ label, value }: { label: string; value?: string | null }) {
+  if (!stated(value)) return null;
+  return (
+    <div className="min-w-0 border-b border-paper-edge py-2 last:border-b-0">
+      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">{label}</div>
+      <div className="mt-0.5 text-sm leading-snug text-ink">{value}</div>
+    </div>
+  );
 }
 
 function Cell({ label, value }: { label: string; value?: string | null }) {
-  const stated = Boolean(value && value.trim());
+  const ok = stated(value);
   return (
     <div className="min-w-0">
       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">{label}</div>
-      <div className={cn("mt-0.5 text-sm leading-snug", stated ? "text-ink" : "text-ink-muted")}>
-        {stated ? value : "Not stated"}
+      <div className={cn("mt-0.5 text-sm leading-snug", ok ? "text-ink" : "text-ink-muted")}>
+        {ok ? value : "Not stated"}
       </div>
     </div>
   );
@@ -40,6 +55,191 @@ function Section({
   );
 }
 
+function goGateChips(card: FieldCardData): string[] {
+  const env = card.environmentals;
+  const chips: string[] = [];
+  if (env.ambientTempMinF != null || env.ambientTempMaxF != null) {
+    chips.push(`Air ${env.ambientTempMinF ?? "—"}–${env.ambientTempMaxF ?? "—"}°F`);
+  }
+  if (env.substrateTempMinF != null || env.substrateTempMaxF != null) {
+    chips.push(`Substrate ${env.substrateTempMinF ?? "—"}–${env.substrateTempMaxF ?? "—"}°F`);
+  }
+  if (env.dewPointSpreadMinF != null) {
+    chips.push(`Dew spread ≥ ${env.dewPointSpreadMinF}°F`);
+  } else {
+    chips.push("Dew spread not stated");
+  }
+  if (env.relativeHumidityMax != null) chips.push(`RH ≤ ${env.relativeHumidityMax}%`);
+  if (env.relativeHumidityMin != null) chips.push(`RH ≥ ${env.relativeHumidityMin}%`);
+  if (env.precipitationAllowed === false) chips.push("No precipitation");
+  if (env.windMaxMph != null) chips.push(`Wind ≤ ${env.windMaxMph} mph`);
+  return chips;
+}
+
+function standardGates(card: FieldCardData): string {
+  const standards = [
+    ...(card.surfacePrep.methods ?? []),
+    ...(card.credentials.required ?? []),
+  ].filter((s) => /SSPC|NACE|AMPP|ASTM|ISO|ICR|PCI|CIP/i.test(s));
+  return [...new Set(standards.map((s) => s.trim()).filter(Boolean))].slice(0, 8).join(" · ");
+}
+
+function FullSheetDump({ card }: { card: FieldCardData }) {
+  const env = card.environmentals;
+  const mid = "·";
+  const em = "—";
+  const envLine = goGateChips(card);
+  return (
+    <div className="mt-2">
+      <div id="step-store" />
+      <Section n="01" title="Store & shelf life">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Cell label="Storage" value={card.storage.temperatureRange} />
+          <Cell label="Unopened shelf" value={card.shelfLife.unopened} />
+          <Cell label="Opened" value={card.shelfLife.opened} />
+          <Cell label="Mixed / pot life" value={card.shelfLife.mixedPotLife} />
+        </div>
+        {card.storage.conditions.length ? (
+          <p className="text-sm text-ink">{join(card.storage.conditions)}</p>
+        ) : null}
+        {card.storage.notes || card.shelfLife.notes ? (
+          <p className="text-sm text-ink-muted">{card.storage.notes || card.shelfLife.notes}</p>
+        ) : null}
+      </Section>
+
+      <div id="step-creds" />
+      <Section n="02" title={`Qualify ${mid} credentials`}>
+        {card.credentials.required.length ? (
+          <ul className="space-y-1 text-sm">
+            {card.credentials.required.map((c) => (
+              <li key={c} className="flex gap-2">
+                <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
+                <span>{c}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-ink-muted">{`None stated in the PDS ${em} follow the project spec.`}</p>
+        )}
+        {card.credentials.notes ? <p className="text-sm text-ink-muted">{card.credentials.notes}</p> : null}
+      </Section>
+
+      <div id="step-prep" />
+      <Section n="03" title="Surface preparation">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Cell label="Substrates" value={join(card.surfacePrep.substrates)} />
+          <Cell label="Methods" value={join(card.surfacePrep.methods)} />
+          <Cell label="Profile" value={card.surfacePrep.profile} />
+          <Cell label="Cleanliness" value={card.surfacePrep.cleanliness} />
+          <Cell label="Moisture" value={card.surfacePrep.moisture} />
+        </div>
+        {card.surfacePrep.notes ? <p className="text-sm text-ink-muted">{card.surfacePrep.notes}</p> : null}
+      </Section>
+
+      <div id="step-ambnt" />
+      <Section n="04" title="Ambient & environmentals">
+        {envLine.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {envLine.map((item) => (
+              <span key={item} className="rounded-sm bg-paper-edge px-2 py-1 font-mono text-xs text-ink">
+                {item}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-ink-muted">Not stated</p>
+        )}
+        {env.notes ? <p className="text-sm text-ink-muted">{env.notes}</p> : null}
+        {env.directSunNotes ? <p className="text-sm text-ink-muted">{env.directSunNotes}</p> : null}
+      </Section>
+
+      <div id="step-mix" />
+      <Section n="05" title="Mix">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Cell label="Components" value={card.mixing.components} />
+          <Cell label="Ratio" value={card.mixing.ratio} />
+          <Cell label="Induction" value={card.mixing.inductionTime} />
+          <Cell label="Pot life" value={card.mixing.potLife} />
+          <Cell label="Thinning" value={card.mixing.thinning} />
+        </div>
+        {card.mixing.notes ? <p className="text-sm text-ink-muted">{card.mixing.notes}</p> : null}
+      </Section>
+
+      <div id="step-apply" />
+      <Section n="06" title="Install / apply">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Cell label="Methods" value={join(card.installation.methods)} />
+          <Cell label="Film" value={card.installation.filmThickness} />
+          <Cell label="Coverage" value={card.installation.coverage} />
+          <Cell label="Coats" value={card.installation.numberOfCoats} />
+        </div>
+        {card.installation.sequence.length ? (
+          <ol className="space-y-1 text-sm">
+            {card.installation.sequence.map((s, i) => (
+              <li key={s} className="flex gap-2">
+                <span className="font-mono text-xs text-rail">{String(i + 1).padStart(2, "0")}</span>
+                <span>{s}</span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+        {card.installation.notes ? <p className="text-sm text-ink-muted">{card.installation.notes}</p> : null}
+      </Section>
+
+      <div id="step-hold" />
+      <Section n="07" title="Hold points">
+        <ol className="space-y-2.5">
+          {card.holdPoints.map((h) => (
+            <li key={`${h.step}-${h.name}`} className="grid grid-cols-[1.5rem_1fr] gap-2 text-sm">
+              <span className="font-mono text-xs text-rail">{String(h.step).padStart(2, "0")}</span>
+              <div>
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <span className="font-medium">{h.name}</span>
+                  <span className="text-xs text-ink-muted">
+                    {h.owner}
+                    {h.source === "inferred" ? ` ${mid} inferred` : ""}
+                  </span>
+                </div>
+                <p className="text-ink-muted">{h.criteria}</p>
+                {h.timing ? <p className="text-xs text-ink-muted">{h.timing}</p> : null}
+              </div>
+            </li>
+          ))}
+        </ol>
+      </Section>
+
+      <div id="step-insp" />
+      <Section n="08" title="Inspection">
+        <Cell label="Methods" value={join(card.inspection.methods)} />
+        <Cell label="Acceptance" value={join(card.inspection.acceptance)} />
+        <Cell label="Record" value={card.inspection.documentation} />
+      </Section>
+
+      <div id="step-cure" />
+      <Section n="09" title="Cure & recoat">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Cell label="Touch" value={card.cure.touch} />
+          <Cell label="Handle" value={card.cure.handle} />
+          <Cell label="Recoat min" value={card.cure.recoatMin} />
+          <Cell label="Recoat max" value={card.cure.recoatMax} />
+          <Cell label="Full cure" value={card.cure.fullCure} />
+          <Cell label="Immersion" value={card.cure.immersionService} />
+        </div>
+        {card.cure.temperatureDependence ? (
+          <p className="text-sm text-ink-muted">{card.cure.temperatureDependence}</p>
+        ) : null}
+      </Section>
+
+      <div id="step-safe" />
+      <Section n="10" title="Safety">
+        <Cell label="PPE" value={join(card.safety.ppe)} />
+        <Cell label="Ventilation" value={card.safety.ventilation} />
+        <Cell label="Hazards" value={join(card.safety.hazards)} />
+      </Section>
+    </div>
+  );
+}
+
 export function FieldCardView({
   card,
   zip,
@@ -51,26 +251,13 @@ export function FieldCardView({
   headline?: string;
   mitigations?: string[];
 }) {
-  const env = card.environmentals;
-  const em = "\u2014";
-  const en = "\u2013";
-  const deg = "\u00b0";
-  const ge = "\u2265";
-  const le = "\u2264";
-  const mid = "\u00b7";
-  const envLine = [
-    env.ambientTempMinF != null || env.ambientTempMaxF != null
-      ? `Air ${env.ambientTempMinF ?? em}${en}${env.ambientTempMaxF ?? em}${deg}F`
-      : null,
-    env.substrateTempMinF != null || env.substrateTempMaxF != null
-      ? `Substrate ${env.substrateTempMinF ?? em}${en}${env.substrateTempMaxF ?? em}${deg}F`
-      : null,
-    env.dewPointSpreadMinF != null ? `Dew spread ${ge} ${env.dewPointSpreadMinF}${deg}F` : "Dew spread not stated",
-    env.relativeHumidityMax != null ? `RH ${le} ${env.relativeHumidityMax}%` : null,
-    env.relativeHumidityMin != null ? `RH ${ge} ${env.relativeHumidityMin}%` : null,
-    env.precipitationAllowed === false ? "No precipitation" : null,
-    env.windMaxMph != null ? `Wind ${le} ${env.windMaxMph} mph` : null,
-  ].filter(Boolean);
+  const mid = "·";
+  const gates = goGateChips(card);
+  const standards = standardGates(card);
+  const mix = card.product.mixRatio || card.mixing.ratio;
+  const recoat = [card.cure.recoatMin && `min ${card.cure.recoatMin}`, card.cure.recoatMax && `max ${card.cure.recoatMax}`]
+    .filter(Boolean)
+    .join("; ");
 
   return (
     <article
@@ -83,7 +270,7 @@ export function FieldCardView({
         <div className="min-w-0 flex-1 p-5 sm:p-7">
           <header className="flex flex-wrap items-start justify-between gap-3 border-b border-rail/80 pb-4">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">{`Coatings Conductor ${mid} field card`}</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">{`Coatings Conductor ${mid} job card`}</p>
               <h2 className="mt-2 font-sans text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-3xl">
                 {card.product.name || "Unnamed product"}
               </h2>
@@ -94,22 +281,9 @@ export function FieldCardView({
             </div>
             <div className="flex flex-col items-end gap-1.5">
               <Badge variant="paper">{card.confidence} extract</Badge>
-              {card.product.mixRatio ? (
-                <span className="font-mono text-xs text-ink-muted">{card.product.mixRatio}</span>
-              ) : null}
+              {mix ? <span className="font-mono text-xs text-ink-muted">{mix}</span> : null}
             </div>
           </header>
-
-          {card.extractionNotes.length ? (
-            <ul className="mt-4 space-y-1.5 rounded-lg bg-paper-edge/60 px-3 py-3 text-sm leading-snug text-ink">
-              {card.extractionNotes.map((note) => (
-                <li key={note} className="flex gap-2">
-                  <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
-                  <span>{note}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
 
           <dl className="print-only mt-3 space-y-1 border-b border-rail/80 pb-3 text-xs text-ink">
             <div>
@@ -126,167 +300,65 @@ export function FieldCardView({
             </div>
           </dl>
 
-          <nav className="no-print mt-4 flex gap-1 overflow-x-auto pb-1" aria-label="Card sections">
-            {STEP_RAIL.map((s) => (
-              <a
-                key={s.id}
-                href={`#step-${s.id}`}
-                className="shrink-0 rounded-sm px-2 py-1 font-mono text-[10px] text-ink-muted hover:bg-paper-edge hover:text-ink"
-              >
-                {s.n} {s.label}
-              </a>
-            ))}
-          </nav>
+          <div className="mt-4 space-y-1">
+            <Attr label="Substrates" value={join(card.surfacePrep.substrates)} />
+            <Attr label="Standards / gates" value={standards} />
+            <Attr label="Mix" value={mix} />
+            <Attr label="Film" value={card.installation.filmThickness} />
+            <Attr label="Recoat" value={recoat || null} />
+          </div>
 
-          <div className="mt-2">
-            <div id="step-store" />
-            <Section n="01" title="Store & shelf life">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Cell label="Storage" value={card.storage.temperatureRange} />
-                <Cell label="Unopened shelf" value={card.shelfLife.unopened} />
-                <Cell label="Opened" value={card.shelfLife.opened} />
-                <Cell label="Mixed / pot life" value={card.shelfLife.mixedPotLife} />
-              </div>
-              {card.storage.conditions.length ? (
-                <p className="text-sm text-ink">{join(card.storage.conditions)}</p>
-              ) : null}
-              {card.storage.notes || card.shelfLife.notes ? (
-                <p className="text-sm text-ink-muted">{card.storage.notes || card.shelfLife.notes}</p>
-              ) : null}
-            </Section>
+          <div className="mt-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Go gates</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {gates.map((item) => (
+                <span
+                  key={item}
+                  className={cn(
+                    "rounded-sm px-2 py-1 font-mono text-xs",
+                    /not stated/i.test(item) ? "bg-paper-edge text-ink-muted" : "bg-paper-edge text-ink",
+                  )}
+                >
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
 
-            <div id="step-creds" />
-            <Section n="02" title={`Qualify ${mid} credentials`}>
-              {card.credentials.required.length ? (
-                <ul className="space-y-1 text-sm">
-                  {card.credentials.required.map((c) => (
-                    <li key={c} className="flex gap-2">
-                      <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
-                      <span>{c}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-ink-muted">{`None stated in the PDS ${em} follow the project spec.`}</p>
-              )}
-              {card.credentials.notes ? <p className="text-sm text-ink-muted">{card.credentials.notes}</p> : null}
-            </Section>
+          {card.extractionNotes.length ? (
+            <ul className="mt-4 space-y-1.5 rounded-lg bg-paper-edge/60 px-3 py-3 text-sm leading-snug text-ink">
+              {card.extractionNotes.map((note) => (
+                <li key={note} className="flex gap-2">
+                  <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
+                  <span>{note}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
 
-            <div id="step-prep" />
-            <Section n="03" title="Surface preparation">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Cell label="Substrates" value={join(card.surfacePrep.substrates)} />
-                <Cell label="Methods" value={join(card.surfacePrep.methods)} />
-                <Cell label="Profile" value={card.surfacePrep.profile} />
-                <Cell label="Cleanliness" value={card.surfacePrep.cleanliness} />
-                <Cell label="Moisture" value={card.surfacePrep.moisture} />
-              </div>
-              {card.surfacePrep.notes ? <p className="text-sm text-ink-muted">{card.surfacePrep.notes}</p> : null}
-            </Section>
+          <details className="no-print mt-5 rounded-lg border border-paper-edge/80 bg-paper-edge/30">
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-ink-muted">
+              Full sheet (advanced)
+            </summary>
+            <nav className="flex gap-1 overflow-x-auto border-t border-paper-edge px-2 pb-1 pt-2" aria-label="Card sections">
+              {STEP_RAIL.map((s) => (
+                <a
+                  key={s.id}
+                  href={`#step-${s.id}`}
+                  className="shrink-0 rounded-sm px-2 py-1 font-mono text-[10px] text-ink-muted hover:bg-paper-edge hover:text-ink"
+                >
+                  {s.n} {s.label}
+                </a>
+              ))}
+            </nav>
+            <div className="px-3 pb-3">
+              <FullSheetDump card={card} />
+            </div>
+          </details>
 
-            <div id="step-ambnt" />
-            <Section n="04" title="Ambient & environmentals">
-              {envLine.length ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {envLine.map((item) => (
-                    <span
-                      key={item}
-                      className="rounded-sm bg-paper-edge px-2 py-1 font-mono text-xs text-ink"
-                    >
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-ink-muted">Not stated</p>
-              )}
-              {env.notes ? <p className="text-sm text-ink-muted">{env.notes}</p> : null}
-              {env.directSunNotes ? <p className="text-sm text-ink-muted">{env.directSunNotes}</p> : null}
-            </Section>
-
-            <div id="step-mix" />
-            <Section n="05" title="Mix">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Cell label="Components" value={card.mixing.components} />
-                <Cell label="Ratio" value={card.mixing.ratio} />
-                <Cell label="Induction" value={card.mixing.inductionTime} />
-                <Cell label="Pot life" value={card.mixing.potLife} />
-                <Cell label="Thinning" value={card.mixing.thinning} />
-              </div>
-              {card.mixing.notes ? <p className="text-sm text-ink-muted">{card.mixing.notes}</p> : null}
-            </Section>
-
-            <div id="step-apply" />
-            <Section n="06" title="Install / apply">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Cell label="Methods" value={join(card.installation.methods)} />
-                <Cell label="Film" value={card.installation.filmThickness} />
-                <Cell label="Coverage" value={card.installation.coverage} />
-                <Cell label="Coats" value={card.installation.numberOfCoats} />
-              </div>
-              {card.installation.sequence.length ? (
-                <ol className="space-y-1 text-sm">
-                  {card.installation.sequence.map((s, i) => (
-                    <li key={s} className="flex gap-2">
-                      <span className="font-mono text-xs text-rail">{String(i + 1).padStart(2, "0")}</span>
-                      <span>{s}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : null}
-              {card.installation.notes ? <p className="text-sm text-ink-muted">{card.installation.notes}</p> : null}
-            </Section>
-
-            <div id="step-hold" />
-            <Section n="07" title="Hold points">
-              <ol className="space-y-2.5">
-                {card.holdPoints.map((h) => (
-                  <li key={`${h.step}-${h.name}`} className="grid grid-cols-[1.5rem_1fr] gap-2 text-sm">
-                    <span className="font-mono text-xs text-rail">{String(h.step).padStart(2, "0")}</span>
-                    <div>
-                      <div className="flex flex-wrap items-baseline gap-2">
-                        <span className="font-medium">{h.name}</span>
-                        <span className="text-xs text-ink-muted">
-                          {h.owner}
-                          {h.source === "inferred" ? ` ${mid} inferred` : ""}
-                        </span>
-                      </div>
-                      <p className="text-ink-muted">{h.criteria}</p>
-                      {h.timing ? <p className="text-xs text-ink-muted">{h.timing}</p> : null}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </Section>
-
-            <div id="step-insp" />
-            <Section n="08" title="Inspection">
-              <Cell label="Methods" value={join(card.inspection.methods)} />
-              <Cell label="Acceptance" value={join(card.inspection.acceptance)} />
-              <Cell label="Record" value={card.inspection.documentation} />
-            </Section>
-
-            <div id="step-cure" />
-            <Section n="09" title="Cure & recoat">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Cell label="Touch" value={card.cure.touch} />
-                <Cell label="Handle" value={card.cure.handle} />
-                <Cell label="Recoat min" value={card.cure.recoatMin} />
-                <Cell label="Recoat max" value={card.cure.recoatMax} />
-                <Cell label="Full cure" value={card.cure.fullCure} />
-                <Cell label="Immersion" value={card.cure.immersionService} />
-              </div>
-              {card.cure.temperatureDependence ? (
-                <p className="text-sm text-ink-muted">{card.cure.temperatureDependence}</p>
-              ) : null}
-            </Section>
-
-            <div id="step-safe" />
-            <Section n="10" title="Safety">
-              <Cell label="PPE" value={join(card.safety.ppe)} />
-              <Cell label="Ventilation" value={card.safety.ventilation} />
-              <Cell label="Hazards" value={join(card.safety.hazards)} />
-            </Section>
+          <div className="print-only mt-4 border-t border-rail/80 pt-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Full sheet</p>
+            <FullSheetDump card={card} />
           </div>
         </div>
       </div>
@@ -295,11 +367,11 @@ export function FieldCardView({
 }
 
 export function EmptyCardSkeleton() {
-  const mid = "\u00b7";
+  const mid = "·";
   return (
     <article className="overflow-hidden rounded-xl bg-paper text-ink shadow-[0_0_0_1px_rgba(22,24,28,0.08)]">
       <div className="caution-stripe h-1.5 w-full" />
-      <div className="flex min-h-[28rem]">
+      <div className="flex min-h-[20rem]">
         <div className="hidden w-2.5 shrink-0 bg-rail sm:block" />
         <div className="flex-1 p-5 sm:p-7">
           <div className="flex items-start gap-3">
@@ -310,19 +382,8 @@ export function EmptyCardSkeleton() {
             </div>
           </div>
           <p className="mt-3 max-w-md text-sm text-ink-muted">
-            The card fills in process order: store, qualify, prep, ambient, mix, apply, hold, inspect, cure, safety.
+            The job card will show stated go-gates and decision attributes only — then NOAA windows score against them.
           </p>
-          <ol className="mt-8 space-y-0">
-            {STEP_RAIL.map((s) => (
-              <li
-                key={s.id}
-                className="grid grid-cols-[2.75rem_1fr] gap-3 border-b border-paper-edge py-2.5 text-sm last:border-0"
-              >
-                <span className="font-mono text-xs text-rail">{s.n}</span>
-                <span className="font-medium uppercase tracking-[0.14em] text-ink-muted">{s.label}</span>
-              </li>
-            ))}
-          </ol>
         </div>
       </div>
     </article>
