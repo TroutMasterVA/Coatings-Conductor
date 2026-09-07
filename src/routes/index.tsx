@@ -69,6 +69,28 @@ function bounceExpired<T>(promise: Promise<T>): Promise<T> {
   });
 }
 
+/** One row per project id — open must not prepend a second copy. */
+export function upsertProjectSummary(list: ProjectSummary[], summary: ProjectSummary): ProjectSummary[] {
+  let found = false;
+  const next = list.map((p) => {
+    if (p.id !== summary.id) return p;
+    found = true;
+    return { ...p, ...summary };
+  });
+  return found ? next : [...next, summary];
+}
+
+export function dedupeProjectsById(list: ProjectSummary[]): ProjectSummary[] {
+  const seen = new Set<string>();
+  const out: ProjectSummary[] = [];
+  for (const p of list) {
+    if (!p?.id || seen.has(p.id)) continue;
+    seen.add(p.id);
+    out.push(p);
+  }
+  return out;
+}
+
 function siteFromCard(card: FieldCardData, prev?: SiteContext): SiteContext {
   const notes = [
     card.product.name,
@@ -127,6 +149,30 @@ function App({ user }: { user: AppUser | null }) {
   const [outcomes, setOutcomes] = useState<FieldOutcome[]>([]);
   const hydrated = useRef(false);
   const persistTimer = useRef<number | undefined>(undefined);
+  /** Bumps on open/create so in-flight debounced saves cannot write the previous job. */
+  const saveGen = useRef(0);
+  const jobRef = useRef({
+    projectId: null as string | null,
+    projectName: "",
+    zip: "",
+    calibration: DEFAULT_CALIBRATION as Calibration,
+    site: defaultSite() as SiteContext,
+    card: null as FieldCardData | null,
+    text: "",
+    recents: [] as SavedCard[],
+    outcomes: [] as FieldOutcome[],
+  });
+  jobRef.current = {
+    projectId,
+    projectName,
+    zip,
+    calibration,
+    site,
+    card,
+    text,
+    recents,
+    outcomes,
+  };
 
   const applyFull = useCallback((full: ProjectFull) => {
     setProjectId(full.id);
@@ -141,11 +187,38 @@ function App({ user }: { user: AppUser | null }) {
     setForecast(null);
     setWxError(null);
     setMode("job");
-    setProjects((prev) => {
-      const rest = prev.filter((p) => p.id !== full.id);
-      return [toSummary(full), ...rest];
-    });
+    // Update the existing row in place — do not prepend (that reordered + duplicated under race).
+    setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), toSummary(full)));
   }, []);
+
+  const flushSave = useCallback(async () => {
+    const snap = jobRef.current;
+    if (!snap.projectId || !hydrated.current) return;
+    window.clearTimeout(persistTimer.current);
+    const gen = saveGen.current;
+    try {
+      const summary = await api.save({
+        id: snap.projectId,
+        name: snap.projectName,
+        zip: snap.zip,
+        calibration: snap.calibration,
+        site: snap.site,
+        card: snap.card,
+        pdsText: snap.text,
+        recents: snap.recents,
+        outcomes: snap.outcomes,
+      });
+      if (gen !== saveGen.current) return;
+      setProjects((prev) => upsertProjectSummary(prev, summary));
+    } catch (err) {
+      if (gen !== saveGen.current) return;
+      if (isUnauthorized(err)) {
+        returnToLogin();
+        return;
+      }
+      toast.error(err instanceof Error ? err.message : "Could not save project.");
+    }
+  }, [api]);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,7 +234,7 @@ function App({ user }: { user: AppUser | null }) {
         }
         const ws = await api.load();
         if (cancelled) return;
-        setProjects(ws.projects);
+        setProjects(dedupeProjectsById(ws.projects));
         setCustom(ws.custom);
         const last = ws.lastProjectId;
         const openable = last && ws.projects.some((p) => p.id === last && !p.archived);
@@ -228,30 +301,8 @@ function App({ user }: { user: AppUser | null }) {
   }, [api, applyFull, signedIn]);
 
   const persist = useCallback(() => {
-    if (!projectId || !hydrated.current) return;
-    void api
-      .save({
-        id: projectId,
-        name: projectName,
-        zip,
-        calibration,
-        site,
-        card,
-        pdsText: text,
-        recents,
-        outcomes,
-      })
-      .then((summary) => {
-        setProjects((prev) => prev.map((p) => (p.id === summary.id ? { ...p, ...summary } : p)));
-      })
-      .catch((err) => {
-        if (isUnauthorized(err)) {
-          returnToLogin();
-          return;
-        }
-        toast.error(err instanceof Error ? err.message : "Could not save project.");
-      });
-  }, [api, projectId, projectName, zip, calibration, site, card, text, recents, outcomes]);
+    void flushSave();
+  }, [flushSave]);
 
   useEffect(() => {
     if (!projectId || !hydrated.current || mode !== "job") return;
@@ -343,24 +394,17 @@ function App({ user }: { user: AppUser | null }) {
     }
   }
 
+  async function goHome() {
+    await flushSave();
+    setMode("home");
+  }
+
   async function handleCreate(name: string, nextZip: string) {
     setCreating(true);
     setHomeError(null);
     try {
-      if (projectId && hydrated.current) {
-        window.clearTimeout(persistTimer.current);
-        await api.save({
-          id: projectId,
-          name: projectName,
-          zip,
-          calibration,
-          site,
-          card,
-          pdsText: text,
-          recents,
-          outcomes,
-        });
-      }
+      saveGen.current += 1;
+      await flushSave();
       const full = await api.create({ name, zip: nextZip });
       applyFull(full);
       toast.success(`${full.name} is on the stand — factory model, this ZIP only.`);
@@ -377,20 +421,8 @@ function App({ user }: { user: AppUser | null }) {
 
   async function handleOpen(id: string) {
     try {
-      if (projectId && hydrated.current) {
-        window.clearTimeout(persistTimer.current);
-        await api.save({
-          id: projectId,
-          name: projectName,
-          zip,
-          calibration,
-          site,
-          card,
-          pdsText: text,
-          recents,
-          outcomes,
-        });
-      }
+      saveGen.current += 1;
+      await flushSave();
       const full = await api.open(id);
       applyFull(full);
     } catch (err) {
@@ -404,6 +436,10 @@ function App({ user }: { user: AppUser | null }) {
 
   async function handleArchive(id: string, archived: boolean) {
     try {
+      if (projectId === id) {
+        saveGen.current += 1;
+        await flushSave();
+      }
       await api.archive(id, archived);
       setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, archived } : p)));
       if (archived && projectId === id) {
@@ -423,6 +459,10 @@ function App({ user }: { user: AppUser | null }) {
 
   async function handleDelete(id: string) {
     try {
+      if (projectId === id) {
+        saveGen.current += 1;
+        window.clearTimeout(persistTimer.current);
+      }
       await api.remove(id);
       setProjects((prev) => prev.filter((p) => p.id !== id));
       if (projectId === id) {
@@ -466,7 +506,7 @@ function App({ user }: { user: AppUser | null }) {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {mode === "job" ? (
-              <Button type="button" variant="outline" size="sm" onClick={() => setMode("home")}>
+              <Button type="button" variant="outline" size="sm" onClick={() => void goHome()}>
                 <FolderOpen />
                 Projects
               </Button>
