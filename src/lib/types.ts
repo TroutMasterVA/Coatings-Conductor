@@ -78,7 +78,7 @@ export type FieldCardData = {
     moisture: string;
     notes: string;
     /** Per-substrate/use prep gates when the PDS states them. FE primary card reads this. */
-    prepGates: SubstratePrepGate[];
+    prepGates?: SubstratePrepGate[];
   };
   environmentals: Environmentals;
   mixing: {
