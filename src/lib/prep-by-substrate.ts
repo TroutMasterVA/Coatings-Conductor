@@ -7,22 +7,30 @@ const FAMILY_LABEL: Record<SubstrateFamily, string> = {
   "non-ferrous": "Non-ferrous metals",
 };
 
-const HEADER: { family: SubstrateFamily; re: RegExp }[] = [
-  {
-    family: "steel-immersion",
-    re: /\b(?:immersion(?:\s+service)?|steel\s+immersion|immersed(?:\s+service)?)\b/i,
-  },
+const FAMILIES: SubstrateFamily[] = [
+  "steel-immersion",
+  "steel-non-immersion",
+  "concrete",
+  "non-ferrous",
+];
+
+/** Ordered longest/most-specific first for mid-line splits. */
+const MARKERS: { family: SubstrateFamily; re: RegExp }[] = [
   {
     family: "steel-non-immersion",
-    re: /\b(?:non[\s-]?immersion(?:\s+service)?|atmospheric(?:\s+service)?|non[\s-]?immersed|exterior(?:\s+exposure)?)\b/i,
+    re: /non[\s-]?immersion(?:\s+service)?|atmospheric(?:\s+service)?|non[\s-]?immersed/gi,
+  },
+  {
+    family: "steel-immersion",
+    re: /immersion(?:\s+service)?|immersed(?:\s+service)?|steel\s+immersion/gi,
   },
   {
     family: "concrete",
-    re: /\b(?:concrete|masonry|icri|csp)\b/i,
+    re: /\bconcrete\b|\bmasonry\b|\bicri\b|\bcsp\b/gi,
   },
   {
     family: "non-ferrous",
-    re: /\b(?:non[\s-]?ferrous|aluminum|aluminium|galvanized|stainless|sspc[\s-]?sp\s*16|sspc[\s-]?sp\s*17)\b/i,
+    re: /non[\s-]?ferrous|\baluminum\b|\baluminium\b|\bgalvanized\b|\bstainless\b|sspc[\s-]?sp\s*16|sspc[\s-]?sp\s*17/gi,
   },
 ];
 
@@ -40,7 +48,7 @@ function extractMethods(chunk: string): string[] {
   for (const m of chunk.matchAll(/SSPC[\s-]?SP\s*(\d+[A-Za-z]?)/gi)) {
     push(`SSPC-SP${m[1].toUpperCase()}`);
   }
-  for (const m of chunk.matchAll(/NACE\s*(?:No\.?\s*)?(\d+)/gi)) {
+  for (const m of chunk.matchAll(/NACE\s*(?:No\.?\s*)?(\d+)(?!\s*CIP)/gi)) {
     push(`NACE ${m[1]}`);
   }
   for (const m of chunk.matchAll(/\bICRI\s*CSP\s*([\d]+(?:\s*[–-]\s*[\d]+)?)/gi)) {
@@ -49,93 +57,67 @@ function extractMethods(chunk: string): string[] {
   return out;
 }
 
-function extractProfile(chunk: string): string {
-  const m =
-    chunk.match(
-      /(?:anchor\s+)?profile[^\n.]{0,40}?(\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?)\s*mils?/i,
-    ) ||
-    chunk.match(/(\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?)\s*mils?[^\n.]{0,24}(?:anchor\s+)?profile/i) ||
-    chunk.match(/(\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?)\s*mils?(?=\s|$|\.|,|;)/i);
-  if (!m?.[1]) return "";
-  // Only accept mil ranges near prep language to avoid grabbing DFT film build.
-  const around = chunk.slice(Math.max(0, (m.index ?? 0) - 80), (m.index ?? 0) + 80);
-  if (/dft|dry\s+film|wft|wet\s+film|thickness|coverage/i.test(around) && !/profile|anchor|blast/i.test(around)) {
-    return "";
-  }
-  if (!/profile|anchor|blast|mil/i.test(around)) return "";
-  return `${m[1].replace(/\s+/g, "").replace(/–/g, "-")} mil`;
-}
-
-/** Prefer explicit profile wording; fall back to mil range only when blast/profile context. */
 function extractProfileStrict(chunk: string): string {
   const withWord =
     chunk.match(
-      /(?:anchor\s+)?profile[:\s]+[^\n.]{0,8}?(\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?)\s*mils?/i,
+      /(?:anchor\s+)?profile[:\s]+[^\n.]{0,12}?(\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?)\s*mils?/i,
     ) ||
     chunk.match(/(\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?)\s*mils?[^\n.]{0,28}(?:anchor\s+)?profile/i);
   if (withWord?.[1]) {
     return `${withWord[1].replace(/\s+/g, "").replace(/–/g, "-")} mil`;
   }
   if (/blast|near[\s-]?white|commercial\s+blast|anchor/i.test(chunk)) {
-    return extractProfile(chunk);
+    const m = chunk.match(/(\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?)\s*mils?/i);
+    if (m?.[1]) {
+      const around = chunk.slice(Math.max(0, (m.index ?? 0) - 60), (m.index ?? 0) + 40);
+      if (/dft|dry\s+film|wft|wet\s+film|thickness|coverage/i.test(around) && !/profile|anchor|blast/i.test(around)) {
+        return "";
+      }
+      return `${m[1].replace(/\s+/g, "").replace(/–/g, "-")} mil`;
+    }
   }
   return "";
 }
 
-function detectHeaderFamily(line: string): SubstrateFamily | null {
-  const trimmed = line.trim();
-  if (trimmed.length > 120) return null;
-  // Prefer immersion before generic steel; non-immersion before bare "atmospheric".
-  for (const h of HEADER) {
-    if (h.re.test(trimmed) && (trimmed.length < 80 || /^[A-Z0-9]/.test(trimmed))) {
-      // Avoid classifying a long prep sentence as a header unless it leads with the family word.
-      if (trimmed.length > 60 && !new RegExp(`^.{0,20}${h.re.source}`, "i").test(trimmed)) {
-        continue;
+type MarkerHit = { family: SubstrateFamily; index: number; len: number };
+
+function collectMarkers(text: string): MarkerHit[] {
+  const hits: MarkerHit[] = [];
+  for (const { family, re } of MARKERS) {
+    const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    let m: RegExpExecArray | null;
+    while ((m = g.exec(text))) {
+      // Skip immersion credential prose without prep verbs nearby.
+      if (family === "steel-immersion") {
+        const around = text.slice(Math.max(0, m.index - 30), m.index + m[0].length + 80);
+        if (/CIP|credential|inspector|trained/i.test(around) && !/SSPC|NACE\s*No|blast|profile|prep/i.test(around)) {
+          continue;
+        }
       }
-      return h.family;
+      hits.push({ family, index: m.index, len: m[0].length });
     }
   }
-  return null;
-}
-
-function sectionBlobs(text: string): Partial<Record<SubstrateFamily, string>> {
-  const lines = normalize(text).split(/\n/);
-  const blobs: Partial<Record<SubstrateFamily, string[]>> = {};
-  let current: SubstrateFamily | null = null;
-
-  for (const line of lines) {
-    const header = detectHeaderFamily(line);
-    if (header) {
-      current = header;
-      blobs[current] ??= [];
-      blobs[current]!.push(line);
-      continue;
-    }
-    if (current) {
-      blobs[current] ??= [];
-      blobs[current]!.push(line);
-    }
-  }
-
-  const out: Partial<Record<SubstrateFamily, string>> = {};
-  for (const [k, v] of Object.entries(blobs) as [SubstrateFamily, string[]][]) {
-    out[k] = v.join("\n");
+  hits.sort((a, b) => a.index - b.index || b.len - a.len);
+  // De-dupe overlapping starts (keep first after sort).
+  const out: MarkerHit[] = [];
+  let lastEnd = -1;
+  for (const h of hits) {
+    if (h.index < lastEnd) continue;
+    out.push(h);
+    lastEnd = h.index + h.len;
   }
   return out;
 }
 
-/** Window around family keyword when PDS is not cleanly sectioned. */
-function proximityBlob(text: string, family: SubstrateFamily): string {
-  const n = normalize(text);
-  const re = HEADER.find((h) => h.family === family)!.re;
+function chunkForFamily(text: string, family: SubstrateFamily, markers: MarkerHit[]): string {
   const parts: string[] = [];
-  const flags = re.flags.includes("g") ? re.flags : re.flags + "g";
-  const g = new RegExp(re.source, flags);
-  let m: RegExpExecArray | null;
-  while ((m = g.exec(n)) && parts.length < 4) {
-    const start = Math.max(0, m.index - 40);
-    const end = Math.min(n.length, m.index + m[0].length + 280);
-    parts.push(n.slice(start, end));
+  for (let i = 0; i < markers.length; i++) {
+    const m = markers[i];
+    if (m.family !== family) continue;
+    const start = m.index;
+    const next = markers.slice(i + 1).find((x) => x.index > start);
+    const end = next ? next.index : Math.min(text.length, start + 400);
+    parts.push(text.slice(start, end));
   }
   return parts.join("\n\n");
 }
@@ -144,12 +126,7 @@ function gateFromChunk(family: SubstrateFamily, chunk: string): SubstratePrepGat
   if (!chunk.trim()) return null;
   const methods = extractMethods(chunk);
   const profile = extractProfileStrict(chunk);
-  // Present only when the sheet ties prep language to this family.
-  if (!methods.length && !profile) {
-    // Explicit substrate mention alone is not enough without a prep method nearby.
-    return null;
-  }
-  // Concrete / non-ferrous may list ICRI or SP16 without NACE — already in methods.
+  if (!methods.length && !profile) return null;
   return {
     family,
     label: FAMILY_LABEL[family],
@@ -159,21 +136,16 @@ function gateFromChunk(family: SubstrateFamily, chunk: string): SubstratePrepGat
 }
 
 /**
- * Manufacturer-agnostic: parse sectioned PDS prep into per-substrate gates.
+ * Manufacturer-agnostic: parse sectioned (or mid-line) PDS prep into per-substrate gates.
  * Silent → omitted gate (not invented).
  */
 export function parsePrepBySubstrate(text: string): SubstratePrepGate[] {
-  const sections = sectionBlobs(text);
-  const families: SubstrateFamily[] = [
-    "steel-immersion",
-    "steel-non-immersion",
-    "concrete",
-    "non-ferrous",
-  ];
+  const n = normalize(text);
+  const markers = collectMarkers(n);
   const gates: SubstratePrepGate[] = [];
 
-  for (const family of families) {
-    const chunk = sections[family] || proximityBlob(text, family);
+  for (const family of FAMILIES) {
+    const chunk = chunkForFamily(n, family, markers);
     const gate = gateFromChunk(family, chunk);
     if (gate) gates.push(gate);
   }
