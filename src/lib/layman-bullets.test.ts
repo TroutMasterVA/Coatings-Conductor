@@ -10,14 +10,18 @@ describe("layman bullets from on-device extract", () => {
     const bullets = buildLaymanBullets(card);
     const text = bullets.join(" | ");
     assert.match(text, /Macropoxy/i);
-    assert.match(text, /Substrates:/i);
-    assert.match(text, /Prep gates:/i);
+    assert.ok(
+      /Substrates:/i.test(text) || /Steel immersion:|Steel non-immersion:/i.test(text),
+      "expected substrates or per-gate prep lines",
+    );
+    assert.ok(/Prep gates:|Steel immersion:|Steel non-immersion:|SSPC|NACE/i.test(text));
     assert.match(text, /SSPC|NACE|AMPP/i);
     assert.match(text, /Go gates:/i);
     assert.match(text, /dew spread/i);
     assert.match(text, /no rain/i);
     assert.ok(bullets.length >= 4);
     assert.equal(bullets.some((b) => /Review every field/i.test(b)), false);
+    assert.ok((card.surfacePrep.prepGates?.length ?? 0) >= 2, "Macropoxy should yield immersion + atmospheric gates");
   });
 
   it("does not invent dew when the sheet is silent", () => {
