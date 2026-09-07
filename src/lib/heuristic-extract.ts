@@ -63,7 +63,7 @@ export function heuristicExtract(text: string): FieldCardData {
   const manufacturer = firstMatch(t, [
     /manufacturer[:\s]+([^\n]+)/i,
     /prepared\s+by[:\s]+([^\n]+)/i,
-    /(Sherwin-Williams|PPG|Carboline|Sika|Tremco|3M|BASF|Master Builders|International Paint|Hempel|Jotun|Tnemec|AkzoNobel|Awlgrip|Rust-Oleum)[^\n]*/i,
+    /(Sherwin-Williams|PPG|Carboline|Sika|Tremco|3M|BASF|Master Builders|International Paint|Hempel|Jotun|Tnemec|AkzoNobel|Awlgrip|Rust-Oleum|Kansai|Nippon Paint|Dulux|Benjamin Moore|Valspar|Axalta|Dupont|DuPont|RPM|Carboline|Devcon|ITW|Loctite|Permatex|Henry|Pecora|Sonneborn|Euclid|Mapei|LATICRETE|Prosoco)[^\n]*/i,
   ]);
 
   const mixRatio = firstMatch(t, [
@@ -90,7 +90,9 @@ export function heuristicExtract(text: string): FieldCardData {
 
   const sspc = allMatches(t, /SSPC[-\s]?SP\s?\d+[A-Z]?/gi);
   const nace = allMatches(t, /NACE(?:\s+No\.?\s*\d+|\s+SP\d+)?/gi);
-  const methodsPrep = [...sspc, ...nace];
+  const ampp = allMatches(t, /AMPP[^\n,]{0,40}/gi);
+  const astm = allMatches(t, /ASTM\s+[A-Z]?\d+(?:\/[^\s,;]+)?/gi);
+  const methodsPrep = [...sspc, ...nace, ...ampp, ...astm];
 
   const tempPairs = [
     ...t.matchAll(
@@ -163,6 +165,12 @@ export function heuristicExtract(text: string): FieldCardData {
 
   const ppe = allMatches(t, /(respirator|goggles|gloves|protective clothing|eye protection|face shield|tyvek)/gi);
 
+  const service = firstMatch(t, [
+    /service[:\s]+([^\n]+)/i,
+    /(?:recommended\s+)?(?:use|uses|applications?)[:\s]+([^\n]{8,120})/i,
+    /(?:for\s+use\s+on|intended\s+for)[:\s]+([^\n]{8,120})/i,
+  ]);
+
   return {
     id: crypto.randomUUID(),
     extractedAt: new Date().toISOString(),
@@ -178,7 +186,7 @@ export function heuristicExtract(text: string): FieldCardData {
       voc,
       mixRatio,
       colors: [],
-      service: firstMatch(t, [/service[:\s]+([^\n]+)/i]),
+      service: service.slice(0, 160),
     },
     storage: {
       temperatureRange: storageRange,
@@ -196,7 +204,10 @@ export function heuristicExtract(text: string): FieldCardData {
       notes: "",
     },
     surfacePrep: {
-      substrates: allMatches(t, /(mill[\s-]?scale|bare steel|carbon steel|galvanized|aluminum|aluminium|light painted concrete|dark painted concrete|painted concrete|concrete|wood|glass)/gi),
+      substrates: allMatches(
+        t,
+        /(mill[\s-]?scale|bare steel|carbon steel|structural steel|galvanized|aluminum|aluminium|light painted concrete|dark painted concrete|painted concrete|concrete|masonry|wood|glass|previously coated|existing coating)/gi,
+      ),
       methods: methodsPrep,
       profile,
       cleanliness: firstMatch(t, [/cleanliness[:\s]+([^\n]+)/i]),
@@ -213,7 +224,7 @@ export function heuristicExtract(text: string): FieldCardData {
       notes: "",
     },
     installation: {
-      methods: allMatches(t, /(airless|conventional spray|brush|roller|trowel|squeegee|caulk|plural)/gi),
+      methods: allMatches(t, /(airless|conventional spray|brush|roller|trowel|squeegee|caulk|plural|gun)/gi),
       filmThickness: dft,
       coverage,
       numberOfCoats: firstMatch(t, [/(?:number of )?coats?[:\s]+([^\n]+)/i]),
