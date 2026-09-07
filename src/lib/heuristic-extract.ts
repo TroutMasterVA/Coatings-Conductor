@@ -1,4 +1,9 @@
 import type { Environmentals, FieldCardData, HoldPoint } from "./types";
+import {
+  methodsFromGates,
+  parsePrepBySubstrate,
+  substratesFromGates,
+} from "./prep-by-substrate.ts";
 
 function num(m: RegExpMatchArray | null, i = 1): number | null {
   if (!m?.[i]) return null;
@@ -78,21 +83,20 @@ export function heuristicExtract(text: string): FieldCardData {
     /(?:recommended\s+)?(?:dft|dry\s+film(?:\s+thickness)?)[:\s]+([^\n]+)/i,
     /(\d+\s*[–-]\s*\d+\s*mils?\s*(?:dft|dft)?)/i,
   ]);
-  const profile = firstMatch(t, [
-    /(?:anchor\s+)?profile[:\s]+([^\n]+)/i,
-    /(\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?\s*mils?.{0,20}profile)/i,
-  ]);
   const recoatMin = firstMatch(t, [/recoat(?:ing)?\s+(?:min(?:imum)?|window)[:\s]+([^\n]+)/i, /minimum\s+recoat[:\s]+([^\n]+)/i]);
   const recoatMax = firstMatch(t, [/maximum\s+recoat[:\s]+([^\n]+)/i, /recoat(?:ing)?\s+max(?:imum)?[:\s]+([^\n]+)/i]);
   const coverage = firstMatch(t, [/coverage[:\s]+([^\n]+)/i, /theoretical\s+coverage[:\s]+([^\n]+)/i]);
   const induction = firstMatch(t, [/induction[:\s]+([^\n]+)/i, /sweat-?in[:\s]+([^\n]+)/i]);
   const thinning = firstMatch(t, [/thinn(?:ing|er)[:\s]+([^\n]+)/i]);
 
-  const sspc = allMatches(t, /SSPC[-\s]?SP\s?\d+[A-Z]?/gi);
-  const nace = allMatches(t, /NACE(?:\s+No\.?\s*\d+|\s+SP\d+)?/gi);
-  const ampp = allMatches(t, /AMPP[^\n,]{0,40}/gi);
-  const astm = allMatches(t, /ASTM\s+[A-Z]?\d+(?:\/[^\s,;]+)?/gi);
-  const methodsPrep = [...sspc, ...nace, ...ampp, ...astm];
+  const prepGates = parsePrepBySubstrate(t);
+  const substrates = substratesFromGates(prepGates);
+  const methodsPrep = methodsFromGates(prepGates);
+  // Per-gate profiles only — never a single first-hit mil string for the whole sheet.
+  const profile =
+    prepGates.length === 1 && prepGates[0].profile
+      ? prepGates[0].profile
+      : "";
 
   const tempPairs = [
     ...t.matchAll(
@@ -151,11 +155,29 @@ export function heuristicExtract(text: string): FieldCardData {
     /store(?:d)?\s+(?:indoors\s+)?at[:\s]+([^\n]+)/i,
   ]);
 
+  const prepCriteria =
+    prepGates.length > 0
+      ? prepGates
+          .map((g) => {
+            const bits = [g.label, ...g.methods];
+            if (g.profile) bits.push(`profile ${g.profile}`);
+            return bits.join(": ").replace(/^([^:]+):\s*/, "$1 — ");
+          })
+          .join(" · ")
+      : "Prep per PDS / spec";
+
   const holdPoints: HoldPoint[] = [
     { step: 1, name: "Material receipt", criteria: shelf ? `Unexpired (${shelf})` : "Verify batch and shelf life", owner: "QC", timing: "Before staging", source: "inferred" },
     { step: 2, name: "Storage check", criteria: storageRange || "Stored per PDS temperature and dryness", owner: "QC", timing: "Before issuing to the crew", source: "inferred" },
     { step: 3, name: "Credentials", criteria: "Applicator / inspector credentials on file", owner: "QC", timing: "Before work", source: "inferred" },
-    { step: 4, name: "Surface preparation", criteria: methodsPrep.slice(0, 3).join(", ") || "Prep per PDS / spec", owner: "QC", timing: "Before coating or placement", source: methodsPrep.length ? "stated" : "inferred" },
+    {
+      step: 4,
+      name: "Surface preparation",
+      criteria: prepCriteria,
+      owner: "QC",
+      timing: "Before coating or placement",
+      source: prepGates.length ? "stated" : "inferred",
+    },
     { step: 5, name: "Ambient / dew point", criteria: "In-window air, substrate, RH, dew-point spread; no precipitation", owner: "Applicator + QC", timing: "Immediately before application", source: "inferred" },
     { step: 6, name: "Mix", criteria: mixRatio ? `Ratio ${mixRatio}` : "Mix per PDS", owner: "Applicator", timing: "At combine; mark pot-life start", source: mixRatio ? "stated" : "inferred" },
     { step: 7, name: "Application", criteria: dft || "Film build / placement per PDS", owner: "Applicator + QC", timing: "During work (WFT / workmanship)", source: dft ? "stated" : "inferred" },
@@ -204,15 +226,13 @@ export function heuristicExtract(text: string): FieldCardData {
       notes: "",
     },
     surfacePrep: {
-      substrates: allMatches(
-        t,
-        /(mill[\s-]?scale|bare steel|carbon steel|structural steel|galvanized|aluminum|aluminium|light painted concrete|dark painted concrete|painted concrete|concrete|masonry|wood|glass|previously coated|existing coating)/gi,
-      ),
+      substrates,
       methods: methodsPrep,
       profile,
       cleanliness: firstMatch(t, [/cleanliness[:\s]+([^\n]+)/i]),
       moisture: firstMatch(t, [/(surface must be dry[^\n]*)/i, /moisture[:\s]+([^\n]+)/i]),
       notes: "",
+      prepGates,
     },
     environmentals: env,
     mixing: {
