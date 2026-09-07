@@ -100,6 +100,17 @@ export function FieldCardView({
             </div>
           </header>
 
+          {card.extractionNotes.length ? (
+            <ul className="mt-4 space-y-1.5 rounded-lg bg-paper-edge/60 px-3 py-3 text-sm leading-snug text-ink">
+              {card.extractionNotes.map((note) => (
+                <li key={note} className="flex gap-2">
+                  <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
+                  <span>{note}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
           <dl className="print-only mt-3 space-y-1 border-b border-rail/80 pb-3 text-xs text-ink">
             <div>
               <dt className="inline font-semibold uppercase tracking-[0.14em] text-ink-muted">ZIP </dt>
@@ -277,10 +288,6 @@ export function FieldCardView({
               <Cell label="Hazards" value={join(card.safety.hazards)} />
             </Section>
           </div>
-
-          {card.extractionNotes.length ? (
-            <p className={cn("mt-4 text-xs leading-relaxed text-ink-muted")}>{card.extractionNotes.join(" ")}</p>
-          ) : null}
         </div>
       </div>
     </article>
