@@ -1,9 +1,8 @@
 import type { FieldCardData } from "./types.ts";
 
 /**
- * Clear layman bullets a semi-pro can trust in ~2 minutes.
- * Covers substrates, use cases, decision gates, and standards when the PDS stated them.
- * Does not invent numbers — blanks stay off the list.
+ * Tight stated attributes for the primary job card face.
+ * Only what drives go-gates / windows or a clear decision — no soft paraphrase, no filler.
  */
 export function buildLaymanBullets(card: FieldCardData): string[] {
   const bullets: string[] = [];
@@ -17,7 +16,7 @@ export function buildLaymanBullets(card: FieldCardData): string[] {
     bullets.push(who ? `${name} (${who}).` : `${name}.`);
   }
 
-  if (service) bullets.push(`Use: ${service}.`);
+  if (service) bullets.push(`Service: ${service}.`);
 
   const substrates = (card.surfacePrep.substrates ?? []).filter(Boolean);
   if (substrates.length) bullets.push(`Substrates: ${substrates.join(", ")}.`);
@@ -32,27 +31,23 @@ export function buildLaymanBullets(card: FieldCardData): string[] {
   const env = card.environmentals;
   const gates: string[] = [];
   if (env.ambientTempMinF != null || env.ambientTempMaxF != null) {
-    gates.push(
-      `air ${env.ambientTempMinF ?? "—"}–${env.ambientTempMaxF ?? "—"}°F`,
-    );
+    gates.push(`air ${env.ambientTempMinF ?? "—"}–${env.ambientTempMaxF ?? "—"}°F`);
   }
   if (env.substrateTempMinF != null || env.substrateTempMaxF != null) {
-    gates.push(
-      `substrate ${env.substrateTempMinF ?? "—"}–${env.substrateTempMaxF ?? "—"}°F`,
-    );
+    gates.push(`substrate ${env.substrateTempMinF ?? "—"}–${env.substrateTempMaxF ?? "—"}°F`);
   }
   if (env.dewPointSpreadMinF != null) {
     gates.push(`dew spread ≥ ${env.dewPointSpreadMinF}°F`);
   } else {
-    gates.push("dew spread not stated (windows will not score go)");
+    gates.push("dew spread not stated");
   }
   if (env.relativeHumidityMax != null) gates.push(`RH ≤ ${env.relativeHumidityMax}%`);
   if (env.precipitationAllowed === false) gates.push("no rain/wet");
-  else if (env.precipitationAllowed === true) gates.push("rain allowed when stated");
   if (env.windMaxMph != null) gates.push(`wind ≤ ${env.windMaxMph} mph`);
   if (gates.length) bullets.push(`Go gates: ${gates.join("; ")}.`);
 
-  if (card.product.mixRatio) bullets.push(`Mix: ${card.product.mixRatio}.`);
+  const mix = card.product.mixRatio || card.mixing.ratio;
+  if (mix) bullets.push(`Mix: ${mix}.`);
   if (card.installation.filmThickness) bullets.push(`Film: ${card.installation.filmThickness}.`);
   if (card.cure.recoatMin || card.cure.recoatMax) {
     bullets.push(
@@ -60,6 +55,5 @@ export function buildLaymanBullets(card: FieldCardData): string[] {
     );
   }
 
-  bullets.push("Review every field against the current manufacturer revision before use.");
   return bullets;
 }

@@ -5,20 +5,20 @@ import { buildLaymanBullets } from "./layman-bullets.ts";
 import { SAMPLE_PDS_TEXT } from "./samples.ts";
 
 describe("layman bullets from on-device extract", () => {
-  it("covers substrates, use, gates, and standards for Macropoxy", () => {
+  it("covers substrates, service, gates, and standards for Macropoxy", () => {
     const card = buildCardFromPds(SAMPLE_PDS_TEXT.macropoxy);
     const bullets = buildLaymanBullets(card);
     const text = bullets.join(" | ");
     assert.match(text, /Macropoxy/i);
     assert.match(text, /Substrates:/i);
-    assert.match(text, /Use:/i);
+    assert.match(text, /Service:/i);
     assert.match(text, /Standards:/i);
     assert.match(text, /SSPC|NACE|AMPP/i);
     assert.match(text, /Go gates:/i);
     assert.match(text, /dew spread/i);
     assert.match(text, /no rain/i);
     assert.ok(bullets.length >= 4);
-    assert.match(bullets.at(-1) ?? "", /Review every field/i);
+    assert.equal(bullets.some((b) => /Review every field/i.test(b)), false);
   });
 
   it("does not invent dew when the sheet is silent", () => {
@@ -38,6 +38,6 @@ Service: atmospheric steel.
   it("handles sealant / adhesive style sheets", () => {
     const card = buildCardFromPds(SAMPLE_PDS_TEXT.dymonic);
     const bullets = buildLaymanBullets(card);
-    assert.match(bullets.join(" "), /Dymonic|Tremco|sealant|joint|Use:/i);
+    assert.match(bullets.join(" "), /Dymonic|Tremco|sealant|joint|Service:/i);
   });
 });
