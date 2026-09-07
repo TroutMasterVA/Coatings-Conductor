@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { FieldCardData } from "@/lib/types";
+import type { FieldCardData, SubstratePrepGate } from "@/lib/types";
 import { STEP_RAIL } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -76,8 +76,20 @@ function goGateChips(card: FieldCardData): string[] {
   return chips;
 }
 
-/** Stated prep gold bars (SSPC/NACE/ICRI/… + profile) — decision gates, not a dump. */
-function prepGateChips(card: FieldCardData): string[] {
+function formatPrepGate(gate: SubstratePrepGate): string {
+  const methods = (gate.methods ?? []).filter(Boolean).join(" · ");
+  const profile = gate.profile?.trim();
+  const detail = [methods, profile ? `profile ${profile}` : ""].filter(Boolean).join(" · ");
+  return detail ? `${gate.label}: ${detail}` : gate.label;
+}
+
+/** Prefer BE per-substrate prepGates; fall back to flat methods/profile. */
+function prepGateLines(card: FieldCardData): string[] {
+  const structured = (card.surfacePrep.prepGates ?? []).filter(
+    (g) => g && (g.methods?.length || stated(g.profile) || stated(g.label)),
+  );
+  if (structured.length) return structured.map(formatPrepGate);
+
   const chips = [
     ...(card.surfacePrep.methods ?? []),
     ...(card.credentials.required ?? []),
@@ -137,6 +149,16 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
           <Cell label="Cleanliness" value={card.surfacePrep.cleanliness} />
           <Cell label="Moisture" value={card.surfacePrep.moisture} />
         </div>
+        {(card.surfacePrep.prepGates ?? []).length ? (
+          <ul className="space-y-1 text-sm">
+            {card.surfacePrep.prepGates.map((g) => (
+              <li key={`${g.family}-${g.label}`} className="flex gap-2">
+                <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
+                <span>{formatPrepGate(g)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {card.surfacePrep.notes ? <p className="text-sm text-ink-muted">{card.surfacePrep.notes}</p> : null}
       </Section>
 
@@ -257,7 +279,7 @@ export function FieldCardView({
 }) {
   const mid = "·";
   const envGates = goGateChips(card);
-  const prepGates = prepGateChips(card);
+  const prepLines = prepGateLines(card);
   const mix = card.product.mixRatio || card.mixing.ratio;
   const recoat = [card.cure.recoatMin && `min ${card.cure.recoatMin}`, card.cure.recoatMax && `max ${card.cure.recoatMax}`]
     .filter(Boolean)
@@ -304,17 +326,17 @@ export function FieldCardView({
             </div>
           </dl>
 
-          {/* Primary face: BE gold-bar prep + window-driving attrs only. */}
           <div className="mt-4">
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Prep gates</p>
-            {prepGates.length ? (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {prepGates.map((item) => (
-                  <span key={item} className="rounded-sm bg-paper-edge px-2 py-1 font-mono text-xs text-ink">
-                    {item}
-                  </span>
+            {prepLines.length ? (
+              <ul className="mt-2 space-y-1.5">
+                {prepLines.map((line) => (
+                  <li key={line} className="flex gap-2 text-sm leading-snug text-ink">
+                    <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
+                    <span className="font-mono text-xs sm:text-sm">{line}</span>
+                  </li>
                 ))}
-              </div>
+              </ul>
             ) : (
               <p className="mt-2 text-sm text-ink-muted">Not stated</p>
             )}
@@ -390,7 +412,7 @@ export function EmptyCardSkeleton() {
             </div>
           </div>
           <p className="mt-3 max-w-md text-sm text-ink-muted">
-            Prep gates and go-gates only on the job card — then NOAA windows score against them.
+            Per-substrate prep gates and go-gates only — then NOAA windows score against them.
           </p>
         </div>
       </div>
