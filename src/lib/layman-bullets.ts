@@ -2,7 +2,7 @@ import type { FieldCardData } from "./types.ts";
 
 /**
  * Tight stated attributes for extract notes / tooling.
- * Primary card face is FieldCardView (prep gates + go gates) — this is not the default UI dump.
+ * Primary card face should read surfacePrep.prepGates — not a PDS dump.
  */
 export function buildLaymanBullets(card: FieldCardData): string[] {
   const bullets: string[] = [];
@@ -18,16 +18,24 @@ export function buildLaymanBullets(card: FieldCardData): string[] {
 
   if (service) bullets.push(`Service: ${service}.`);
 
-  const substrates = (card.surfacePrep.substrates ?? []).filter(Boolean);
-  if (substrates.length) bullets.push(`Substrates: ${substrates.join(", ")}.`);
-
-  const prep = [
-    ...(card.surfacePrep.methods ?? []),
-    ...(card.credentials.required ?? []),
-  ].filter((s) => /SSPC|NACE|AMPP|ASTM|ISO|ICR|PCI|CIP|SP\s?\d+/i.test(s));
-  const uniqPrep = [...new Set(prep.map((s) => s.trim()).filter(Boolean))];
-  if (card.surfacePrep.profile?.trim()) uniqPrep.push(`profile ${card.surfacePrep.profile.trim()}`);
-  if (uniqPrep.length) bullets.push(`Prep gates: ${uniqPrep.slice(0, 8).join("; ")}.`);
+  const prepGates = card.surfacePrep.prepGates ?? [];
+  if (prepGates.length) {
+    for (const g of prepGates) {
+      const bits = [...g.methods];
+      if (g.profile?.trim()) bits.push(`profile ${g.profile.trim()}`);
+      bullets.push(`${g.label}: ${bits.length ? bits.join(", ") : "Not stated"}.`);
+    }
+  } else {
+    const substrates = (card.surfacePrep.substrates ?? []).filter(Boolean);
+    if (substrates.length) bullets.push(`Substrates: ${substrates.join(", ")}.`);
+    const prep = [
+      ...(card.surfacePrep.methods ?? []),
+      ...(card.credentials.required ?? []),
+    ].filter((s) => /SSPC|NACE|AMPP|ASTM|ISO|ICR|PCI|CIP|SP\s?\d+/i.test(s));
+    const uniqPrep = [...new Set(prep.map((s) => s.trim()).filter(Boolean))];
+    if (card.surfacePrep.profile?.trim()) uniqPrep.push(`profile ${card.surfacePrep.profile.trim()}`);
+    if (uniqPrep.length) bullets.push(`Prep gates: ${uniqPrep.slice(0, 8).join("; ")}.`);
+  }
 
   const env = card.environmentals;
   const gates: string[] = [];
