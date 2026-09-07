@@ -1,4 +1,9 @@
 import type { Environmentals, FieldCardData, HoldPoint } from "./types";
+import {
+  methodsFromGates,
+  parsePrepBySubstrate,
+  substratesFromGates,
+} from "./prep-by-substrate.ts";
 
 function num(m: RegExpMatchArray | null, i = 1): number | null {
   if (!m?.[i]) return null;
@@ -45,6 +50,24 @@ function precipitationAllowedFromText(t: string): boolean {
   );
 }
 
+/** Stated dew-point spread only — never invent 5°F from a bare dew mention. */
+function dewPointSpreadFromText(t: string): number | null {
+  const patterns: RegExp[] = [
+    // "5°F above the dew point"
+    /(\d+(?:\.\d+)?)\s*°?\s*([CF])?(?:\s*\([^)]{0,16}\))?\s*(?:above|over|higher than)\s+(?:the\s+)?dew/i,
+    // "Dew point spread 5 F minimum" / "dew-point spread: 5°F"
+    /dew[\s-]?point\s+spread[:\s]+(\d+(?:\.\d+)?)\s*°?\s*([CF])?/i,
+    // "minimum dew point spread of 5 F" / "dew point spread of at least 5°F"
+    /(?:minimum|min\.?)\s+dew[\s-]?point\s+spread(?:\s+of)?[:\s]+(\d+(?:\.\d+)?)\s*°?\s*([CF])?/i,
+    /dew[\s-]?point\s+spread(?:\s+of)?\s+(?:at\s+least\s+)?(\d+(?:\.\d+)?)\s*°?\s*([CF])?/i,
+  ];
+  for (const p of patterns) {
+    const m = t.match(p);
+    if (m?.[1]) return toF(Number(m[1]), m[2]);
+  }
+  return null;
+}
+
 export function heuristicExtract(text: string): FieldCardData {
   const t = text.replace(/\u00a0/g, " ").replace(/\s+\n/g, "\n");
   const lines = t
@@ -63,7 +86,7 @@ export function heuristicExtract(text: string): FieldCardData {
   const manufacturer = firstMatch(t, [
     /manufacturer[:\s]+([^\n]+)/i,
     /prepared\s+by[:\s]+([^\n]+)/i,
-    /(Sherwin-Williams|PPG|Carboline|Sika|Tremco|3M|BASF|Master Builders|International Paint|Hempel|Jotun|Tnemec|AkzoNobel|Awlgrip|Rust-Oleum)[^\n]*/i,
+    /(Sherwin-Williams|PPG|Carboline|Sika|Tremco|3M|BASF|Master Builders|International Paint|Hempel|Jotun|Tnemec|AkzoNobel|Awlgrip|Rust-Oleum|Kansai|Nippon Paint|Dulux|Benjamin Moore|Valspar|Axalta|Dupont|DuPont|RPM|Carboline|Devcon|ITW|Loctite|Permatex|Henry|Pecora|Sonneborn|Euclid|Mapei|LATICRETE|Prosoco)[^\n]*/i,
   ]);
 
   const mixRatio = firstMatch(t, [
@@ -78,19 +101,20 @@ export function heuristicExtract(text: string): FieldCardData {
     /(?:recommended\s+)?(?:dft|dry\s+film(?:\s+thickness)?)[:\s]+([^\n]+)/i,
     /(\d+\s*[–-]\s*\d+\s*mils?\s*(?:dft|dft)?)/i,
   ]);
-  const profile = firstMatch(t, [
-    /(?:anchor\s+)?profile[:\s]+([^\n]+)/i,
-    /(\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?\s*mils?.{0,20}profile)/i,
-  ]);
   const recoatMin = firstMatch(t, [/recoat(?:ing)?\s+(?:min(?:imum)?|window)[:\s]+([^\n]+)/i, /minimum\s+recoat[:\s]+([^\n]+)/i]);
   const recoatMax = firstMatch(t, [/maximum\s+recoat[:\s]+([^\n]+)/i, /recoat(?:ing)?\s+max(?:imum)?[:\s]+([^\n]+)/i]);
   const coverage = firstMatch(t, [/coverage[:\s]+([^\n]+)/i, /theoretical\s+coverage[:\s]+([^\n]+)/i]);
   const induction = firstMatch(t, [/induction[:\s]+([^\n]+)/i, /sweat-?in[:\s]+([^\n]+)/i]);
   const thinning = firstMatch(t, [/thinn(?:ing|er)[:\s]+([^\n]+)/i]);
 
-  const sspc = allMatches(t, /SSPC[-\s]?SP\s?\d+[A-Z]?/gi);
-  const nace = allMatches(t, /NACE(?:\s+No\.?\s*\d+|\s+SP\d+)?/gi);
-  const methodsPrep = [...sspc, ...nace];
+  const prepGates = parsePrepBySubstrate(t);
+  const substrates = substratesFromGates(prepGates);
+  const methodsPrep = methodsFromGates(prepGates);
+  // Per-gate profiles only — never a single first-hit mil string for the whole sheet.
+  const profile =
+    prepGates.length === 1 && prepGates[0].profile
+      ? prepGates[0].profile
+      : "";
 
   const tempPairs = [
     ...t.matchAll(
@@ -139,21 +163,36 @@ export function heuristicExtract(text: string): FieldCardData {
   const rh = t.match(/relative humidity[^\n]{0,40}?(\d+)\s*%/i);
   if (rh) env.relativeHumidityMax = Number(rh[1]);
 
-  const dew = t.match(
-    /(\d+(?:\.\d+)?)\s*°?\s*([CF])?(?:\s*\([^)]{0,16}\))?\s*(?:above|over|higher than)\s+(?:the\s+)?dew/i,
-  );
-  if (dew) env.dewPointSpreadMinF = toF(Number(dew[1]), dew[2]);
+  env.dewPointSpreadMinF = dewPointSpreadFromText(t);
 
   const storageRange = firstMatch(t, [
     /stor(?:e|age)[^\n]{0,40}?(\d+\s*°?\s*[CF][^\n]{0,20}\d+\s*°?\s*[CF])/i,
     /store(?:d)?\s+(?:indoors\s+)?at[:\s]+([^\n]+)/i,
   ]);
 
+  const prepCriteria =
+    prepGates.length > 0
+      ? prepGates
+          .map((g) => {
+            const bits = [g.label, ...g.methods];
+            if (g.profile) bits.push(`profile ${g.profile}`);
+            return bits.join(": ").replace(/^([^:]+):\s*/, "$1 — ");
+          })
+          .join(" · ")
+      : "Prep per PDS / spec";
+
   const holdPoints: HoldPoint[] = [
     { step: 1, name: "Material receipt", criteria: shelf ? `Unexpired (${shelf})` : "Verify batch and shelf life", owner: "QC", timing: "Before staging", source: "inferred" },
     { step: 2, name: "Storage check", criteria: storageRange || "Stored per PDS temperature and dryness", owner: "QC", timing: "Before issuing to the crew", source: "inferred" },
     { step: 3, name: "Credentials", criteria: "Applicator / inspector credentials on file", owner: "QC", timing: "Before work", source: "inferred" },
-    { step: 4, name: "Surface preparation", criteria: methodsPrep.slice(0, 3).join(", ") || "Prep per PDS / spec", owner: "QC", timing: "Before coating or placement", source: methodsPrep.length ? "stated" : "inferred" },
+    {
+      step: 4,
+      name: "Surface preparation",
+      criteria: prepCriteria,
+      owner: "QC",
+      timing: "Before coating or placement",
+      source: prepGates.length ? "stated" : "inferred",
+    },
     { step: 5, name: "Ambient / dew point", criteria: "In-window air, substrate, RH, dew-point spread; no precipitation", owner: "Applicator + QC", timing: "Immediately before application", source: "inferred" },
     { step: 6, name: "Mix", criteria: mixRatio ? `Ratio ${mixRatio}` : "Mix per PDS", owner: "Applicator", timing: "At combine; mark pot-life start", source: mixRatio ? "stated" : "inferred" },
     { step: 7, name: "Application", criteria: dft || "Film build / placement per PDS", owner: "Applicator + QC", timing: "During work (WFT / workmanship)", source: dft ? "stated" : "inferred" },
@@ -162,6 +201,12 @@ export function heuristicExtract(text: string): FieldCardData {
   ];
 
   const ppe = allMatches(t, /(respirator|goggles|gloves|protective clothing|eye protection|face shield|tyvek)/gi);
+
+  const service = firstMatch(t, [
+    /service[:\s]+([^\n]+)/i,
+    /(?:recommended\s+)?(?:use|uses|applications?)[:\s]+([^\n]{8,120})/i,
+    /(?:for\s+use\s+on|intended\s+for)[:\s]+([^\n]{8,120})/i,
+  ]);
 
   return {
     id: crypto.randomUUID(),
@@ -178,7 +223,7 @@ export function heuristicExtract(text: string): FieldCardData {
       voc,
       mixRatio,
       colors: [],
-      service: firstMatch(t, [/service[:\s]+([^\n]+)/i]),
+      service: service.slice(0, 160),
     },
     storage: {
       temperatureRange: storageRange,
@@ -196,12 +241,13 @@ export function heuristicExtract(text: string): FieldCardData {
       notes: "",
     },
     surfacePrep: {
-      substrates: allMatches(t, /(mill[\s-]?scale|bare steel|carbon steel|galvanized|aluminum|aluminium|light painted concrete|dark painted concrete|painted concrete|concrete|wood|glass)/gi),
+      substrates,
       methods: methodsPrep,
       profile,
       cleanliness: firstMatch(t, [/cleanliness[:\s]+([^\n]+)/i]),
       moisture: firstMatch(t, [/(surface must be dry[^\n]*)/i, /moisture[:\s]+([^\n]+)/i]),
       notes: "",
+      prepGates,
     },
     environmentals: env,
     mixing: {
@@ -213,7 +259,7 @@ export function heuristicExtract(text: string): FieldCardData {
       notes: "",
     },
     installation: {
-      methods: allMatches(t, /(airless|conventional spray|brush|roller|trowel|squeegee|caulk|plural)/gi),
+      methods: allMatches(t, /(airless|conventional spray|brush|roller|trowel|squeegee|caulk|plural|gun)/gi),
       filmThickness: dft,
       coverage,
       numberOfCoats: firstMatch(t, [/(?:number of )?coats?[:\s]+([^\n]+)/i]),

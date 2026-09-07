@@ -24,6 +24,20 @@ export type Environmentals = {
   additional: string[];
 };
 
+/** Stated surface-prep gate for one substrate / use family. Empty profile = not stated. */
+export type SubstrateFamily =
+  | "steel-immersion"
+  | "steel-non-immersion"
+  | "concrete"
+  | "non-ferrous";
+
+export type SubstratePrepGate = {
+  family: SubstrateFamily;
+  label: string;
+  methods: string[];
+  profile: string;
+};
+
 export type FieldCardData = {
   id: string;
   extractedAt: string;
@@ -63,6 +77,8 @@ export type FieldCardData = {
     cleanliness: string;
     moisture: string;
     notes: string;
+    /** Per-substrate/use prep gates when the PDS states them. FE primary card reads this. */
+    prepGates?: SubstratePrepGate[];
   };
   environmentals: Environmentals;
   mixing: {

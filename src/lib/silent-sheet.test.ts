@@ -62,6 +62,13 @@ DFT 5-8 mils. Air and surface 40-100 F.
 Surface must be at least 5°F above the dew point.
 `;
 
+const STATED_DEW_SPREAD_PHRASE = `
+Product data sheet — mastic epoxy
+Mix ratio 1:1 by volume. Pot life 2 hours.
+DFT 5-7 mils. Ambient 50-90 F.
+Dew point spread 5 F minimum.
+`;
+
 const SILENT_RAIN = `
 Product data sheet — zinc primer
 Mix ratio 4:1 by volume. Pot life 6 hours.
@@ -100,6 +107,11 @@ describe("silent sheet extract", () => {
 
   it("keeps a stated dew spread", () => {
     const card = heuristicExtract(STATED_DEW);
+    assert.equal(card.environmentals.dewPointSpreadMinF, 5);
+  });
+
+  it("parses Dew point spread N F minimum", () => {
+    const card = heuristicExtract(STATED_DEW_SPREAD_PHRASE);
     assert.equal(card.environmentals.dewPointSpreadMinF, 5);
   });
 
