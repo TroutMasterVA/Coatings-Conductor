@@ -149,10 +149,11 @@ type EditedProvenance = {
 ## Job closeout (smallest version) — Lead ruling 2026-10-18 3:57 PM ET
 
 - Migration `0004_job_status.sql`: `projects.status text not null default 'open'` (`'open' | 'closed'`), `closed_at timestamptz null`, `closed_by text null`.
-- `closeProject({ id })`: `createServerFn` behind `authMiddleware`; owner-only (scoped by `user_id`); idempotent (closing a closed job returns it unchanged). Returns `{ ok: true, project: { ...project, status, closedAt, closedBy } }`.
+- `closeProject({ id })`: `createServerFn` behind `authMiddleware`, same style as `archiveProject`. Owner-only: a non-owner gets the existing `NOT_YOUR_JOB_MESSAGE` throw (same as isolation). Idempotent. Returns `{ ok: true, status: 'closed', closedAt, closedBy }`.
 - `openProject` and the job list include `status`, `closedAt`, `closedBy`.
-- Any `saveProject`, `extractSheet` attach, or field edit on a closed job is refused with `{ ok: false, code: 'JOB_CLOSED' }`. The server enforces this; hiding UI is not enough.
+- Closed job: `saveProject` (and any field edit) throws `new Error(JOB_CLOSED_MESSAGE)` (exported constant, like `NOT_YOUR_JOB_MESSAGE`; text "This job is closed and can't be changed."). `extractSheet` attaching to a closed job returns its normal envelope `{ ok: false, code: 'JOB_CLOSED' }`. The server enforces this; hiding UI is not enough.
+- A closed job is a record: opening, reading, and printing/saving the PDF stay allowed. Only edits and new reads stop. Autosave is off.
 - No reopen in this release.
 - Guest (local) workspace mirrors the same status and refusal client-side.
-- UI: "Close job" button with a confirm step; "Closed" badge on the job and in the list; inputs read-only; `JOB_CLOSED` shows "This job is closed and can't be changed."
+- UI: "Close job" button, confirm "Close this job? It becomes read-only." (Close job / Cancel); "Closed" badge with date on the job and in the list; inputs disabled; print/PDF still available; `JOB_CLOSED` shows the server message.
 - Tests: owner-only, idempotent close, save refused after close.
