@@ -1,5 +1,5 @@
 import { createMiddleware, createServerFn } from "@tanstack/react-start";
-import type { ExtractInput, ExtractResponse } from "./provider.ts";
+import type { ExtractRequest, ExtractResponse } from "./provider.ts";
 import { EXTRACT_DEFAULT_MAX_FILE_MB, runExtract, type RateStore } from "./extract-core.ts";
 import { onDeviceProvider } from "./on-device-provider.ts";
 
@@ -40,13 +40,16 @@ function maxFileBytes(): number {
 
 export const extractSheet = createServerFn({ method: "POST" })
   .middleware([extractAuth])
-  .validator((input: ExtractInput): ExtractInput => {
-    const i = (input ?? {}) as Partial<ExtractInput>;
+  .validator((input: ExtractRequest): ExtractRequest => {
+    // Coerce shape only. Size, base64 and magic-byte checks happen in runExtract (before decoding)
+    // so they come back as coded errors instead of a thrown 500.
+    const i = (input ?? {}) as Partial<ExtractRequest>;
     return {
-      text: typeof i.text === "string" ? i.text : "",
+      fileBase64: typeof i.fileBase64 === "string" ? i.fileBase64 : undefined,
+      mimeType: typeof i.mimeType === "string" ? i.mimeType.slice(0, 200) : undefined,
+      fileName: typeof i.fileName === "string" ? i.fileName.slice(0, 200) : undefined,
+      text: typeof i.text === "string" ? i.text : undefined,
       pages: Array.isArray(i.pages) ? i.pages.filter((p): p is string => typeof p === "string").slice(0, 200) : undefined,
-      pdfBase64: typeof i.pdfBase64 === "string" ? i.pdfBase64 : undefined,
-      fileName: typeof i.fileName === "string" ? i.fileName : undefined,
     };
   })
   .handler(async ({ data, context }): Promise<ExtractResponse> => {

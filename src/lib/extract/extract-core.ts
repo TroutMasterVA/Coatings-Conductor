@@ -1,8 +1,11 @@
 import { heuristicExtract } from "../heuristic-extract.ts";
 import { locateProvenance, sourceOf } from "./provenance.ts";
+import { cleanBase64, isImageMime, maxBase64Length, normalizeMime, sniffFileType, DOCX_MIME } from "./file-type.ts";
+import { readDocxText, readPdfText, type ReadText } from "./server-read.ts";
 import type {
   ExtractErrorCode,
   ExtractInput,
+  ExtractRequest,
   ExtractProvider,
   ExtractResponse,
   ExtractResult,
@@ -52,9 +55,14 @@ export type ExtractLog = (entry: {
   warnings: string[];
 }) => void;
 
+export type TextReaders = {
+  pdf: (bytes: Uint8Array, signal?: AbortSignal) => Promise<ReadText>;
+  docx: (bytes: Uint8Array) => Promise<ReadText>;
+};
+
 export type RunExtractDeps = {
   userId: string | null;
-  input: ExtractInput;
+  input: ExtractRequest;
   azure: ExtractProvider | null;
   onDevice: ExtractProvider;
   rate: RateStore;
@@ -62,6 +70,8 @@ export type RunExtractDeps = {
   timeoutMs?: number;
   maxFileBytes?: number;
   log?: ExtractLog;
+  /** Server-side text readers (pdf.js, mammoth). Injected for tests. */
+  readers?: TextReaders;
 };
 
 class Timeout extends Error {
@@ -98,9 +108,8 @@ function fail(code: ExtractErrorCode, message: string, retryAfterSec?: number): 
   return { ok: false, error: retryAfterSec ? { code, message, retryAfterSec } : { code, message } };
 }
 
-function looksImageOnly(input: ExtractInput): boolean {
-  const text = (input.pages?.join(" ") ?? input.text ?? "").replace(/\s+/g, " ").trim();
-  return Boolean(input.pdfBase64) && text.length < IMAGE_ONLY_TEXT_CHARS;
+function textLength(t: { text: string; pages?: string[] }): number {
+  return (t.pages?.join(" ") ?? t.text).replace(/\s+/g, " ").trim().length;
 }
 
 /** Blank card for a sheet with no readable text: everything Not stated, nothing invented. */
@@ -110,15 +119,66 @@ function emptyResult(input: ExtractInput, warnings: ExtractWarning[]): ExtractRe
   return { card, provenance: locateProvenance(card, src), provider: "on-device", warnings };
 }
 
+type Checked =
+  | { ok: true; input: ExtractInput; bytes?: Uint8Array; clientText: boolean }
+  | { ok: false; code: ExtractErrorCode; message: string };
+
+/** Shape, size and type checks. Runs before the rate slot and before any decoding beyond the cap. */
+export function checkRequest(raw: ExtractRequest | undefined, maxFileBytes: number): Checked {
+  const r = (raw ?? {}) as ExtractRequest;
+  const pages = Array.isArray(r.pages) ? r.pages.filter((p): p is string => typeof p === "string").slice(0, 200) : undefined;
+  const text = typeof r.text === "string" ? r.text : "";
+  const fileName = typeof r.fileName === "string" ? r.fileName.slice(0, 200) : undefined;
+  const clientLen = pages?.length ? pages.join("\n\n").length : text.length;
+  if (clientLen > EXTRACT_MAX_TEXT_CHARS) {
+    return { ok: false, code: "FILE_TOO_LARGE", message: "Sheet text is over 40,000 characters." };
+  }
+  const clientText = clientLen > 0;
+  const mb = Math.round((maxFileBytes / (1024 * 1024)) * 10) / 10;
+
+  if (typeof r.fileBase64 !== "string" || r.fileBase64 === "") {
+    if (!clientText) return { ok: false, code: "EXTRACT_FAILED", message: "Send a file or paste the sheet text." };
+    return { ok: true, input: { text, pages: pages?.length ? pages : undefined, fileName }, clientText };
+  }
+  if (r.fileBase64.length > maxBase64Length(maxFileBytes) + 256) {
+    return { ok: false, code: "FILE_TOO_LARGE", message: `File is over ${mb} MB.` };
+  }
+  const mimeType = normalizeMime(r.mimeType);
+  if (!mimeType) {
+    return { ok: false, code: "UNSUPPORTED_FILE_TYPE", message: "Use a PDF, PNG, JPG, TIFF or Word (.docx) file." };
+  }
+  const b64 = cleanBase64(r.fileBase64);
+  if (!b64) return { ok: false, code: "UNSUPPORTED_FILE_TYPE", message: "The file data could not be read." };
+  if (b64.length > maxBase64Length(maxFileBytes) || base64Bytes(b64) > maxFileBytes) {
+    return { ok: false, code: "FILE_TOO_LARGE", message: `File is over ${mb} MB.` };
+  }
+  const bytes = new Uint8Array(Buffer.from(b64, "base64"));
+  const sniffed = sniffFileType(bytes);
+  if (!sniffed) {
+    return { ok: false, code: "UNSUPPORTED_FILE_TYPE", message: "Use a PDF, PNG, JPG, TIFF or Word (.docx) file." };
+  }
+  if (sniffed !== mimeType) {
+    return { ok: false, code: "UNSUPPORTED_FILE_TYPE", message: "The file's contents do not match its type." };
+  }
+  return {
+    ok: true,
+    input: { text, pages: pages?.length ? pages : undefined, fileBase64: b64, mimeType, fileName },
+    bytes,
+    clientText,
+  };
+}
+
 /**
- * The extract use case, free of framework code so it is testable: size caps, per-user rate limit,
- * Azure first when configured, on-device fallback with a coded warning, 60 s overall deadline.
+ * The extract use case, free of framework code so it is testable: type and size checks, per-user
+ * rate limit, Azure first when configured, on-device fallback with a coded warning, 60 s deadline.
+ * The server, never the browser, decides when a sheet is image-only.
  */
 export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse> {
   const now = deps.now ?? Date.now;
   const started = now();
   const timeoutMs = deps.timeoutMs ?? EXTRACT_TIMEOUT_MS;
   const maxFileBytes = deps.maxFileBytes ?? EXTRACT_DEFAULT_MAX_FILE_MB * 1024 * 1024;
+  const readers = deps.readers ?? { pdf: readPdfText, docx: readDocxText };
   const log = deps.log ?? (() => {});
   const done = (res: ExtractResponse, provider: string, outcome: "ok" | "fallback" | ExtractErrorCode) => {
     log({
@@ -133,20 +193,9 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
 
   if (!deps.userId) return done(fail("UNAUTHENTICATED", "Sign in to read a sheet."), "none", "UNAUTHENTICATED");
 
-  const input: ExtractInput = {
-    text: typeof deps.input?.text === "string" ? deps.input.text : "",
-    pages: Array.isArray(deps.input?.pages) ? deps.input.pages.filter((p) => typeof p === "string") : undefined,
-    pdfBase64: typeof deps.input?.pdfBase64 === "string" ? deps.input.pdfBase64 : undefined,
-    fileName: typeof deps.input?.fileName === "string" ? deps.input.fileName.slice(0, 200) : undefined,
-  };
-  const textLen = input.pages ? input.pages.join("\n\n").length : input.text.length;
-  if (textLen > EXTRACT_MAX_TEXT_CHARS) {
-    return done(fail("FILE_TOO_LARGE", "Sheet text is over 40,000 characters."), "none", "FILE_TOO_LARGE");
-  }
-  if (input.pdfBase64 && base64Bytes(input.pdfBase64) > maxFileBytes) {
-    const mb = Math.round(maxFileBytes / (1024 * 1024));
-    return done(fail("FILE_TOO_LARGE", `PDF is over ${mb} MB.`), "none", "FILE_TOO_LARGE");
-  }
+  const checked = checkRequest(deps.input, maxFileBytes);
+  if (!checked.ok) return done(fail(checked.code, checked.message), "none", checked.code);
+  let input = checked.input;
 
   const slot = takeRateSlot(deps.rate, deps.userId, now());
   if (!slot.ok) {
@@ -174,7 +223,27 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
     warnings.push({ code: "AZURE_NOT_CONFIGURED", message: "Azure reader is not set up; showing the on-device read." });
   }
 
-  if (looksImageOnly(input) && !azure) {
+  // On-device needs text. Use the client's pdf.js text if sent; otherwise read the file here.
+  if (!checked.clientText && checked.bytes && input.mimeType) {
+    const left = timeoutMs - (now() - started);
+    const ctl = new AbortController();
+    try {
+      let read: ReadText = { text: "" };
+      if (input.mimeType === "application/pdf") read = await withDeadline(readers.pdf(checked.bytes, ctl.signal), left, ctl);
+      else if (input.mimeType === DOCX_MIME) read = await withDeadline(readers.docx(checked.bytes), left, ctl);
+      input = { ...input, text: read.text, pages: read.pages?.length ? read.pages : undefined };
+    } catch (err) {
+      if (err instanceof Timeout) {
+        return done(fail("EXTRACT_TIMEOUT", "Reading the sheet took too long."), "none", "EXTRACT_TIMEOUT");
+      }
+      return done(fail("EXTRACT_FAILED", "Could not read this file."), "none", "EXTRACT_FAILED");
+    }
+  }
+
+  const imageOnly =
+    (input.mimeType !== undefined && isImageMime(input.mimeType)) ||
+    (input.mimeType === "application/pdf" && textLength(input) < IMAGE_ONLY_TEXT_CHARS);
+  if (imageOnly) {
     warnings.push({
       code: "IMAGE_ONLY_NEEDS_AZURE",
       message: "This sheet needs the Azure reader. Showing what could be read on-device.",
@@ -185,13 +254,17 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
     return done(fail("EXTRACT_TIMEOUT", "Reading the sheet took too long."), "none", "EXTRACT_TIMEOUT");
   }
 
+  if (imageOnly && textLength(input) === 0) {
+    return done({ ok: true, ...emptyResult(input, warnings) }, "on-device", azure ? "fallback" : "ok");
+  }
+
   try {
     const r = await deps.onDevice.extract(input);
     const res: ExtractResponse = { ok: true, ...r, warnings: [...warnings, ...r.warnings] };
     return done(res, r.provider, azure ? "fallback" : "ok");
   } catch (err) {
-    if (warnings.some((w) => w.code === "IMAGE_ONLY_NEEDS_AZURE")) {
-      return done({ ok: true, ...emptyResult(input, warnings) }, "on-device", "ok");
+    if (imageOnly) {
+      return done({ ok: true, ...emptyResult(input, warnings) }, "on-device", azure ? "fallback" : "ok");
     }
     const message = err instanceof Error && err.message ? err.message : "Could not read this sheet.";
     return done(fail("EXTRACT_FAILED", message), "none", "EXTRACT_FAILED");
