@@ -1,7 +1,29 @@
-import { bareTemperatureLines } from "../heuristic-extract.ts";
+import { bareTemperatureLines, heuristicExtract } from "../heuristic-extract.ts";
 import { buildCardFromPds } from "../on-device-extract.ts";
-import { locateProvenance, sourceOf } from "./provenance.ts";
-import type { ExtractInput, ExtractProvider, ExtractResult } from "./provider.ts";
+import { gateNumbers, sourceOf, unverifiedTempsFromGate } from "./provenance.ts";
+import type { ExtractInput, ExtractProvider, ExtractResult, ExtractWarning, Provenance } from "./provider.ts";
+
+function result(
+  card: ExtractResult["card"],
+  provenance: Provenance,
+  warnings: ExtractWarning[],
+  droppedPaths: string[],
+  bareTemps = false,
+): ExtractResult {
+  return {
+    card,
+    provenance,
+    provider: "on-device",
+    warnings,
+    draft: true,
+    unverifiedTemps: bareTemps || unverifiedTempsFromGate(provenance, droppedPaths),
+  };
+}
+
+const IMAGE_ONLY: ExtractWarning = {
+  code: "IMAGE_ONLY_NEEDS_AZURE",
+  message: "This sheet needs the Azure reader. Showing what could be read on-device.",
+};
 
 /** Wraps the on-device heuristic. Always available; never calls the network. */
 export const onDeviceProvider: ExtractProvider = {
@@ -9,25 +31,30 @@ export const onDeviceProvider: ExtractProvider = {
   available: () => true,
   async extract(input: ExtractInput): Promise<ExtractResult> {
     const src = sourceOf(input);
-    const card = buildCardFromPds(src.text);
-    const provenance = locateProvenance(card, src);
-    const unpinned = Object.values(provenance).filter((p) => p !== "not-stated" && p.quote === "").length;
-    const warnings: ExtractResult["warnings"] = [];
+    if (!src.text.trim()) {
+      // No text layer (photo, scan, or file only): every field Not stated, nothing invented.
+      // App placeholders (e.g. default product label, generic PPE line) are not sheet values either.
+      const blank = gateNumbers(heuristicExtract(" "), src);
+      const provenance = Object.fromEntries(Object.keys(blank.provenance).map((k) => [k, "not-stated" as const]));
+      return result(blank.card, provenance, [IMAGE_ONLY], []);
+    }
+    const { card, provenance, dropped, droppedPaths, unpinned } = gateNumbers(buildCardFromPds(src.text), src);
+    const warnings: ExtractWarning[] = [];
     // Bare numbers on a temperature / application-conditions line (no °F/°C) are never used as
-    // temperatures; the fields stay Not stated and the user is told a value was set aside.
+    // temperatures; the fields stay Not stated, the user is told, and temperatures are unverified.
     const bare = bareTemperatureLines(src.text).length;
-    if (bare) {
+    if (dropped + bare) {
       warnings.push({
         code: "VALUES_DROPPED_UNQUOTED",
-        message: `${bare} value(s) with numbers could not be tied to a line on the sheet and were set to Not stated.`,
+        message: `${dropped + bare} value(s) with numbers could not be tied to a line on the sheet and were set to Not stated.`,
       });
     }
-    if (unpinned) {
+    if (unpinned.length) {
       warnings.push({
         code: "ON_DEVICE_UNPINNED",
-        message: `${unpinned} value(s) were read on-device but no single source line was found. Check them against the sheet.`,
+        message: `${unpinned.length} value(s) were read on-device but no single source line was found. Check them against the sheet.`,
       });
     }
-    return { card, provenance, provider: "on-device", warnings };
+    return result(card, provenance, warnings, droppedPaths, bare > 0);
   },
 };
