@@ -67,6 +67,7 @@ import {
   type ProjectFull,
   type ProjectSummary,
 } from "@/lib/project-store";
+import { setCardValue } from "@/lib/card-edit";
 import { callCloseProject } from "@/lib/job-close-server";
 import {
   canAutosave,
@@ -848,6 +849,14 @@ function App({ user }: { user: AppUser | null }) {
                 zip={zip}
                 headline={scored?.headline}
                 mitigations={selectedMitigationLabels(scoringSite)}
+                onEditField={
+                  closed
+                    ? undefined
+                    : (path, value) => {
+                        // Card only; autosave sends it via saveProject. The server stamps "Edited by".
+                        setCard((prev) => (prev ? setCardValue(prev, path, value) : prev));
+                      }
+                }
               />
             ) : (
               <EmptyCardSkeleton />
