@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SAMPLE_PDS_TEXT, SAMPLES } from "@/lib/samples";
+import { ACCEPT_ATTR, isPdf } from "@/lib/extract-client";
 import { extractPdfText } from "@/lib/pdf-text";
 import type { FieldCardData, SavedCard } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -12,6 +13,7 @@ export function PdsIntake({
   text,
   onText,
   onExtract,
+  onUpload,
   onSample,
   loading,
   recents,
@@ -20,6 +22,8 @@ export function PdsIntake({
   text: string;
   onText: (v: string) => void;
   onExtract: () => void;
+  /** PDF, photo/scan, or Word file picked: hand the file (for the server reader) plus any on-device text. */
+  onUpload: (file: File, text: string) => void;
   onSample: (card: FieldCardData, raw: string) => void;
   loading: boolean;
   recents: SavedCard[];
@@ -31,23 +35,28 @@ export function PdsIntake({
   async function onFile(file: File | undefined) {
     if (!file) return;
     setFileNote(null);
-    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-      try {
-        const extracted = await extractPdfText(file);
-        if (extracted.replace(/\s/g, "").length < 80) {
-          setFileNote("Could not read this sheet.");
-          return;
-        }
-        onText(extracted);
-        setFileNote(`Loaded ${file.name} (${extracted.length.toLocaleString()} characters).`);
-      } catch {
-        setFileNote("Could not read this sheet.");
-      }
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith(".txt") || lower.endsWith(".md") || file.type === "text/plain") {
+      const raw = await file.text();
+      onText(raw);
+      setFileNote(`Loaded ${file.name}.`);
       return;
     }
-    const raw = await file.text();
-    onText(raw);
-    setFileNote(`Loaded ${file.name}.`);
+    let extracted = "";
+    if (isPdf(file)) {
+      try {
+        extracted = await extractPdfText(file);
+      } catch {
+        extracted = "";
+      }
+      // Little or no text on-device is fine to send: the server decides how to read it.
+      if (extracted.replace(/\s/g, "").length < 80) extracted = "";
+      if (extracted) onText(extracted);
+    }
+    setFileNote(
+      extracted ? `Loaded ${file.name} (${extracted.length.toLocaleString()} characters).` : `Loaded ${file.name}.`,
+    );
+    onUpload(file, extracted);
   }
 
   return (
@@ -55,19 +64,19 @@ export function PdsIntake({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <Label htmlFor="pds">Product data sheet</Label>
-          <p className="mt-1 text-sm text-muted">Paste the PDS, or drop a PDF. Samples skip the wait.</p>
+          <p className="mt-1 text-sm text-muted">Paste the PDS, or upload a PDF, photo or scan, or Word file. Samples skip the wait.</p>
         </div>
         <div className="flex gap-2">
           <input
             ref={fileRef}
             type="file"
-            accept=".pdf,.txt,.md,application/pdf,text/plain"
+            accept={`${ACCEPT_ATTR},.txt,.md`}
             className="sr-only"
             onChange={(e) => void onFile(e.target.files?.[0])}
           />
           <Button type="button" variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
             <Upload />
-            PDF / text
+            Upload sheet
           </Button>
         </div>
       </div>

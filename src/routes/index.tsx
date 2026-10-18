@@ -4,6 +4,7 @@ import { Download, FolderOpen, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { BootShell } from "@/components/boot-shell";
 import { Button } from "@/components/ui/button";
+import { ExtractNotice, ProvenancePanel } from "@/components/extract-status";
 import { EmptyCardSkeleton, FieldCardView } from "@/components/field-card-view";
 import { LearningPanel } from "@/components/learning-panel";
 import { PdsIntake } from "@/components/pds-intake";
@@ -13,6 +14,8 @@ import { isUnauthorized, returnToLogin } from "@/lib/auth/expired";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
 import { buildCardFromPds } from "@/lib/on-device-extract";
+import { bytesToBase64, extractPasted, extractUpload, type ExtractState } from "@/lib/extract-client";
+import { callExtractSheet } from "@/lib/extract-server";
 import { loadForecast } from "@/lib/forecast";
 import {
   DEFAULT_CALIBRATION,
@@ -116,6 +119,10 @@ function App({ user }: { user: AppUser | null }) {
   const [card, setCard] = useState<FieldCardData | null>(null);
   const [forecast, setForecast] = useState<ForecastBundle | null>(null);
   const [extracting, setExtracting] = useState(false);
+  const [extractState, setExtractState] = useState<ExtractState>({ kind: "idle" });
+  /** Last uploaded file and its pdf.js text; Build re-sends it while the textarea still matches. */
+  const uploadRef = useRef<{ file: File; text: string } | null>(null);
+  const extractGen = useRef(0);
   const [wxLoading, setWxLoading] = useState(false);
   const [wxError, setWxError] = useState<string | null>(null);
   const [recents, setRecents] = useState<SavedCard[]>([]);
@@ -165,6 +172,9 @@ function App({ user }: { user: AppUser | null }) {
     setOutcomes(full.outcomes);
     setForecast(null);
     setWxError(null);
+    setExtractState({ kind: "idle" });
+    uploadRef.current = null;
+    extractGen.current += 1;
     setMode("job");
     // Update the existing row in place — do not prepend (that reordered + duplicated under race).
     setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), toSummary(full)));
@@ -318,19 +328,52 @@ function App({ user }: { user: AppUser | null }) {
     setSite((prev) => siteFromCard(next, prev));
   }
 
-  function handleExtract() {
+  async function runExtract(source: { file: File | null; text: string }) {
+    const gen = ++extractGen.current;
+    const file = source.file;
     setExtracting(true);
+    setExtractState({ kind: "loading" });
     try {
-      const next = buildCardFromPds(text);
-      applyCard(next);
-      remember(next, zip);
-      toast.success("Review every field.");
-      if (zip.length === 5) void handleForecast(next, zip);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Extract failed");
+      const state = file
+        ? await extractUpload({
+            file,
+            text: source.text,
+            signedIn,
+            onDevice: buildCardFromPds,
+            readBase64: async () => bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+            server: callExtractSheet,
+          })
+        : extractPasted(source.text, buildCardFromPds);
+      if (gen !== extractGen.current) return;
+      if (state.kind === "unauthenticated") {
+        returnToLogin();
+        return;
+      }
+      setExtractState(state);
+      if (state.kind === "done") {
+        const next = state.result.card;
+        applyCard(next);
+        remember(next, zip);
+        toast.success("Review every field.");
+        if (zip.length === 5) void handleForecast(next, zip);
+      } else if (state.kind === "error") {
+        toast.error(state.message);
+      }
     } finally {
-      setExtracting(false);
+      if (gen === extractGen.current) setExtracting(false);
     }
+  }
+
+  function handleExtract() {
+    const upload = uploadRef.current;
+    const fromUpload = upload && upload.text === text ? upload.file : null;
+    void runExtract({ file: fromUpload, text });
+  }
+
+  function handleUpload(file: File, pdfText: string) {
+    uploadRef.current = { file, text: pdfText };
+    if (pdfText) setText(pdfText);
+    void runExtract({ file, text: pdfText });
   }
 
   async function handleForecast(active: FieldCardData | null = card, nextZip = zip) {
@@ -361,7 +404,7 @@ function App({ user }: { user: AppUser | null }) {
     }
   }
 
-  async function handlePdf() {
+  async function handleDownloadPdf() {
     if (!card) return;
     setDownloading(true);
     try {
@@ -496,7 +539,7 @@ function App({ user }: { user: AppUser | null }) {
                   <Printer />
                   Print
                 </Button>
-                <Button type="button" size="sm" disabled={!card || downloading} onClick={() => void handlePdf()}>
+                <Button type="button" size="sm" disabled={!card || downloading} onClick={() => void handleDownloadPdf()}>
                   <Download />
                   Download PDF
                 </Button>
@@ -562,8 +605,13 @@ function App({ user }: { user: AppUser | null }) {
             <PdsIntake
               text={text}
               onText={setText}
-              onExtract={() => void handleExtract()}
+              onExtract={() => handleExtract()}
+              onUpload={(file, pdfText) => handleUpload(file, pdfText)}
               onSample={(next, raw) => {
+                extractGen.current += 1;
+                setExtracting(false);
+                setExtractState({ kind: "idle" });
+                uploadRef.current = null;
                 setText(raw);
                 applyCard(next);
                 remember(next, zip);
@@ -571,11 +619,15 @@ function App({ user }: { user: AppUser | null }) {
               }}
               loading={extracting}
               recents={recents}
-              onOpenRecent={(next) => applyCard(next)}
+              onOpenRecent={(next) => {
+                setExtractState({ kind: "idle" });
+                applyCard(next);
+              }}
             />
           </div>
 
           <div className="min-w-0 lg:col-start-1 lg:row-start-2">
+            <ExtractNotice state={extractState} />
             {card ? (
               <FieldCardView
                 card={card}
@@ -586,6 +638,7 @@ function App({ user }: { user: AppUser | null }) {
             ) : (
               <EmptyCardSkeleton />
             )}
+            {card ? <ProvenancePanel state={extractState} /> : null}
           </div>
 
           <div className="no-print space-y-4 lg:col-start-2 lg:row-start-1 lg:row-span-2">
