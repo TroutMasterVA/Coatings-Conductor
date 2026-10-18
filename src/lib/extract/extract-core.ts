@@ -1,6 +1,6 @@
 import { cleanBase64, isImageMime, maxBase64Length, normalizeMime, sniffFileType, DOCX_MIME } from "./file-type.ts";
 import { readDocxText, readPdfText, type ReadText } from "./server-read.ts";
-import { gateNumbers, leaves, quoteCoversNumbers, quoteIsVerbatim, sourceOf, unverifiedTempsFromGate, type SourceDoc } from "./provenance.ts";
+import { gateNumbers, isEmpty, isStructural, leaves, quoteCoversNumbers, quoteIsVerbatim, sourceOf, unverifiedTempsFromGate, type SourceDoc } from "./provenance.ts";
 import type {
   ExtractErrorCode,
   ExtractInput,
@@ -121,6 +121,7 @@ export function gateRemote(raw: ExtractResult, input: ExtractInput): ExtractResu
   // so a real line about something else ("DFT: 5-7 mils" for a 5°F dew margin) is never kept.
   const values = new Map(leaves(g.card).map((l) => [l.path, l.value] as const));
   const provenance: Provenance = {};
+  let fellBack = 0;
   for (const [k, p] of Object.entries(g.provenance)) {
     const own = r.provenance[k];
     const v = values.get(k);
@@ -132,8 +133,20 @@ export function gateRemote(raw: ExtractResult, input: ExtractInput): ExtractResu
       quoteIsVerbatim(own.quote, haystack) &&
       (typeof v !== "string" && typeof v !== "number" ? true : quoteCoversNumbers(k, v, own.quote));
     provenance[k] = ownOk ? own : p;
+    // The gate's line stands in for a provider quote that was missing or rejected.
+    if (!ownOk && p !== "not-stated") fellBack++;
   }
+  // Every shown value (not Not stated) must carry the provider's OWN quote that is verbatim on the
+  // sheet and backs the value's numbers; anything less makes the read a draft.
+  const backed = (k: string, v: string | number) => {
+    const own = r.provenance[k];
+    return !!own && own !== "not-stated" && own.quote.trim() !== "" && quoteIsVerbatim(own.quote, haystack) && quoteCoversNumbers(k, v, own.quote);
+  };
+  const unbacked = leaves(g.card).filter(
+    (l) => !isStructural(l.path) && !isEmpty(l.value) && typeof l.value !== "boolean" && !backed(l.path, l.value as string | number),
+  ).length;
   const dropped = g.droppedPaths.length;
+  const unverifiedTemps = unverifiedTempsFromGate(provenance, g.droppedPaths);
   const extra: ExtractWarning[] = dropped
     ? [{
         code: "VALUES_DROPPED_UNQUOTED",
@@ -145,7 +158,17 @@ export function gateRemote(raw: ExtractResult, input: ExtractInput): ExtractResu
       ...r,
       card: g.card,
       provenance,
-      unverifiedTemps: unverifiedTempsFromGate(provenance, g.droppedPaths),
+      unverifiedTemps,
+      // CONTRACT.md "draft": an Azure read is a draft when any shown value lacks its own backing
+      // quote, any quote fell back to the gate line, any value was dropped, temps are unverified, or
+      // confidence is below high. On-device is always a draft.
+      draft:
+        r.provider !== "azure" ||
+        unbacked > 0 ||
+        fellBack > 0 ||
+        dropped > 0 ||
+        unverifiedTemps ||
+        g.card.confidence !== "high",
     },
     [...r.warnings, ...extra],
   );

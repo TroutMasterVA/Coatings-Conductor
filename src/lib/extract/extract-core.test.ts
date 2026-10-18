@@ -5,6 +5,13 @@ import { checkRequest, runExtract, takeRateSlot, type RateStore } from "./extrac
 import { maxBase64Length, sniffFileType } from "./file-type.ts";
 import { onDeviceProvider } from "./on-device-provider.ts";
 import type { ExtractProvider, ExtractRequest, ExtractResult } from "./provider.ts";
+import {
+  isEmpty,
+  isStructural,
+  leaves,
+  quoteCoversNumbers,
+  quoteIsVerbatim,
+} from "./provenance.ts";
 
 const SHEET = `Product data sheet
 Field Epoxy 100
@@ -39,6 +46,38 @@ async function okAzure(): Promise<ExtractResult> {
     warnings: [],
     draft: false,
   };
+}
+
+/** Set a card value at a dot path (test helper). */
+function setAt(obj: unknown, path: string, v: unknown): void {
+  const segs = path.split(".");
+  let cur = obj as Record<string, unknown>;
+  for (const seg of segs.slice(0, -1)) cur = cur[seg] as Record<string, unknown>;
+  cur[segs[segs.length - 1]!] = v;
+}
+
+/**
+ * A clean Azure read: confidence high, and every shown value carries its own verbatim quote that
+ * backs it. Shown values the on-device read could not pin are blanked (Not stated).
+ */
+async function cleanAzure(): Promise<ExtractResult> {
+  const r = await okAzure();
+  const card = structuredClone(r.card);
+  const provenance: ExtractResult["provenance"] = {};
+  for (const l of leaves(card)) {
+    if (isStructural(l.path) || isEmpty(l.value) || typeof l.value === "boolean") continue;
+    const own = r.provenance[l.path];
+    if (
+      own &&
+      own !== "not-stated" &&
+      quoteIsVerbatim(own.quote, SHEET) &&
+      quoteCoversNumbers(l.path, l.value as string | number, own.quote)
+    ) {
+      provenance[l.path] = own;
+    } else setAt(card, l.path, typeof l.value === "number" ? null : "");
+  }
+  card.confidence = "high";
+  return { ...r, card, provenance };
 }
 
 function base(over: Partial<Parameters<typeof runExtract>[0]> = {}) {
@@ -125,7 +164,7 @@ describe("runExtract (BE-3 contract)", () => {
   });
 
   it("uses Azure when configured: provider 'azure' + deployment, extract.draft false", async () => {
-    const r = await runExtract(base({ azure: fakeAzure(okAzure) }));
+    const r = await runExtract(base({ azure: fakeAzure(cleanAzure) }));
     assert.ok(r.ok);
     if (r.ok) {
       assert.equal(r.provider, "azure");
@@ -380,10 +419,15 @@ describe("one number gate for every provider", () => {
     const forged = {
       ...az,
       card: { ...az.card, environmentals: { ...az.card.environmentals, dewPointSpreadMinF: 5 } },
-      provenance: { ...az.provenance, "environmentals.dewPointSpreadMinF": { quote: "DFT: 5-7 mils" } },
+      provenance: {
+        ...az.provenance,
+        "environmentals.dewPointSpreadMinF": { quote: "DFT: 5-7 mils" },
+      },
       source: { text },
     };
-    const r = await runExtract(base({ input: { text } as ExtractRequest, azure: fakeAzure(async () => forged) }));
+    const r = await runExtract(
+      base({ input: { text } as ExtractRequest, azure: fakeAzure(async () => forged) }),
+    );
     assert.ok(r.ok);
     if (r.ok) {
       assert.equal(r.card.environmentals.dewPointSpreadMinF, null);
@@ -455,5 +499,87 @@ describe("one number gate for every provider", () => {
         false,
       );
     }
+  });
+
+  describe("draft flag (CONTRACT.md 'Draft flag on extract response')", () => {
+    const run = async (mut: (r: ExtractResult) => ExtractResult | void) => {
+      const r0 = await cleanAzure();
+      const r1 = mut(r0) ?? r0;
+      const out = await runExtract(base({ azure: fakeAzure(async () => r1) }));
+      assert.ok(out.ok && out.provider === "azure");
+      return out;
+    };
+
+    it("all shown values backed by their own verbatim quote + high confidence -> draft false", async () => {
+      const r = await run(() => {});
+      assert.equal(r.ok && r.draft, false);
+      assert.equal(r.ok && r.unverifiedTemps, false);
+      // Not a trivially empty card: real values are shown, each with its own quote.
+      assert.ok(r.ok && r.card.environmentals.dewPointSpreadMinF === 5);
+      assert.ok(r.ok && Object.values(r.provenance).filter((p) => p !== "not-stated").length >= 3);
+    });
+
+    it("a shown value with no verbatim backing quote (nothing fell back) -> draft", async () => {
+      const r = await run((x) => {
+        x.card.product.manufacturer = "Field Coatings Co"; // a text value with no quote at all
+      });
+      assert.equal(r.ok && r.draft, true);
+      assert.equal(
+        r.ok && r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"),
+        false,
+        "nothing was dropped",
+      );
+    });
+
+    it("a quote that fell back to the gate's line -> draft", async () => {
+      const r = await run((x) => {
+        x.provenance["environmentals.dewPointSpreadMinF"] = { quote: "DFT: 5-7 mils" };
+      });
+      assert.ok(r.ok);
+      if (r.ok) {
+        assert.equal(r.draft, true);
+        const p = r.provenance["environmentals.dewPointSpreadMinF"];
+        assert.ok(p && p !== "not-stated" && /dew point/.test(p.quote));
+      }
+    });
+
+    it("a value dropped to Not stated -> draft", async () => {
+      const r = await run((x) => {
+        x.card.environmentals.windMaxMph = 99;
+        x.provenance["environmentals.windMaxMph"] = { quote: "Wind 99 mph" };
+      });
+      assert.ok(r.ok);
+      if (r.ok) {
+        assert.equal(r.card.environmentals.windMaxMph, null);
+        assert.ok(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"));
+        assert.equal(r.draft, true);
+      }
+    });
+
+    it("unverified temperatures -> draft", async () => {
+      const r = await run((x) => {
+        x.card.environmentals.substrateTempMaxF = 140; // not on the sheet: dropped, temps unverified
+      });
+      assert.ok(r.ok);
+      if (r.ok) {
+        assert.equal(r.unverifiedTemps, true);
+        assert.equal(r.draft, true);
+      }
+    });
+
+    for (const c of ["medium", "low"] as const) {
+      it(`confidence ${c} (below high) -> draft, even with every value backed`, async () => {
+        const r = await run((x) => {
+          x.card.confidence = c;
+        });
+        assert.equal(r.ok && r.draft, true);
+      });
+    }
+
+    it("on-device reads are always draft", async () => {
+      const r = await runExtract(base());
+      assert.ok(r.ok && r.provider === "on-device");
+      assert.equal(r.ok && r.draft, true);
+    });
   });
 });
