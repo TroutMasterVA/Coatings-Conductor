@@ -93,6 +93,7 @@ describe("pot life is a duration (or a table of durations)", () => {
       "10 hours 4 hours 2 hours",
     );
     assert.equal(potLifeFromText("Working pot life: 1½ hours at 77°F"), "1½ hours at 77°F");
+    assert.equal(potLifeFromText("Pot life: 2 hour(s) 20°C/68°F"), "2 hour(s) 20°C/68°F");
   });
 });
 
