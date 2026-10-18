@@ -23,7 +23,10 @@ const TIFF_LE = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
 const TIFF_BE = new Uint8Array([0x4d, 0x4d, 0x00, 0x2a, 0, 0, 0, 8]);
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-function fakeAzure(impl: (signal?: AbortSignal) => Promise<ExtractResult>, available = true): ExtractProvider {
+function fakeAzure(
+  impl: (signal?: AbortSignal) => Promise<ExtractResult>,
+  available = true,
+): ExtractProvider {
   return { id: "azure", available: () => available, extract: (_i, s) => impl(s) };
 }
 
@@ -64,7 +67,10 @@ describe("runExtract (BE-3 contract)", () => {
     const big = new Uint8Array(3 * 1024 * 1024 + 10);
     big.set(new TextEncoder().encode("%PDF-1.4\n"));
     const r = await runExtract(
-      base({ input: { fileBase64: b64(big), mimeType: "application/pdf", fileName: "a.pdf" }, maxFileBytes: 3 * 1024 * 1024 }),
+      base({
+        input: { fileBase64: b64(big), mimeType: "application/pdf", fileName: "a.pdf" },
+        maxFileBytes: 3 * 1024 * 1024,
+      }),
     );
     assert.ok(!r.ok);
     if (!r.ok) {
@@ -86,7 +92,10 @@ describe("runExtract (BE-3 contract)", () => {
     const cases: ExtractRequest[] = [
       { fileBase64: b64(PNG), mimeType: "image/gif" },
       { fileBase64: b64(PNG), mimeType: "application/pdf" },
-      { fileBase64: b64(new TextEncoder().encode("just some bytes, nothing known")), mimeType: "application/pdf" },
+      {
+        fileBase64: b64(new TextEncoder().encode("just some bytes, nothing known")),
+        mimeType: "application/pdf",
+      },
       { fileBase64: "!!!not base64!!!", mimeType: "image/png" },
       { fileBase64: b64(new Uint8Array([0x50, 0x4b, 3, 4, 1, 2, 3])), mimeType: DOCX },
     ];
@@ -127,7 +136,13 @@ describe("runExtract (BE-3 contract)", () => {
   });
 
   it("falls back to on-device with AZURE_FALLBACK when Azure throws; extract mirrors warnings", async () => {
-    const r = await runExtract(base({ azure: fakeAzure(async () => { throw new Error("500"); }) }));
+    const r = await runExtract(
+      base({
+        azure: fakeAzure(async () => {
+          throw new Error("500");
+        }),
+      }),
+    );
     assert.ok(r.ok);
     if (r.ok) {
       assert.equal(r.provider, "on-device");
@@ -140,17 +155,29 @@ describe("runExtract (BE-3 contract)", () => {
 
   it("falls back on Azure timeout and aborts the Azure call", async () => {
     let aborted = false;
-    const slow = fakeAzure((signal) => new Promise((_res, rej) => {
-      signal?.addEventListener("abort", () => { aborted = true; rej(new Error("aborted")); });
-    }));
+    const slow = fakeAzure(
+      (signal) =>
+        new Promise((_res, rej) => {
+          signal?.addEventListener("abort", () => {
+            aborted = true;
+            rej(new Error("aborted"));
+          });
+        }),
+    );
     const r = await runExtract(base({ azure: slow, timeoutMs: 3_200 }));
-    assert.ok(r.ok && r.warnings.some((w) => w.code === "AZURE_FALLBACK" && /timed out/.test(w.message)));
+    assert.ok(
+      r.ok && r.warnings.some((w) => w.code === "AZURE_FALLBACK" && /timed out/.test(w.message)),
+    );
     assert.equal(aborted, true);
   });
 
   it("AZURE_NOT_CONFIGURED when Azure env is missing", async () => {
     const r = await runExtract(base({ azure: fakeAzure(okAzure, false) }));
-    assert.ok(r.ok && r.provider === "on-device" && r.warnings.some((w) => w.code === "AZURE_NOT_CONFIGURED"));
+    assert.ok(
+      r.ok &&
+        r.provider === "on-device" &&
+        r.warnings.some((w) => w.code === "AZURE_NOT_CONFIGURED"),
+    );
   });
 
   for (const [name, bytes, mimeType] of [
@@ -159,7 +186,9 @@ describe("runExtract (BE-3 contract)", () => {
     ["TIFF", TIFF_LE, "image/tiff"],
   ] as const) {
     it(`${name} without Azure -> ok, all Not stated, IMAGE_ONLY_NEEDS_AZURE`, async () => {
-      const r = await runExtract(base({ input: { fileBase64: b64(bytes), mimeType, fileName: `scan.${name}` } }));
+      const r = await runExtract(
+        base({ input: { fileBase64: b64(bytes), mimeType, fileName: `scan.${name}` } }),
+      );
       assert.ok(r.ok);
       if (r.ok) {
         assert.ok(r.warnings.some((w) => w.code === "IMAGE_ONLY_NEEDS_AZURE"));
@@ -173,15 +202,32 @@ describe("runExtract (BE-3 contract)", () => {
 
   it("Azure gets the file (any type) when configured", async () => {
     let seen: { mimeType?: string; fileBase64?: string } = {};
-    const az: ExtractProvider = { id: "azure", available: () => true, extract: async (i) => { seen = i; return okAzure(); } };
-    const r = await runExtract(base({ azure: az, input: { fileBase64: b64(JPEG), mimeType: "image/jpg" } }));
+    const az: ExtractProvider = {
+      id: "azure",
+      available: () => true,
+      extract: async (i) => {
+        seen = i;
+        return okAzure();
+      },
+    };
+    const r = await runExtract(
+      base({ azure: az, input: { fileBase64: b64(JPEG), mimeType: "image/jpg" } }),
+    );
     assert.ok(r.ok && r.provider === "azure");
     assert.equal(seen.mimeType, "image/jpeg");
     assert.equal(seen.fileBase64, b64(JPEG));
   });
 
   it("PDF without client text -> server pdf.js reads it, with page numbers", async () => {
-    const r = await runExtract(base({ input: { fileBase64: b64(fixture("text-layer.pdf")), mimeType: "application/pdf", fileName: "t.pdf" } }));
+    const r = await runExtract(
+      base({
+        input: {
+          fileBase64: b64(fixture("text-layer.pdf")),
+          mimeType: "application/pdf",
+          fileName: "t.pdf",
+        },
+      }),
+    );
     assert.ok(r.ok, JSON.stringify(!r.ok && r.error));
     if (r.ok) {
       assert.ok(!r.warnings.some((w) => w.code === "IMAGE_ONLY_NEEDS_AZURE"));
@@ -193,16 +239,30 @@ describe("runExtract (BE-3 contract)", () => {
 
   it("PDF with client text uses the client text", async () => {
     let pdfRead = false;
-    const r = await runExtract(base({
-      input: { fileBase64: b64(fixture("text-layer.pdf")), mimeType: "application/pdf", text: SHEET },
-      readers: { pdf: async () => { pdfRead = true; return { text: "" }; }, docx: async () => ({ text: "" }) },
-    }));
+    const r = await runExtract(
+      base({
+        input: {
+          fileBase64: b64(fixture("text-layer.pdf")),
+          mimeType: "application/pdf",
+          text: SHEET,
+        },
+        readers: {
+          pdf: async () => {
+            pdfRead = true;
+            return { text: "" };
+          },
+          docx: async () => ({ text: "" }),
+        },
+      }),
+    );
     assert.ok(r.ok);
     assert.equal(pdfRead, false);
   });
 
   it("PDF with no text layer -> IMAGE_ONLY_NEEDS_AZURE, nothing invented", async () => {
-    const r = await runExtract(base({ input: { fileBase64: b64(fixture("no-text.pdf")), mimeType: "application/pdf" } }));
+    const r = await runExtract(
+      base({ input: { fileBase64: b64(fixture("no-text.pdf")), mimeType: "application/pdf" } }),
+    );
     assert.ok(r.ok);
     if (r.ok) {
       assert.ok(r.warnings.some((w) => w.code === "IMAGE_ONLY_NEEDS_AZURE"));
@@ -211,7 +271,11 @@ describe("runExtract (BE-3 contract)", () => {
   });
 
   it("DOCX is read on-device with mammoth", async () => {
-    const r = await runExtract(base({ input: { fileBase64: b64(fixture("sheet.docx")), mimeType: DOCX, fileName: "s.docx" } }));
+    const r = await runExtract(
+      base({
+        input: { fileBase64: b64(fixture("sheet.docx")), mimeType: DOCX, fileName: "s.docx" },
+      }),
+    );
     assert.ok(r.ok, JSON.stringify(!r.ok && r.error));
     if (r.ok) {
       assert.equal(r.provider, "on-device");
@@ -284,8 +348,31 @@ describe("one number gate for every provider", () => {
   });
 
   it("keeps a quoted Azure number", async () => {
-    const r = await runExtract(base({ azure: fakeAzure(async () => ({ ...(await okAzure()), source: { text: SHEET } })) }));
+    const r = await runExtract(
+      base({ azure: fakeAzure(async () => ({ ...(await okAzure()), source: { text: SHEET } })) }),
+    );
     assert.ok(r.ok && r.card.environmentals.dewPointSpreadMinF === 5);
+  });
+
+  it("an Azure number NOT on the sheet with a fake quote is Not stated (no line to fall back to)", async () => {
+    const az = await okAzure();
+    const forged = {
+      ...az,
+      card: { ...az.card, environmentals: { ...az.card.environmentals, windMaxMph: 99 } },
+      provenance: {
+        ...az.provenance,
+        "environmentals.windMaxMph": { page: 1, quote: "Wind: 99 mph maximum" },
+      },
+      source: { text: SHEET },
+    };
+    const r = await runExtract(base({ azure: fakeAzure(async () => forged) }));
+    assert.ok(r.ok);
+    if (r.ok) {
+      assert.equal(r.card.environmentals.windMaxMph, null);
+      assert.equal(r.provenance["environmentals.windMaxMph"], "not-stated");
+      assert.ok(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"));
+      assert.ok(!JSON.stringify(r).includes("99 mph"));
+    }
   });
 
   it("an Azure number on the sheet with an invented quote keeps the value, with the gate's real line", async () => {
@@ -325,7 +412,10 @@ describe("one number gate for every provider", () => {
     if (r.ok) {
       assert.equal(r.card.environmentals.dewPointSpreadMinF, 5);
       assert.deepEqual(r.provenance["environmentals.dewPointSpreadMinF"], own);
-      assert.equal(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"), false);
+      assert.equal(
+        r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"),
+        false,
+      );
     }
   });
 });
