@@ -708,13 +708,6 @@ export function extractForSave(
   return opts.cardReplaced ? null : undefined;
 }
 
-/** Draft / unverified-temps flags for display. Missing = false. */
-export function extractFlags(state: ExtractState): { draft: boolean; unverifiedTemps: boolean } {
-  if (state.kind !== "done") return { draft: false, unverifiedTemps: false };
-  const src = state.saved ?? state.result;
-  return { draft: src.draft === true, unverifiedTemps: src.unverifiedTemps === true };
-}
-
 /** Reopen: rebuild the panel from the saved record. Missing or malformed → idle, never throws. */
 export function savedExtractState(record: {
   card: FieldCardData | null;
