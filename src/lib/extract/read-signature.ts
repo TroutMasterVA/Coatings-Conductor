@@ -19,7 +19,9 @@ type Entry = ProvenanceQuote | "not-stated" | undefined | { edited: unknown };
 type Meta = { provider: string; deployment?: string; draft?: boolean; unverifiedTemps?: boolean };
 
 function mac(secret: string, parts: (string | number | boolean | null)[]): string {
-  return createHmac("sha256", secret).update(JSON.stringify([DOMAIN, ...parts])).digest("base64url");
+  return createHmac("sha256", secret)
+    .update(JSON.stringify([DOMAIN, ...parts]))
+    .digest("base64url");
 }
 
 function entryKey(e: Entry): string {
@@ -56,7 +58,8 @@ export function signRead(
   id: string = randomUUID(),
 ): ServerRead {
   const fields: Record<string, string> = {};
-  for (const l of leaves(r.card)) fields[l.path] = mac(secret, fieldParts(id, userId, l.path, l.value, r.provenance[l.path]));
+  for (const l of leaves(r.card))
+    fields[l.path] = mac(secret, fieldParts(id, userId, l.path, l.value, r.provenance[l.path]));
   return { id, sig: mac(secret, metaParts(id, userId, r)), fields };
 }
 
@@ -82,7 +85,12 @@ export function verifyRead(
   if (!same(sr.sig, mac(secret, metaParts(sr.id, userId, extract)))) return NO_TRUST;
   const fields = new Set<string>();
   for (const l of leaves(card)) {
-    if (same(sr.fields[l.path], mac(secret, fieldParts(sr.id, userId, l.path, l.value, extract.provenance[l.path])))) {
+    if (
+      same(
+        sr.fields[l.path],
+        mac(secret, fieldParts(sr.id, userId, l.path, l.value, extract.provenance[l.path])),
+      )
+    ) {
       fields.add(l.path);
     }
   }
