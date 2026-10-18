@@ -1,3 +1,4 @@
+import { filmThicknessFromText, maskStandards, productTitleFromText } from "./sheet-title-film.ts";
 import type { Environmentals, FieldCardData, HoldPoint } from "./types";
 import {
   methodsFromGates,
@@ -75,13 +76,8 @@ export function heuristicExtract(text: string): FieldCardData {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  const name =
-    firstMatch(t, [
-      /product(?:\s+name)?[:\s]+([A-Z0-9][^\n]{3,80})/i,
-      /^([A-Z][A-Za-z0-9][^\n]{4,60})$/m,
-    ]) ||
-    lines[0]?.slice(0, 80) ||
-    "Unnamed product";
+  // The leading title with data-sheet boilerplate stripped; "" (Not stated) when nothing is left.
+  const name = productTitleFromText(t);
 
   const manufacturer = firstMatch(t, [
     /manufacturer[:\s]+([^\n]+)/i,
@@ -97,10 +93,7 @@ export function heuristicExtract(text: string): FieldCardData {
   const potLife = firstMatch(t, [/pot\s*life[:\s]+([^\n]+)/i, /working\s+time[:\s]+([^\n]+)/i]);
   const shelf = firstMatch(t, [/shelf\s*life[:\s]+([^\n]+)/i]);
   const voc = firstMatch(t, [/voc[:\s]+([^\n]+)/i]);
-  const dft = firstMatch(t, [
-    /(?:recommended\s+)?(?:dft|dry\s+film(?:\s+thickness)?)[:\s]+([^\n]+)/i,
-    /(\d+\s*[–-]\s*\d+\s*mils?\s*(?:dft|dft)?)/i,
-  ]);
+  const dft = filmThicknessFromText(t);
   const recoatMin = firstMatch(t, [/recoat(?:ing)?\s+(?:min(?:imum)?|window)[:\s]+([^\n]+)/i, /minimum\s+recoat[:\s]+([^\n]+)/i]);
   const recoatMax = firstMatch(t, [/maximum\s+recoat[:\s]+([^\n]+)/i, /recoat(?:ing)?\s+max(?:imum)?[:\s]+([^\n]+)/i]);
   const coverage = firstMatch(t, [/coverage[:\s]+([^\n]+)/i, /theoretical\s+coverage[:\s]+([^\n]+)/i]);
@@ -116,8 +109,10 @@ export function heuristicExtract(text: string): FieldCardData {
       ? prepGates[0].profile
       : "";
 
+  // Standard/grade names (SSPC-SP2/3, ISO8501-1, St 2) never yield a temperature.
+  const tt = maskStandards(t);
   const tempPairs = [
-    ...t.matchAll(
+    ...tt.matchAll(
       /(?:air|ambient|application|surface|substrate|steel|store|storage)[^\n]{0,40}?(\d+(?:\.\d+)?)\s*°?\s*([CF])?[^\n]{0,24}?(?:to|–|-|and)\s*(\d+(?:\.\d+)?)\s*°?\s*([CF])?/gi,
     ),
   ];
@@ -153,7 +148,7 @@ export function heuristicExtract(text: string): FieldCardData {
     }
   }
 
-  const minOnly = t.match(
+  const minOnly = tt.match(
     /(?:minimum|min\.?)\s+(?:air|ambient|surface|substrate|application)?\s*(?:temp(?:erature)?)?[^\n]{0,20}?(\d+)\s*°?\s*([CF])?/i,
   );
   if (minOnly && env.ambientTempMinF == null) {
