@@ -361,6 +361,41 @@ export function temperatureGates(raw: string): TempGate[] {
   return out.filter((g) => g.lo >= -60 && g.lo <= 400 && (g.hi === null || g.hi <= 400));
 }
 
+/** A heading that opens application-conditions / temperature limits ("Application conditions", "Temperature:"). */
+const TEMP_SECTION_HEAD =
+  /^(?:application|environmental|applied|ambient|operating)?\s*(?:conditions?|temperatures?|temp\.?)(?:\s+(?:conditions?|limits?|range|requirements?))?\s*:?$/i;
+/** A line of limits that are some other quantity, not a temperature. */
+const OTHER_QUANTITY = /%|\b(?:rh|humidity|dew|mils?|microns?|µm|hours?|hrs?|minutes?|mins?|days?|psi|mph|km\/h|ft|feet|gallons?|litres?|liters?|ratio|voc|g\/l|coats?|passes?|years?|months?|weeks?|seconds?|secs?)\b/i;
+/** "Minimum 50", "max. 120", "between 50 and 120" with no °F/°C after the number. */
+const BARE_LIMIT = new RegExp(
+  String.raw`\b(?:min(?:imum)?|max(?:imum)?|between|from|above|below|at\s+least|not\s+(?:below|above|exceed))\.?\s*:?\s*(${NUM})(?![\d.]|\s*(?:°|º|˚|deg|[FC]\b))`,
+  "i",
+);
+
+/**
+ * Lines of application conditions or temperature limits that hold bare numbers with no °F/°C.
+ * The reader never turns these into a temperature (a unit is required), so the field stays
+ * Not stated; the caller reports them as values it could not use and marks temperatures unverified.
+ */
+export function bareTemperatureLines(raw: string): string[] {
+  const out: string[] = [];
+  let inSection = false;
+  for (const line of logicalLines(normalizeTempText(raw ?? ""))) {
+    const head = TEMP_SECTION_HEAD.test(line) || /^(?:application|environmental)\s+conditions\b[^\d]*$/i.test(line);
+    if (head) {
+      inSection = true;
+      continue;
+    }
+    // A new heading (short, no digits, capitalised) closes the section.
+    if (inSection && !/\d/.test(line) && line.length <= 48 && /^[A-Z]/.test(line)) inSection = false;
+    const labelled = /\b(?:temperatures?|temp\.?|ambient|air|surface|substrate)\b/i.test(line);
+    if (!inSection && !labelled) continue;
+    if (OTHER_QUANTITY.test(line) || tempsInClause(line).length) continue;
+    if (BARE_LIMIT.test(line)) out.push(line);
+  }
+  return out;
+}
+
 /** First stated value wins per slot; a range fills a target only when both ends are still open. */
 function applyTempGates(env: Environmentals, gates: TempGate[]): void {
   const slot = {

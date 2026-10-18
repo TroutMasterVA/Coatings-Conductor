@@ -7,6 +7,7 @@ import {
   mixRatioFromText,
   relativeHumidityMaxFromText,
   capToOneLine,
+  bareTemperatureLines,
 } from "./heuristic-extract.ts";
 
 // Real snippets (pdf.js text as the app sees it) from QA's 10-sheet run, /workspace/cc-qa (Oct 18, 2026).
@@ -422,5 +423,39 @@ describe("substrate labels come from their own gate lines", () => {
     const g = gates(JOTUN);
     assert.ok(g.find((x) => x.family === "steel-non-immersion")?.methods.includes("NACE 3"));
     assert.ok(!g.find((x) => x.family === "non-ferrous")?.methods.includes("NACE 3"));
+  });
+});
+
+describe("bare numbers on a temperature line are set aside, never used", () => {
+  const head = "Product data sheet\nField Epoxy 100\nMix ratio: 1:1 by volume\n";
+  it("flags unitless limits under application conditions or a temperature label; fields stay Not stated", () => {
+    for (const body of [
+      "Application conditions\nMinimum 50 Maximum 120",
+      "Temperature: minimum 40, maximum 95",
+      "Surface temperature between 45 and 110",
+    ]) {
+      const text = head + body;
+      assert.ok(bareTemperatureLines(text).length >= 1, body);
+      const env = heuristicExtract(text).environmentals;
+      for (const k of [
+        "ambientTempMinF",
+        "ambientTempMaxF",
+        "substrateTempMinF",
+        "substrateTempMaxF",
+      ] as const) {
+        assert.equal(env[k], null, `${body}: ${k}`);
+      }
+    }
+  });
+  it("leaves lines with a unit, or another quantity, alone", () => {
+    for (const body of [
+      "Application conditions\nAir temperature minimum 50°F, maximum 120°F",
+      "Ambient: 50-90 F",
+      "Application conditions\nRelative humidity maximum 85%",
+      "Pot life: 2 hours at 75 F",
+      "Application conditions\nDFT minimum 5 mils",
+    ]) {
+      assert.deepEqual(bareTemperatureLines(head + body), [], body);
+    }
   });
 });
