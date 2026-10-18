@@ -5,7 +5,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SAMPLE_PDS_TEXT, SAMPLES } from "@/lib/samples";
 import { ACCEPT_ATTR, isPdf } from "@/lib/extract-client";
-import { extractPdfPages, joinPdfPages } from "@/lib/pdf-text";
+import { joinPages } from "@/lib/pdf-lines";
+import { extractPdfPages } from "@/lib/pdf-text";
 import type { FieldCardData, SavedCard } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -46,8 +47,10 @@ export function PdsIntake({
     let pages: string[] | undefined;
     if (isPdf(file)) {
       try {
-        pages = await extractPdfPages(file);
-        extracted = joinPdfPages(pages);
+        const read = await extractPdfPages(file);
+        // FE-2 per-page text → contract's `pages: string[]` (index 0 = page 1).
+        pages = read.map((p) => p.text);
+        extracted = joinPages(read);
       } catch {
         extracted = "";
       }

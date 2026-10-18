@@ -80,9 +80,12 @@ export function ExtractNotice({ state }: { state: ExtractState }) {
 }
 
 /** Under the card: provider + warnings note, and the collapsed provenance list. Never prints. */
-export function ProvenancePanel({ state }: { state: ExtractState }) {
+export function ProvenancePanel({ state, card }: { state: ExtractState; card?: unknown }) {
   if (state.kind !== "done") return null;
-  const rows = provenanceRows(state.result.provenance);
+  const rows = provenanceRows(
+    state.result.provenance,
+    card ? { current: card, asRead: state.result.card } : undefined,
+  );
   const warnings = displayWarnings(state.result);
   return (
     <div className="no-print mt-3 space-y-2">
@@ -90,8 +93,8 @@ export function ProvenancePanel({ state }: { state: ExtractState }) {
         <p>{providerLabel(state)}</p>
         {warnings.length ? (
           <ul className="mt-1 list-disc pl-4">
-            {warnings.map((w) => (
-              <li key={w}>{w}</li>
+            {warnings.map((w, i) => (
+              <li key={`${i}:${w}`}>{w}</li>
             ))}
           </ul>
         ) : null}
@@ -107,7 +110,9 @@ export function ProvenancePanel({ state }: { state: ExtractState }) {
                 <dt className="text-xs text-muted" title={r.fieldPath}>
                   {r.label}
                 </dt>
-                <dd className={r.stated ? "text-fg" : "text-subtle"}>{r.text}</dd>
+                <dd className={r.edited ? "text-accent" : r.stated ? "text-fg" : "text-subtle"}>
+                  {r.text}
+                </dd>
               </div>
             ))}
           </dl>

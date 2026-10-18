@@ -4,23 +4,43 @@
  * No AI runs here, no keys, no xAI. The browser sends the file to our own server function;
  * the server decides which reader (Azure or on-device) reads it and whether a sheet is image-only.
  *
- * Contract: docs/release-beta/CONTRACT.md + LEAD rulings (Oct 18). Input also carries optional
- * `pages: string[]` (pdf.js text per page, index 0 = page 1; PDFs only; dropped over 40,000 chars).
- * Provider is "azure" | "on-device" with optional display-only `deployment`; "azure:<x>" is tolerated.
- * LEAD-approved shapes:
- *   input   { fileBase64, mimeType, fileName, text? }   (file ≤ 10 MB; text = pdf.js text for PDFs only)
- *   success { ok: true, card, provenance, provider: "azure" | "on-device", warnings: { code, message }[] }
+ * Contract: docs/release-beta/CONTRACT.md, BE-1 types (src/lib/extract/provider.ts, PR #24),
+ * and LEAD rulings (Oct 18):
+ *   input   { fileBase64, mimeType, fileName, text?, pages? }
+ *           text/pages = pdf.js text (pages: one string per page, index 0 = page 1), PDFs only,
+ *           omitted over 40,000 chars.
+ *   success { ok: true, card, provenance, provider: "azure" | "on-device", deployment?, warnings: { code, message }[] }
+ *           ("azure:<deployment>" from BE-1's ProviderLabel is tolerated and normalized.)
  *   error   { ok: false, error: { code, message, retryAfterSec? } }
+ *   upload cap: server env MAX_UPLOAD_MB (default 10, practice 3); FILE_TOO_LARGE carries the
+ *           limit in `message`, shown verbatim. The client only pre-checks the 10 MB ceiling.
  *
- * PENDING CONTRACT (until BE-3's CONTRACT.md lands):
- * - `extractSheet` module (`@/lib/extract/extract-sheet`) is not on the branch yet; see extract-server.ts.
- * - Warning codes AZURE_NOT_CONFIGURED / AZURE_FALLBACK / IMAGE_ONLY_NEEDS_AZURE /
- *   VALUES_DROPPED_UNQUOTED / ON_DEVICE_UNPINNED (as typed in BE-1 provider.ts).
- * - Text cap: we omit `text` above 40,000 chars rather than reject (server reads the file).
+ * PENDING CONTRACT:
+ * - `extractSheet` input in BE-3 (#26) is still { text, pages?, pdfBase64?, fileName? }; see extract-server.ts.
+ * - No limits endpoint / `maxUploadMb` field, so the client pre-check stays at the 10 MB ceiling.
+ * - Response is nested { ok, card, extract } (LEAD); top-level provenance/provider/warnings are a fallback.
+ * - Edited-field stamp `{ edited: { by, at }, sheetQuote? }` in provenance is proposed, not in CONTRACT.md.
  */
+import { parseSavedExtract } from "./job-extract.ts";
+import type {
+  ExtractRequest,
+  SavedExtract,
+  ExtractErrorCode as ProviderErrorCode,
+  ExtractInput,
+  ExtractResult as ProviderResult,
+  ExtractWarning,
+  ExtractWarningCode,
+  Provenance,
+} from "./extract/provider.ts";
 import type { FieldCardData } from "./types.ts";
 
-export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+export type { ExtractWarning, ExtractWarningCode, Provenance };
+
+/**
+ * Absolute ceiling for the client pre-check. The real limit is the server's MAX_UPLOAD_MB
+ * (practice copy = 3 MB; Vercel request bodies cap near 4.5 MB, and base64 adds ~33%).
+ */
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 40_000;
 /** BE-3 server timeout is 60s; the client waits a little longer so the server's code wins. */
 export const CLIENT_TIMEOUT_MS = 65_000;
@@ -40,59 +60,61 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 export const ALLOWED_MIME_TYPES = [...new Set(Object.values(MIME_BY_EXT))];
 
-/** Warning codes (pending contract). */
-export const WARNING_AZURE_NOT_CONFIGURED = "AZURE_NOT_CONFIGURED";
-export const WARNING_AZURE_FALLBACK = "AZURE_FALLBACK";
-export const WARNING_IMAGE_ONLY_NEEDS_AZURE = "IMAGE_ONLY_NEEDS_AZURE";
-export const WARNING_VALUES_DROPPED_UNQUOTED = "VALUES_DROPPED_UNQUOTED";
-export const WARNING_ON_DEVICE_UNPINNED = "ON_DEVICE_UNPINNED";
+/** Warning codes, typed against BE-1's ExtractWarningCode union. */
+export const WARNING_AZURE_NOT_CONFIGURED: ExtractWarningCode = "AZURE_NOT_CONFIGURED";
+export const WARNING_AZURE_FALLBACK: ExtractWarningCode = "AZURE_FALLBACK";
+export const WARNING_IMAGE_ONLY_NEEDS_AZURE: ExtractWarningCode = "IMAGE_ONLY_NEEDS_AZURE";
+export const WARNING_VALUES_DROPPED_UNQUOTED: ExtractWarningCode = "VALUES_DROPPED_UNQUOTED";
+export const WARNING_ON_DEVICE_UNPINNED: ExtractWarningCode = "ON_DEVICE_UNPINNED";
 export const VALUES_DROPPED_NOTE =
   "Some values were left Not stated because no line on the sheet backed them.";
 export const UNPINNED_TEXT = "Found on the sheet, no exact line.";
 export const IMAGE_ONLY_NOTICE =
   "This sheet needs the Azure reader. Showing what could be read on-device.";
 
-export const EXTRACT_ERROR_CODES = [
+/** BE-1's codes plus UNSUPPORTED_FILE_TYPE (LEAD ruling; not yet in BE-1's union). */
+export type ExtractErrorCode = ProviderErrorCode | "UNSUPPORTED_FILE_TYPE";
+export const EXTRACT_ERROR_CODES: readonly ExtractErrorCode[] = [
   "UNAUTHENTICATED",
   "RATE_LIMITED",
   "EXTRACT_TIMEOUT",
   "EXTRACT_FAILED",
   "FILE_TOO_LARGE",
   "UNSUPPORTED_FILE_TYPE",
-] as const;
-export type ExtractErrorCode = (typeof EXTRACT_ERROR_CODES)[number];
+];
 /** Client-only reason: the server function is missing or unreachable. Not a server code. */
 export type ServerIssue = ExtractErrorCode | "SERVER_UNAVAILABLE";
 
-export type ProvenanceEntry = { page?: number; quote: string } | "not-stated";
-export type Provenance = Record<string, ProvenanceEntry>;
-export type ExtractWarning = { code: string; message: string };
-
+/** Proposed server stamp for a hand-edited field (not in CONTRACT.md yet). */
+export type EditedEntry = { edited: { by: string; at: string }; sheetQuote?: Provenance[string] };
+export type ProvenanceEntry = Provenance[string] | EditedEntry;
+export type ClientProvenance = Record<string, ProvenanceEntry>;
+export const SESSION_EDIT_TEXT = "Edited in this session — not from the sheet";
 export type ExtractProvider = "azure" | "on-device";
 
-export type ExtractResult = {
-  card: FieldCardData;
-  provenance: Provenance;
+/** BE-1's result with the provider normalized (LEAD: "azure" | "on-device" + display-only deployment). */
+export type ExtractResult = Omit<ProviderResult, "provider" | "provenance"> & {
   provider: ExtractProvider;
-  /** Display only. */
   deployment?: string;
-  warnings: ExtractWarning[];
+  provenance: ClientProvenance;
 };
 
-export type ExtractSheetInput = {
+/** BE-1's on-device provider, injected so tests and the browser share one shape. */
+export type OnDeviceExtract = (input: ExtractInput) => Promise<ProviderResult>;
+
+export type { SavedExtract };
+/** BE-3 `ExtractRequest`, with the file required on the upload path. */
+export type ExtractSheetInput = ExtractRequest & {
   fileBase64: string;
   mimeType: string;
   fileName: string;
-  text?: string;
-  /** pdf.js text, one entry per page (index 0 = page 1). PDFs only. */
-  pages?: string[];
 };
-export type ExtractSheetResponse =
-  | ({ ok: true } & ExtractResult)
-  | { ok: false; error: { code: string; message?: string; retryAfterSec?: number } };
+/** Loose on purpose: the server's value is validated by mapServerResponse. */
+export type ExtractSheetResponse = unknown;
 
 export type ServerOutcome =
-  { ok: true; result: ExtractResult } | { ok: false; code: ServerIssue; retryAfterSec?: number };
+  | { ok: true; result: ExtractResult }
+  | { ok: false; code: ServerIssue; message?: string; retryAfterSec?: number };
 
 export type DoneState = {
   kind: "done";
@@ -117,7 +139,7 @@ export const ISSUE_COPY: Record<ServerIssue, string> = {
   RATE_LIMITED: "That’s 10 sheets in a minute. The server reader needs a short break.",
   EXTRACT_TIMEOUT: "The server reader took longer than a minute on this sheet.",
   EXTRACT_FAILED: "The server reader couldn’t read this sheet.",
-  FILE_TOO_LARGE: "This file is over 10 MB. Use a smaller file.",
+  FILE_TOO_LARGE: "This file is too large for the reader. Use a smaller file.",
   UNSUPPORTED_FILE_TYPE:
     "That file type isn’t supported. Use a PDF, photo or scan (PNG, JPG, TIFF), or Word (.docx) file.",
   SERVER_UNAVAILABLE: "The server reader isn’t reachable right now.",
@@ -150,13 +172,13 @@ export function isPdf(file: { name: string; type?: string }): boolean {
 }
 
 /** Client pre-check: size and obvious extension. Returns the code to show, or null when OK to send. */
-export function precheckFile(file: {
-  name: string;
-  type?: string;
-  size: number;
-}): ExtractErrorCode | null {
+export function precheckFile(
+  file: { name: string; type?: string; size: number },
+  /** From getExtractLimits() when available; never above the 10 MB ceiling. */
+  maxBytes?: number,
+): ExtractErrorCode | null {
   if (!mimeTypeFor(file)) return "UNSUPPORTED_FILE_TYPE";
-  if (file.size > MAX_FILE_BYTES) return "FILE_TOO_LARGE";
+  if (file.size > Math.min(maxBytes ?? MAX_UPLOAD_BYTES, MAX_UPLOAD_BYTES)) return "FILE_TOO_LARGE";
   return null;
 }
 
@@ -164,11 +186,28 @@ function isErrorCode(v: unknown): v is ExtractErrorCode {
   return typeof v === "string" && (EXTRACT_ERROR_CODES as readonly string[]).includes(v);
 }
 
-function isProvenanceEntry(v: unknown): v is ProvenanceEntry {
+function isQuoteEntry(v: unknown): v is Provenance[string] {
   if (v === "not-stated") return true;
   if (!v || typeof v !== "object") return false;
   const e = v as { quote?: unknown; page?: unknown };
   return typeof e.quote === "string" && (e.page === undefined || typeof e.page === "number");
+}
+
+function isEditedEntry(v: unknown): v is EditedEntry {
+  if (!v || typeof v !== "object") return false;
+  const e = v as { edited?: unknown; sheetQuote?: unknown };
+  const ed = e.edited as { by?: unknown; at?: unknown } | undefined;
+  return (
+    !!ed &&
+    typeof ed === "object" &&
+    typeof ed.by === "string" &&
+    typeof ed.at === "string" &&
+    (e.sheetQuote === undefined || isQuoteEntry(e.sheetQuote))
+  );
+}
+
+function isProvenanceEntry(v: unknown): v is ProvenanceEntry {
+  return isQuoteEntry(v) || isEditedEntry(v);
 }
 
 /** Tolerant: malformed warnings are dropped, missing messages become "". Never throws. */
@@ -179,7 +218,11 @@ export function parseWarnings(raw: unknown): ExtractWarning[] {
     if (!v || typeof v !== "object") continue;
     const w = v as { code?: unknown; message?: unknown };
     if (typeof w.code !== "string") continue;
-    out.push({ code: w.code, message: typeof w.message === "string" ? w.message : "" });
+    // Unknown codes are kept (shown as plain notes); typed as the union for the known ones.
+    out.push({
+      code: w.code as ExtractWarningCode,
+      message: typeof w.message === "string" ? w.message : "",
+    });
   }
   return out;
 }
@@ -197,9 +240,9 @@ export function normalizeProvider(
 }
 
 /** Provenance map, or null when any entry is malformed. */
-export function parseProvenance(raw: unknown): Provenance | null {
+export function parseProvenance(raw: unknown): ClientProvenance | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const provenance: Provenance = {};
+  const provenance: ClientProvenance = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (!isProvenanceEntry(v)) return null;
     provenance[k] = v;
@@ -220,30 +263,49 @@ export function parseExtractResult(body: unknown): ExtractResult | null {
     !card.surfacePrep
   )
     return null;
-  if (typeof b.provider !== "string") return null;
-  const provenance = parseProvenance(b.provenance);
+  // Nested { ok, card, extract } is the contract; top-level fields are a tolerated fallback.
+  const x = (b.extract && typeof b.extract === "object" ? b.extract : {}) as Record<
+    string,
+    unknown
+  >;
+  const providerRaw = x.provider ?? b.provider;
+  if (typeof providerRaw !== "string") return null;
+  const provenance = parseProvenance(x.provenance ?? b.provenance);
   if (!provenance) return null;
-  return {
-    card,
-    provenance,
-    ...normalizeProvider(b.provider, b.deployment),
-    warnings: parseWarnings(b.warnings),
+  const norm = normalizeProvider(providerRaw, x.deployment ?? b.deployment);
+  const warnings = parseWarnings(x.warnings ?? b.warnings);
+  const extract: SavedExtract = parseSavedExtract(b.extract) ?? {
+    ...norm,
+    provenance: provenance as unknown as SavedExtract["provenance"],
+    warnings,
+    extractedAt: card.extractedAt || new Date().toISOString(),
+    draft: false,
+    unverifiedTemps: false,
   };
+  return { card, provenance, ...norm, warnings, extract };
 }
 
 /** Map the server fn's returned value to an outcome. */
 export function mapServerResponse(res: unknown): ServerOutcome {
   if (!res || typeof res !== "object") return { ok: false, code: "EXTRACT_FAILED" };
-  const r = res as { ok?: unknown; error?: { code?: unknown; retryAfterSec?: unknown } };
+  const r = res as {
+    ok?: unknown;
+    error?: { code?: unknown; message?: unknown; retryAfterSec?: unknown };
+  };
   if (r.ok === true) {
     const result = parseExtractResult(res);
     return result ? { ok: true, result } : { ok: false, code: "EXTRACT_FAILED" };
   }
   const code = isErrorCode(r.error?.code) ? r.error.code : "EXTRACT_FAILED";
   const retry = r.error?.retryAfterSec;
-  return typeof retry === "number" && retry > 0
-    ? { ok: false, code, retryAfterSec: retry }
-    : { ok: false, code };
+  const message =
+    typeof r.error?.message === "string" && r.error.message.trim() ? r.error.message : undefined;
+  return {
+    ok: false,
+    code,
+    ...(message ? { message } : {}),
+    ...(typeof retry === "number" && retry > 0 ? { retryAfterSec: retry } : {}),
+  };
 }
 
 /** A thrown error from the server fn: authMiddleware throws "Unauthorized"; anything else is unreachable. */
@@ -294,20 +356,29 @@ const CLIENT_FALLBACK_CODES: ReadonlySet<ServerIssue> = new Set([
   "RATE_LIMITED",
 ]);
 
-export const ON_DEVICE_PROVIDER = "on-device";
+export function normalizeResult(r: ProviderResult): ExtractResult {
+  return {
+    ...r,
+    ...normalizeProvider(r.provider, r.deployment),
+    warnings: parseWarnings(r.warnings),
+  };
+}
 
-function onDeviceRead(
-  text: string,
-  onDevice: (text: string) => FieldCardData,
+/** On-device via BE-1's onDeviceProvider: same provenance, warnings and not-stated marks as the server. */
+async function onDeviceRead(
+  src: { text: string; pages?: string[] },
+  onDevice: OnDeviceExtract,
   source: DoneState["source"],
   issue?: ServerIssue,
   retryAfterSec?: number,
-): ExtractState {
+): Promise<ExtractState> {
   try {
-    const card = onDevice(text);
+    const r = await onDevice(
+      src.pages?.length ? { text: src.text, pages: src.pages } : { text: src.text },
+    );
     return {
       kind: "done",
-      result: { card, provenance: {}, provider: ON_DEVICE_PROVIDER, warnings: [] },
+      result: normalizeResult(r),
       source,
       ...(issue ? { issue } : {}),
       ...(retryAfterSec ? { retryAfterSec } : {}),
@@ -323,8 +394,13 @@ function onDeviceRead(
   }
 }
 
-function errorState(issue: ServerIssue, retryAfterSec?: number): ExtractState {
-  const base = ISSUE_COPY[issue];
+/** FILE_TOO_LARGE shows the server's message verbatim (it names the deploy's limit). */
+function errorState(
+  issue: ServerIssue,
+  retryAfterSec?: number,
+  serverMessage?: string,
+): ExtractState {
+  const base = issue === "FILE_TOO_LARGE" && serverMessage ? serverMessage : ISSUE_COPY[issue];
   const message = issue === "RATE_LIMITED" ? `${base} ${retryCopy(retryAfterSec)}` : base;
   return { kind: "error", message, issue, ...(retryAfterSec ? { retryAfterSec } : {}) };
 }
@@ -341,16 +417,18 @@ export async function extractUpload(input: {
   /** pdf.js per-page text (PDFs only). */
   pages?: string[];
   signedIn: boolean;
-  onDevice: (text: string) => FieldCardData;
+  onDevice: OnDeviceExtract;
   readBase64: () => Promise<string>;
   server: ServerCall;
+  /** getExtractLimits().maxUploadMb in bytes, when known. */
+  maxUploadBytes?: number;
 }): Promise<ExtractState> {
-  const pre = precheckFile(input.file);
+  const pre = precheckFile(input.file, input.maxUploadBytes);
   if (pre) return errorState(pre);
   const pdf = isPdf(input.file);
   if (!input.signedIn) {
     return pdf
-      ? onDeviceRead(input.text, input.onDevice, "on-device")
+      ? onDeviceRead(input, input.onDevice, "on-device")
       : { kind: "error", message: GUEST_NEEDS_SIGN_IN };
   }
   const mimeType = mimeTypeFor(input.file)!;
@@ -359,7 +437,7 @@ export async function extractUpload(input: {
     fileBase64 = await input.readBase64();
   } catch {
     return pdf
-      ? onDeviceRead(input.text, input.onDevice, "on-device")
+      ? onDeviceRead(input, input.onDevice, "on-device")
       : { kind: "error", message: "Could not open this file." };
   }
   const payload: ExtractSheetInput = { fileBase64, mimeType, fileName: input.file.name };
@@ -372,17 +450,14 @@ export async function extractUpload(input: {
   if (out.ok) return { kind: "done", result: out.result, source: "server" };
   if (out.code === "UNAUTHENTICATED") return { kind: "unauthenticated" };
   if (pdf && CLIENT_FALLBACK_CODES.has(out.code)) {
-    return onDeviceRead(input.text, input.onDevice, "client-fallback", out.code, out.retryAfterSec);
+    return onDeviceRead(input, input.onDevice, "client-fallback", out.code, out.retryAfterSec);
   }
-  return errorState(out.code, out.retryAfterSec);
+  return errorState(out.code, out.retryAfterSec, out.message);
 }
 
 /** Pasted text: always on-device (the server takes a file). */
-export function extractPasted(
-  text: string,
-  onDevice: (text: string) => FieldCardData,
-): ExtractState {
-  return onDeviceRead(text, onDevice, "on-device");
+export function extractPasted(text: string, onDevice: OnDeviceExtract): Promise<ExtractState> {
+  return onDeviceRead({ text }, onDevice, "on-device");
 }
 
 function hasWarning(result: ExtractResult, code: string): boolean {
@@ -432,7 +507,13 @@ export function providerLabel(state: DoneState): string {
   return "On-device reader. Check every value against the sheet.";
 }
 
-export type ProvenanceRow = { fieldPath: string; label: string; stated: boolean; text: string };
+export type ProvenanceRow = {
+  fieldPath: string;
+  label: string;
+  stated: boolean;
+  edited: boolean;
+  text: string;
+};
 
 function labelFor(path: string): string {
   return path
@@ -447,54 +528,90 @@ function labelFor(path: string): string {
     .join(" › ");
 }
 
+function formatEditedAt(at: string): string {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return at;
+  return d.toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZoneName: "short",
+  });
+}
+
 export function describeProvenance(entry: ProvenanceEntry): string {
   if (entry === "not-stated") return "Not stated";
+  if ("edited" in entry) return `Edited by ${entry.edited.by}, ${formatEditedAt(entry.edited.at)}`;
   if (!entry.quote.trim()) return UNPINNED_TEXT;
   const q = `“${entry.quote}”`;
   return typeof entry.page === "number" ? `p. ${entry.page} — ${q}` : q;
 }
 
 /** Sorted rows for the "Where each value came from" panel. */
-export function provenanceRows(provenance: Provenance): ProvenanceRow[] {
+/** Value at a dot path (`surfacePrep.prepGates.0.profile`), or undefined. */
+export function valueAt(obj: unknown, path: string): unknown {
+  let cur: unknown = obj;
+  for (const seg of path.split(".")) {
+    if (cur === null || cur === undefined || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return cur;
+}
+
+/**
+ * Rows for the "Where each value came from" panel. Server-stamped edits read "Edited by …".
+ * Until the server stamps edits, pass `session` (card now vs card as read): a changed field reads
+ * SESSION_EDIT_TEXT. Nothing about session edits is written into the saved extract.
+ */
+export function provenanceRows(
+  provenance: ClientProvenance,
+  session?: { current: unknown; asRead: unknown },
+): ProvenanceRow[] {
   return Object.keys(provenance)
     .sort()
     .map((fieldPath) => {
       const entry = provenance[fieldPath]!;
+      const serverEdited = typeof entry === "object" && "edited" in entry;
+      const sessionEdited =
+        !serverEdited &&
+        !!session &&
+        JSON.stringify(valueAt(session.current, fieldPath) ?? null) !==
+          JSON.stringify(valueAt(session.asRead, fieldPath) ?? null);
       return {
         fieldPath,
         label: labelFor(fieldPath),
-        stated: entry !== "not-stated",
-        text: describeProvenance(entry),
+        stated: entry !== "not-stated" || sessionEdited,
+        edited: serverEdited || sessionEdited,
+        text: sessionEdited ? SESSION_EDIT_TEXT : describeProvenance(entry),
       };
     });
 }
 
-/**
- * Reopen: provenance + provider saved with the job record (LEAD ruling: BE saves them).
- * PENDING CONTRACT: field names on the job record are not published yet. We read optional
- * `provenance`, `provider`, `deployment`, `extractWarnings` here and nowhere else.
- */
-export type SavedExtractFields = {
-  provenance?: unknown;
-  provider?: unknown;
-  deployment?: unknown;
-  extractWarnings?: unknown;
-};
+/** What to save next to `card`: the extract object exactly as the reader returned it. */
+export function toSavedExtract(state: ExtractState): SavedExtract | null {
+  return state.kind === "done" ? state.result.extract : null;
+}
 
-export function savedExtractState(
-  record: SavedExtractFields & { card: FieldCardData | null },
-): ExtractState {
+/** Reopen: rebuild the panel from the saved record. Missing or malformed → idle, never throws. */
+export function savedExtractState(record: {
+  card: FieldCardData | null;
+  extract?: unknown;
+}): ExtractState {
   if (!record.card) return { kind: "idle" };
-  const provenance = parseProvenance(record.provenance);
-  if (!provenance || typeof record.provider !== "string") return { kind: "idle" };
+  const saved = parseSavedExtract(record.extract);
+  const raw = (
+    record.extract && typeof record.extract === "object" ? record.extract : null
+  ) as Record<string, unknown> | null;
+  const provenance = parseProvenance(raw?.provenance);
+  if (!saved || !provenance) return { kind: "idle" };
   return {
     kind: "done",
     source: "saved",
     result: {
       card: record.card,
       provenance,
-      ...normalizeProvider(record.provider, record.deployment),
-      warnings: parseWarnings(record.extractWarnings),
+      ...normalizeProvider(saved.provider, saved.deployment),
+      warnings: parseWarnings(saved.warnings),
+      extract: saved,
     },
   };
 }
