@@ -1,5 +1,6 @@
-import { guestMigrateResult } from "@/lib/guest-import";
-import { assertWritable, closeLocal, jobStatusOf, type JobStatusFields } from "@/lib/job-status";
+import { guestMigrateResult, NOT_YOUR_JOB_MESSAGE } from "@/lib/guest-import";
+import { GUEST_CLOSED_BY, JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE, statusFields, type CloseResult } from "@/lib/job-close";
+import { guestTrust, planExtractSave } from "@/lib/job-extract";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import {
   defaultSite,
@@ -13,11 +14,9 @@ import type { SiteContext } from "@/lib/mitigations";
 
 const KEY = "fieldcard.projects.v1";
 
-type GuestProject = ProjectFull & JobStatusFields;
-
 type GuestStore = {
   lastProjectId: string | null;
-  projects: GuestProject[];
+  projects: ProjectFull[];
   custom: CustomMitigation[];
 };
 
@@ -49,9 +48,8 @@ function write(store: GuestStore) {
   localStorage.setItem(KEY, JSON.stringify(store));
 }
 
-function summaryOf(p: GuestProject): ProjectSummary & JobStatusFields {
+function summaryOf(p: ProjectFull): ProjectSummary {
   return {
-    ...jobStatusOf(p),
     id: p.id,
     name: p.name,
     zip: p.zip,
@@ -59,6 +57,7 @@ function summaryOf(p: GuestProject): ProjectSummary & JobStatusFields {
     lastOpenedAt: p.lastOpenedAt,
     updatedAt: p.updatedAt,
     hasCard: Boolean(p.card),
+    ...statusFields({ status: p.status, closed_at: p.closedAt ?? null, closed_by: p.closedBy ?? null }),
   };
 }
 
@@ -117,6 +116,9 @@ export function guestCreateProject(name: string, zip: string, seed?: Partial<Pro
     lastOpenedAt: now,
     updatedAt: now,
     hasCard: Boolean(seed?.card),
+    status: "open",
+    closedAt: null,
+    closedBy: null,
     calibration: seed?.calibration ?? DEFAULT_CALIBRATION,
     site: seed?.site ?? defaultSite(),
     card: seed?.card ?? null,
@@ -132,7 +134,7 @@ export function guestCreateProject(name: string, zip: string, seed?: Partial<Pro
   return full;
 }
 
-export function guestOpenProject(id: string): GuestProject {
+export function guestOpenProject(id: string): ProjectFull {
   const s = read();
   const found = s.projects.find((p) => p.id === id && !p.archived);
   if (!found) throw new Error("Project not found.");
@@ -143,6 +145,9 @@ export function guestOpenProject(id: string): GuestProject {
   write(s);
   return next;
 }
+
+/** `edited.by` on a guest (signed-out, this-device) job. */
+export const GUEST_EDITOR = "Guest (this device)";
 
 export function guestSaveProject(input: {
   id: string;
@@ -155,21 +160,30 @@ export function guestSaveProject(input: {
   pdsText?: string;
   recents?: SavedCard[];
   outcomes?: FieldOutcome[];
-}): ProjectSummary & JobStatusFields {
+}): ProjectSummary {
   const s = read();
   const found = s.projects.find((p) => p.id === input.id);
   if (!found) throw new Error("Project not found.");
-  // Mirrors the server: a closed job refuses every change (CONTRACT "Job closeout").
-  assertWritable(found);
+  // Mirrors the server: a closed job is read-only.
+  if (found.status === "closed") throw new Error(JOB_CLOSED_MESSAGE);
   const now = new Date().toISOString();
-  const next: GuestProject = {
+  // Same edit-stamp rule as the server, on this device only (no account, so "by" is the guest).
+  const plan = planExtractSave({
+    storedCard: found.card,
+    storedExtract: found.extract ?? null,
+    card: input.card,
+    extract: input.extract,
+    editor: { by: GUEST_EDITOR, at: now },
+    trust: guestTrust,
+  });
+  const next: ProjectFull = {
     ...found,
     name: input.name?.trim() || found.name,
     zip: input.zip != null ? input.zip.replace(/\D/g, "").slice(0, 5) : found.zip,
     calibration: input.calibration ?? found.calibration,
     site: input.site ?? found.site,
     card: input.card !== undefined ? input.card : found.card,
-    extract: input.extract !== undefined ? input.extract : found.extract,
+    extract: plan.extract,
     pdsText: input.pdsText ?? found.pdsText,
     recents: input.recents ?? found.recents,
     outcomes: input.outcomes ?? found.outcomes,
@@ -181,21 +195,19 @@ export function guestSaveProject(input: {
   return summaryOf(next);
 }
 
-/** Local close: same result shape as the server's closeProject. Idempotent. No reopen. */
-export function guestCloseProject(id: string): {
-  ok: true;
-  status: "closed";
-  closedAt: string | null;
-  closedBy: string | null;
-} {
+/** Guest mirror of closeProject: idempotent, no reopen. No account, so "closed by" is this device. */
+export function guestCloseProject(id: string): CloseResult {
   const s = read();
   const found = s.projects.find((p) => p.id === id);
-  if (!found) throw new Error("Project not found.");
-  const next = closeLocal(found, new Date().toISOString());
+  if (!found) throw new Error(NOT_YOUR_JOB_MESSAGE);
+  if (found.status === "closed" && found.closedAt) {
+    return { ok: true, status: "closed", closedAt: found.closedAt, closedBy: found.closedBy ?? GUEST_CLOSED_BY };
+  }
+  const now = new Date().toISOString();
+  const next: ProjectFull = { ...found, status: "closed", closedAt: now, closedBy: GUEST_CLOSED_BY, updatedAt: now };
   s.projects = s.projects.map((p) => (p.id === id ? next : p));
   write(s);
-  const view = jobStatusOf(next);
-  return { ok: true, status: "closed", closedAt: view.closedAt, closedBy: view.closedBy };
+  return { ok: true, status: "closed", closedAt: now, closedBy: GUEST_CLOSED_BY };
 }
 
 export function guestArchiveProject(id: string, archived: boolean) {
@@ -207,6 +219,8 @@ export function guestArchiveProject(id: string, archived: boolean) {
 
 export function guestDeleteProject(id: string) {
   const s = read();
+  // Mirrors the server: a closed job is a record and can't be deleted (archive stays allowed).
+  if (s.projects.find((p) => p.id === id)?.status === "closed") throw new Error(JOB_CLOSED_DELETE_MESSAGE);
   s.projects = s.projects.filter((p) => p.id !== id);
   if (s.lastProjectId === id) s.lastProjectId = null;
   write(s);

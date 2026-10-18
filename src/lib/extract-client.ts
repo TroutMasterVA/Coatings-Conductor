@@ -325,6 +325,11 @@ export function parseExtractResult(body: unknown): ExtractResult | null {
     warnings,
     draft: b.draft === true,
     unverifiedTemps: b.unverifiedTemps === true,
+    // Signed read (CONTRACT "Signed extract read"): server-only, passed back untouched on the
+    // one fresh-read save. Never built, parsed into parts, or altered here.
+    ...(b.serverRead !== undefined
+      ? { serverRead: b.serverRead as ExtractResult["serverRead"] }
+      : {}),
   };
 }
 
@@ -333,18 +338,19 @@ export function mapServerResponse(res: unknown): ServerOutcome {
   if (!res || typeof res !== "object") return { ok: false, code: "EXTRACT_FAILED" };
   const r = res as {
     ok?: unknown;
-    /** CONTRACT closeout: `extractSheet` on a closed job returns `{ ok: false, code: "JOB_CLOSED" }` (top level). */
+    /** Fallback only: a bare top-level `code` (early CONTRACT wording for JOB_CLOSED). */
     code?: unknown;
     message?: unknown;
     error?: { code?: unknown; message?: unknown; retryAfterSec?: unknown };
   };
-  if (r.ok !== true && r.code === "JOB_CLOSED") {
-    const msg = typeof r.message === "string" && r.message.trim() ? r.message : undefined;
-    return { ok: false, code: "JOB_CLOSED", ...(msg ? { message: msg } : {}) };
-  }
   if (r.ok === true) {
     const result = parseExtractResult(res);
     return result ? { ok: true, result } : { ok: false, code: "EXTRACT_FAILED" };
+  }
+  // Main path (CONTRACT 438a63b): `{ ok:false, error:{ code, message } }`, incl. JOB_CLOSED.
+  if (!isErrorCode(r.error?.code) && r.code === "JOB_CLOSED") {
+    const msg = typeof r.message === "string" && r.message.trim() ? r.message : undefined;
+    return { ok: false, code: "JOB_CLOSED", ...(msg ? { message: msg } : {}) };
   }
   const code = isErrorCode(r.error?.code) ? r.error.code : "EXTRACT_FAILED";
   const retry = r.error?.retryAfterSec;
@@ -475,7 +481,8 @@ export async function extractUpload(input: {
   maxUploadBytes?: number;
 }): Promise<ExtractState> {
   const pre = precheckFile(input.file, input.maxUploadBytes);
-  if (pre === "FILE_TOO_LARGE") return errorState(pre, undefined, fileTooLargeMessage(input.maxUploadBytes));
+  if (pre === "FILE_TOO_LARGE")
+    return errorState(pre, undefined, fileTooLargeMessage(input.maxUploadBytes));
   if (pre) return errorState(pre);
   const pdf = isPdf(input.file);
   if (!input.signedIn) {

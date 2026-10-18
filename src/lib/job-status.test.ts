@@ -1,14 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  assertWritable,
   canAutosave,
   CLOSE_CONFIRM_TEXT,
-  closeLocal,
   closedBadgeText,
   isClosed,
   isJobClosedError,
+  JOB_CLOSED_DELETE_MESSAGE,
   JOB_CLOSED_MESSAGE,
+  deleteErrorMessage,
+  rowActions,
   jobStatusOf,
   mapCloseError,
   mapCloseResult,
@@ -112,13 +113,13 @@ describe("closeProject result and error mapping (server style = archiveProject)"
 });
 
 describe("extractSheet JOB_CLOSED envelope", () => {
-  it("top-level { ok:false, code:'JOB_CLOSED' } (CONTRACT text) maps to JOB_CLOSED", () => {
+  it("fallback: bare top-level { ok:false, code:'JOB_CLOSED' } still maps to JOB_CLOSED", () => {
     assert.deepEqual(mapServerResponse({ ok: false, code: "JOB_CLOSED" }), {
       ok: false,
       code: "JOB_CLOSED",
     });
   });
-  it("existing { ok:false, error:{ code } } envelope also maps, server message kept", () => {
+  it("main path (CONTRACT 438a63b): { ok:false, error:{ code:'JOB_CLOSED', message } }, server message kept", () => {
     assert.deepEqual(
       mapServerResponse({ ok: false, error: { code: "JOB_CLOSED", message: "m" } }),
       {
@@ -137,7 +138,10 @@ describe("extractSheet JOB_CLOSED envelope", () => {
         throw new Error("must not fall back");
       },
       readBase64: async () => "QUJD",
-      server: async () => ({ ok: false, code: "JOB_CLOSED" }),
+      server: async () => ({
+        ok: false,
+        error: { code: "JOB_CLOSED", message: JOB_CLOSED_MESSAGE },
+      }),
     });
     assert.equal(s.kind, "error");
     assert.equal(s.kind === "error" && s.issue, "JOB_CLOSED");
@@ -146,21 +150,40 @@ describe("extractSheet JOB_CLOSED envelope", () => {
   });
 });
 
-describe("guest (local) workspace mirrors close + refusal", () => {
-  it("closeLocal sets closed + closedAt, no closedBy; idempotent keeps first closedAt", () => {
-    const p = { id: "g1", status: undefined } as {
-      id: string;
-      status?: "open" | "closed";
-      closedAt?: string | null;
-    };
-    const once = closeLocal(p, "2026-10-18T20:00:00Z");
-    assert.equal(once.status, "closed");
-    assert.equal(once.closedAt, "2026-10-18T20:00:00Z");
-    const twice = closeLocal(once, "2026-10-19T20:00:00Z");
-    assert.equal(twice.closedAt, "2026-10-18T20:00:00Z");
+describe("closed job: archive yes, delete no (PO ruling)", () => {
+  it("closed rows hide Remove / Delete forever but keep Archive (active) or Restore (archived)", () => {
+    assert.deepEqual(rowActions({ status: "closed", archived: false }), {
+      open: true,
+      archive: true,
+      restore: false,
+      remove: false,
+    });
+    assert.deepEqual(rowActions({ status: "closed", archived: true }), {
+      open: false,
+      archive: false,
+      restore: true,
+      remove: false,
+    });
   });
-  it("assertWritable throws JOB_CLOSED_MESSAGE on a closed job only", () => {
-    assert.doesNotThrow(() => assertWritable({}));
-    assert.throws(() => assertWritable({ status: "closed" }), { message: JOB_CLOSED_MESSAGE });
+  it("open rows (and older rows with no status) keep Remove", () => {
+    assert.equal(rowActions({ archived: false }).remove, true);
+    assert.equal(rowActions({ status: "open", archived: true }).remove, true);
+  });
+  it("a refused delete shows BE's JOB_CLOSED_DELETE_MESSAGE", () => {
+    assert.equal(JOB_CLOSED_DELETE_MESSAGE, "This job is closed and can't be deleted.");
+    assert.equal(
+      deleteErrorMessage(new Error(JOB_CLOSED_DELETE_MESSAGE)),
+      JOB_CLOSED_DELETE_MESSAGE,
+    );
+    assert.equal(deleteErrorMessage(new Error("db down")), "db down");
+    assert.equal(deleteErrorMessage(undefined), "Could not remove project.");
+  });
+  it("closedBy shows as-is, including 'This device' for imported guest jobs", () => {
+    const v = jobStatusOf({
+      status: "closed",
+      closedAt: "2026-10-18T16:00:00Z",
+      closedBy: "This device",
+    });
+    assert.equal(closedBadgeText(v), "Closed · Oct 18, 2026 · by This device");
   });
 });

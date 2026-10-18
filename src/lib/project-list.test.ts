@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { dedupeProjectsById, upsertProjectSummary } from "./project-list.ts";
+import { dedupeProjectsById, summaryOfFull, upsertProjectSummary } from "./project-list.ts";
 import type { ProjectSummary } from "./project-store.ts";
 
 function row(id: string, name: string): ProjectSummary {
@@ -46,5 +46,25 @@ describe("project list identity", () => {
       ["a", "b"],
     );
     assert.equal(next[0]?.name, "Tank 1");
+  });
+});
+
+describe("summaryOfFull (index.tsx list row from an opened job)", () => {
+  const full = (extra: Record<string, unknown>) =>
+    ({ ...row("a", "Tank 1"), card: null, ...extra }) as unknown as Parameters<
+      typeof summaryOfFull
+    >[0];
+  it("passes status, closedAt and closedBy through", () => {
+    const s = summaryOfFull(
+      full({ status: "closed", closedAt: "2026-10-18T20:00:00.000Z", closedBy: "Isaiah Chester" }),
+    );
+    assert.equal(s.status, "closed");
+    assert.equal(s.closedAt, "2026-10-18T20:00:00.000Z");
+    assert.equal(s.closedBy, "Isaiah Chester");
+    assert.equal(s.hasCard, false);
+  });
+  it("missing status = open, no stray closed fields", () => {
+    const s = summaryOfFull(full({ closedAt: "2026-10-18T20:00:00.000Z" }));
+    assert.deepEqual([s.status, s.closedAt, s.closedBy], ["open", null, null]);
   });
 });

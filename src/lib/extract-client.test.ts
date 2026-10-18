@@ -659,7 +659,10 @@ describe("save payload: extract keep / clear / replace (LEAD blocker 1)", () => 
         pdf,
         ok({
           provenance: {
-            "product.name": { edited: { by: "x", at: "2026-10-18T19:30:00Z" }, sheetQuote: { quote: "Q" } },
+            "product.name": {
+              edited: { by: "x", at: "2026-10-18T19:30:00Z" },
+              sheetQuote: { quote: "Q" },
+            },
           } as unknown as ExtractResult["provenance"],
         }),
       ).p,
@@ -682,7 +685,10 @@ describe("FILE_TOO_LARGE caught in the browser (LEAD blocker 2)", () => {
     const limit = 3 * 1024 * 1024;
     const s = await upload({ ...pdf, size: limit + 1 }, ok(), { maxUploadBytes: limit }).p;
     assert.equal(s.kind, "error");
-    assert.equal(s.kind === "error" && s.message, "File is over 3 MB, the upload limit on this copy.");
+    assert.equal(
+      s.kind === "error" && s.message,
+      "File is over 3 MB, the upload limit on this copy.",
+    );
     const server = checkRequest(
       { fileBase64: "A".repeat(limit * 2), mimeType: "application/pdf", fileName: "a.pdf" },
       limit,
@@ -692,5 +698,59 @@ describe("FILE_TOO_LARGE caught in the browser (LEAD blocker 2)", () => {
   });
   it("unknown limit falls back to the 10 MB ceiling copy", () => {
     assert.equal(fileTooLargeMessage(), "File is over 10 MB, the upload limit on this copy.");
+  });
+});
+
+describe("signed read (CONTRACT 'Signed extract read')", () => {
+  const serverRead = Object.freeze({
+    id: "read-123",
+    sig: "c2lnLW9wYXF1ZQ",
+    fields: Object.freeze({ "product.name": "Zm9v", "installation.filmThickness": "YmFy" }),
+  });
+  it("fresh-read save sends serverRead back untouched (same object); only `edited` is stripped", async () => {
+    const before = JSON.stringify(serverRead);
+    const s = done(
+      await upload(
+        pdf,
+        ok({
+          serverRead,
+          provenance: {
+            "product.name": {
+              edited: { by: "x", at: "2026-10-18T19:30:00Z" },
+              sheetQuote: { quote: "Q" },
+            },
+          } as unknown as ExtractResult["provenance"],
+        } as Over),
+      ).p,
+    );
+    const out = extractForSave(s);
+    assert.ok(out && typeof out === "object");
+    assert.equal(out.serverRead, serverRead);
+    assert.equal(JSON.stringify(out.serverRead), before);
+    assert.ok(!JSON.stringify(out.provenance).includes('"edited"'));
+  });
+  it("no serverRead from the server → none invented", async () => {
+    const out = extractForSave(done(await upload(pdf, ok()).p));
+    assert.ok(out && !("serverRead" in out));
+  });
+  it("on-device read never carries a serverRead", async () => {
+    const s = done(await extractPasted(sampleText, onDevice));
+    const out = extractForSave(s);
+    assert.ok(out && !("serverRead" in out));
+  });
+  it("autosave without a fresh read omits `extract` (already stored, reopened, idle)", async () => {
+    const s = done(await upload(pdf, ok({ serverRead } as Over)).p);
+    assert.equal(extractForSave(s, { alreadyStored: true }), undefined);
+    assert.equal(extractForSave({ kind: "idle" }), undefined);
+    const reopened = savedExtractState({
+      card,
+      extract: {
+        provider: "azure",
+        provenance: {},
+        warnings: [],
+        extractedAt: "2026-10-18T19:00:00Z",
+      },
+    });
+    assert.equal(extractForSave(reopened), undefined);
   });
 });
