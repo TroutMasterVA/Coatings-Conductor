@@ -4,7 +4,7 @@
  * cells (a unit header like "(hours)" applies to unitless cells). Prose only -> "" (Not stated).
  */
 
-const UNIT = String.raw`(?:minutes?|mins?\.?|h|hrs?\.?|hours?|hour\(s\)|days?|day\(s\)|d|weeks?|wks?|months?|years?|yrs?)(?![a-z])`;
+const UNIT = String.raw`(?:hour\(s\)|day\(s\)|minutes?|mins?\.?|hours?|hrs?\.?|h|days?|d|weeks?|wks?|months?|years?|yrs?)(?![a-z])`;
 const NUM = String.raw`(?:\d+(?:\.\d+)?(?:\s+\d\/\d|\s*[¼½¾])?|[¼½¾])`;
 const WORD = String.raw`(?:unlimited|none|extended|indefinite|no\s+maximum)\*?`;
 const DUR = String.raw`(?:${NUM}(?:\s*(?:-|–|to)\s*${NUM})?\s*${UNIT}|${WORD})`;
