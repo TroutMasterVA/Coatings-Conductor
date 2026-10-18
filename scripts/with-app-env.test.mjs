@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -16,6 +16,25 @@ import {
 const execFileAsync = promisify(execFile);
 const WRAPPER = join(projectRoot(), "scripts/with-app-env.mjs");
 const PRINT_FLAG = "process.stdout.write(String(process.env.VITE_AUTH_ENABLED));";
+
+/** Env for child runs with no explicit VITE_AUTH_ENABLED (CI may set one). */
+function envWithoutAuthFlag() {
+  const env = { ...process.env };
+  delete env.VITE_AUTH_ENABLED;
+  return env;
+}
+
+/**
+ * A throwaway workspace holding a copy of the wrapper and a `.grok/app-env.json`
+ * that turns auth off, so the wrapper's file-merge path is exercised without
+ * depending on this repo's own app-env (which ships auth on).
+ */
+function makeWrapperWorkspace() {
+  const root = makeWorkspace('{"VITE_AUTH_ENABLED":"false"}');
+  mkdirSync(join(root, "scripts"));
+  copyFileSync(WRAPPER, join(root, "scripts/with-app-env.mjs"));
+  return root;
+}
 
 function makeWorkspace(appEnvJson) {
   const root = mkdtempSync(join(tmpdir(), "app-env-"));
@@ -59,8 +78,8 @@ test("an explicit process-env override wins over the file", () => {
   assert.equal(merged.PATH, "/usr/bin");
 });
 
-test("the template ships auth off", () => {
-  assert.deepEqual(readAppEnv(projectRoot()), { VITE_AUTH_ENABLED: "false" });
+test("this app ships auth on (no auth-off override in its app-env)", () => {
+  assert.notEqual(readAppEnv(projectRoot()).VITE_AUTH_ENABLED, "false");
 });
 
 test("vite loadEnv resolves the wrapped value", () => {
@@ -74,12 +93,12 @@ test("vite loadEnv resolves the wrapped value", () => {
 });
 
 test("the wrapped command runs with the app env applied", async () => {
-  const { stdout } = await execFileAsync(process.execPath, [
-    WRAPPER,
+  const root = makeWrapperWorkspace();
+  const { stdout } = await execFileAsync(
     process.execPath,
-    "-e",
-    PRINT_FLAG,
-  ]);
+    [join(root, "scripts/with-app-env.mjs"), process.execPath, "-e", PRINT_FLAG],
+    { env: envWithoutAuthFlag() },
+  );
   assert.equal(stdout, "false");
 });
 
@@ -116,13 +135,13 @@ test("a signal-killed command is never reported as success", async () => {
 test("the CLI still runs when invoked through a symlinked path", async () => {
   // node realpaths import.meta.url but not process.argv[1], so a raw comparison
   // turns the wrapper into a no-op that exits 0 without starting anything.
+  const root = makeWrapperWorkspace();
   const link = join(mkdtempSync(join(tmpdir(), "app-env-link-")), "scripts");
-  symlinkSync(join(projectRoot(), "scripts"), link);
-  const { stdout } = await execFileAsync(process.execPath, [
-    join(link, "with-app-env.mjs"),
+  symlinkSync(join(root, "scripts"), link);
+  const { stdout } = await execFileAsync(
     process.execPath,
-    "-e",
-    PRINT_FLAG,
-  ]);
+    [join(link, "with-app-env.mjs"), process.execPath, "-e", PRINT_FLAG],
+    { env: envWithoutAuthFlag() },
+  );
   assert.equal(stdout, "false");
 });
