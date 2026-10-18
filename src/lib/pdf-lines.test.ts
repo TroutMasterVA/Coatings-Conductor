@@ -199,3 +199,37 @@ describe(
     }
   },
 );
+
+describe("size guards", () => {
+  it("huge pages skip column detection and cap items, without throwing", async () => {
+    const { MAX_PAGE_ITEMS, MAX_SPLIT_ITEMS, pageLines } = await import("./pdf-lines.ts");
+    const items = [];
+    // Two clean columns that would normally split, repeated past the split guard.
+    for (let r = 0; r < MAX_SPLIT_ITEMS; r += 1) {
+      items.push({
+        str: "left column words here",
+        x: 0,
+        y: 100_000 - r * 12,
+        width: 150,
+        height: 10,
+      });
+      items.push({
+        str: "right column words here",
+        x: 300,
+        y: 100_000 - r * 12,
+        width: 150,
+        height: 10,
+      });
+    }
+    const lines = pageLines(items);
+    assert.equal(lines[0], "left column words here right column words here");
+    const many = Array.from({ length: MAX_PAGE_ITEMS + 500 }, (_, i) => ({
+      str: `w${i}`,
+      x: 0,
+      y: 1_000_000 - i * 12,
+      width: 20,
+      height: 10,
+    }));
+    assert.equal(pageLines(many).length, MAX_PAGE_ITEMS);
+  });
+});
