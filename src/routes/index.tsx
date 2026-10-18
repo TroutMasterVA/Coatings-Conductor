@@ -14,7 +14,14 @@ import { isUnauthorized, returnToLogin } from "@/lib/auth/expired";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
 import { buildCardFromPds } from "@/lib/on-device-extract";
-import { bytesToBase64, extractPasted, extractUpload, type ExtractState } from "@/lib/extract-client";
+import {
+  bytesToBase64,
+  extractPasted,
+  extractUpload,
+  savedExtractState,
+  type ExtractState,
+  type SavedExtractFields,
+} from "@/lib/extract-client";
 import { callExtractSheet } from "@/lib/extract-server";
 import { loadForecast } from "@/lib/forecast";
 import {
@@ -121,7 +128,7 @@ function App({ user }: { user: AppUser | null }) {
   const [extracting, setExtracting] = useState(false);
   const [extractState, setExtractState] = useState<ExtractState>({ kind: "idle" });
   /** Last uploaded file and its pdf.js text; Build re-sends it while the textarea still matches. */
-  const uploadRef = useRef<{ file: File; text: string } | null>(null);
+  const uploadRef = useRef<{ file: File; text: string; pages?: string[] } | null>(null);
   const extractGen = useRef(0);
   const [wxLoading, setWxLoading] = useState(false);
   const [wxError, setWxError] = useState<string | null>(null);
@@ -172,7 +179,7 @@ function App({ user }: { user: AppUser | null }) {
     setOutcomes(full.outcomes);
     setForecast(null);
     setWxError(null);
-    setExtractState({ kind: "idle" });
+    setExtractState(savedExtractState(full as ProjectFull & SavedExtractFields));
     uploadRef.current = null;
     extractGen.current += 1;
     setMode("job");
@@ -328,7 +335,7 @@ function App({ user }: { user: AppUser | null }) {
     setSite((prev) => siteFromCard(next, prev));
   }
 
-  async function runExtract(source: { file: File | null; text: string }) {
+  async function runExtract(source: { file: File | null; text: string; pages?: string[] }) {
     const gen = ++extractGen.current;
     const file = source.file;
     setExtracting(true);
@@ -338,6 +345,7 @@ function App({ user }: { user: AppUser | null }) {
         ? await extractUpload({
             file,
             text: source.text,
+            pages: source.pages,
             signedIn,
             onDevice: buildCardFromPds,
             readBase64: async () => bytesToBase64(new Uint8Array(await file.arrayBuffer())),
@@ -367,13 +375,13 @@ function App({ user }: { user: AppUser | null }) {
   function handleExtract() {
     const upload = uploadRef.current;
     const fromUpload = upload && upload.text === text ? upload.file : null;
-    void runExtract({ file: fromUpload, text });
+    void runExtract({ file: fromUpload, text, pages: fromUpload ? upload?.pages : undefined });
   }
 
-  function handleUpload(file: File, pdfText: string) {
-    uploadRef.current = { file, text: pdfText };
+  function handleUpload(file: File, pdfText: string, pages?: string[]) {
+    uploadRef.current = { file, text: pdfText, pages };
     if (pdfText) setText(pdfText);
-    void runExtract({ file, text: pdfText });
+    void runExtract({ file, text: pdfText, pages });
   }
 
   async function handleForecast(active: FieldCardData | null = card, nextZip = zip) {
@@ -606,7 +614,7 @@ function App({ user }: { user: AppUser | null }) {
               text={text}
               onText={setText}
               onExtract={() => handleExtract()}
-              onUpload={(file, pdfText) => handleUpload(file, pdfText)}
+              onUpload={(file, pdfText, pages) => handleUpload(file, pdfText, pages)}
               onSample={(next, raw) => {
                 extractGen.current += 1;
                 setExtracting(false);

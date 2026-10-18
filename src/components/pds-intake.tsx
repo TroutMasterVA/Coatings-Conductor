@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SAMPLE_PDS_TEXT, SAMPLES } from "@/lib/samples";
 import { ACCEPT_ATTR, isPdf } from "@/lib/extract-client";
-import { extractPdfText } from "@/lib/pdf-text";
+import { extractPdfPages, joinPdfPages } from "@/lib/pdf-text";
 import type { FieldCardData, SavedCard } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +23,7 @@ export function PdsIntake({
   onText: (v: string) => void;
   onExtract: () => void;
   /** PDF, photo/scan, or Word file picked: hand the file (for the server reader) plus any on-device text. */
-  onUpload: (file: File, text: string) => void;
+  onUpload: (file: File, text: string, pages?: string[]) => void;
   onSample: (card: FieldCardData, raw: string) => void;
   loading: boolean;
   recents: SavedCard[];
@@ -43,20 +43,25 @@ export function PdsIntake({
       return;
     }
     let extracted = "";
+    let pages: string[] | undefined;
     if (isPdf(file)) {
       try {
-        extracted = await extractPdfText(file);
+        pages = await extractPdfPages(file);
+        extracted = joinPdfPages(pages);
       } catch {
         extracted = "";
       }
       // Little or no text on-device is fine to send: the server decides how to read it.
-      if (extracted.replace(/\s/g, "").length < 80) extracted = "";
+      if (extracted.replace(/\s/g, "").length < 80) {
+        extracted = "";
+        pages = undefined;
+      }
       if (extracted) onText(extracted);
     }
     setFileNote(
       extracted ? `Loaded ${file.name} (${extracted.length.toLocaleString()} characters).` : `Loaded ${file.name}.`,
     );
-    onUpload(file, extracted);
+    onUpload(file, extracted, pages);
   }
 
   return (
