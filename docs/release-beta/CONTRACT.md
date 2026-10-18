@@ -153,6 +153,10 @@ type EditedProvenance = {
 - `closeProject({ id })`: `createServerFn` behind `authMiddleware`, same style as `archiveProject`. Owner-only: a non-owner gets the existing `NOT_YOUR_JOB_MESSAGE` throw (same as isolation). Idempotent. Returns `{ ok: true, status: 'closed', closedAt, closedBy }`.
 - `openProject` and the job list include `status`, `closedAt`, `closedBy`.
 - Closed job: `saveProject` (and any field edit) throws `new Error(JOB_CLOSED_MESSAGE)` (exported constant, like `NOT_YOUR_JOB_MESSAGE`; text "This job is closed and can't be changed."). `extractSheet` attaching to a closed job returns the existing read-error shape `{ ok: false, error: { code: 'JOB_CLOSED', message: JOB_CLOSED_MESSAGE } }` (message "This job is closed and can't be changed."), like the other read errors. The server enforces this; hiding UI is not enough.
+- **Optional `jobId` input on `extractSheet` (Lead ruling 4:30 PM ET, PR #37):** `extractSheet` accepts an optional `jobId`. It is used **only for the closed-job check, not for signing**; the signed read and its HMAC are unchanged (see "Known limit (job binding)" below).
+  - If `jobId` is given **and** that job is owned by the caller **and** it is closed, return `{ ok: false, error: { code: 'JOB_CLOSED', message: JOB_CLOSED_MESSAGE } }` **before** the sheet is read and **before** any rate-limit cost.
+  - If `jobId` is missing, unknown, or not the caller's, behave **exactly** as if no `jobId` was given: no error, and no hint that the job exists (same result, same message, same rate-limit cost).
+  - Saves on closed jobs are refused regardless of whether `jobId` was sent (`JOB_CLOSED_MESSAGE` throw on save). The client may leave `jobId` out this release.
 - A closed job is a record: opening, reading, and printing/saving the PDF stay allowed. Only edits and new reads stop. Autosave is off.
 - **Archive vs delete (PO 4:06 PM ET):** a closed job **can be archived** (archive only hides it from the list; the record is kept) but **cannot be deleted**. The server enforces this inside the delete itself: deleting a closed job throws `new Error(JOB_CLOSED_DELETE_MESSAGE)` (exported constant; text "This job is closed and can't be deleted."). The UI hides Delete on closed jobs, but the server check is the one that counts. Guest (local) workspace follows the same rule.
 - No reopen in this release.
@@ -168,7 +172,7 @@ type EditedProvenance = {
 - A genuine signed read whose signature verifies saves clean (unstamped) as a fresh extract.
 - Ignore any `extractedAt` from the client; the server alone decides fresh-read vs hand-edit.
 - **Known limit (previews):** without a fixed `BETTER_AUTH_SECRET`, each preview instance has its own secret. A read signed on one instance and saved on another fails verification and shows "Edited by". That is the **safe failure**, not a bug. Documented for QA in #26 and the 4:40 in/out list until Isaiah approves a fixed secret for Preview.
-- **Known limit (job binding):** the signature is **not** bound to a job id, so a user could reuse their own read on another of their jobs. The values are still real sheet reads, so the risk is low. Binding the job id is deferred to **issue #30** after this release (PO ruling, 4:20 PM ET). `extractSheet`'s input is unchanged.
+- **Known limit (job binding):** the signature is **not** bound to a job id, so a user could reuse their own read on another of their jobs. The values are still real sheet reads, so the risk is low. Binding the job id is deferred to **issue #30** after this release (PO ruling, 4:20 PM ET). The signed read is unchanged; the only input change is the optional `jobId` used for the closed-job check above.
 
 ## Draft flag on extract response — PO 4:19 PM ET (PR #26)
 
