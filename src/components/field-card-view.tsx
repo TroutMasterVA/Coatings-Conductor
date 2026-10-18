@@ -4,6 +4,7 @@ import { STEP_RAIL } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { DRAFT_BANNER } from "@/lib/extract-flags";
+import { goGateChips } from "@/components/go-gate-chips";
 
 function join(items: string[] | undefined) {
   return (items ?? []).filter(Boolean).join(" · ");
@@ -54,27 +55,6 @@ function Section({
       </div>
     </section>
   );
-}
-
-function goGateChips(card: FieldCardData): string[] {
-  const env = card.environmentals;
-  const chips: string[] = [];
-  if (env.ambientTempMinF != null || env.ambientTempMaxF != null) {
-    chips.push(`Air ${env.ambientTempMinF ?? "—"}–${env.ambientTempMaxF ?? "—"}°F`);
-  }
-  if (env.substrateTempMinF != null || env.substrateTempMaxF != null) {
-    chips.push(`Substrate ${env.substrateTempMinF ?? "—"}–${env.substrateTempMaxF ?? "—"}°F`);
-  }
-  if (env.dewPointSpreadMinF != null) {
-    chips.push(`Dew spread ≥ ${env.dewPointSpreadMinF}°F`);
-  } else {
-    chips.push("Dew spread not stated");
-  }
-  if (env.relativeHumidityMax != null) chips.push(`RH ≤ ${env.relativeHumidityMax}%`);
-  if (env.relativeHumidityMin != null) chips.push(`RH ≥ ${env.relativeHumidityMin}%`);
-  if (env.precipitationAllowed === false) chips.push("No precipitation");
-  if (env.windMaxMph != null) chips.push(`Wind ≤ ${env.windMaxMph} mph`);
-  return chips;
 }
 
 function formatPrepGate(gate: SubstratePrepGate): string {
