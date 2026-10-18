@@ -19,7 +19,7 @@ import {
   extractPasted,
   extractUpload,
   savedExtractState,
-  toSavedExtract,
+  extractForSave,
   type ExtractState,
   type SavedExtract,
 } from "@/lib/extract-client";
@@ -176,9 +176,13 @@ function App({ user }: { user: AppUser | null }) {
     outcomes: [] as FieldOutcome[],
     extract: null as SavedExtract | null | undefined,
     extractResult: null as object | null,
+    replaceToken: 0,
   });
   /** Fresh reads already stored: later autosaves omit `extract` so server edit stamps are kept. */
   const storedReads = useRef(new WeakSet<object>());
+  /** Card replaced without a read (sample / recent): the next save clears the stored extract once. */
+  const cardReplaced = useRef(0);
+  const clearedSent = useRef(0);
   jobRef.current = {
     projectId,
     projectName,
@@ -189,10 +193,11 @@ function App({ user }: { user: AppUser | null }) {
     text,
     recents,
     outcomes,
-    extract:
-      extractState.kind === "done" && storedReads.current.has(extractState.result)
-        ? undefined
-        : toSavedExtract(extractState),
+    extract: extractForSave(extractState, {
+      alreadyStored: extractState.kind === "done" && storedReads.current.has(extractState.result),
+      cardReplaced: cardReplaced.current !== clearedSent.current,
+    }),
+    replaceToken: cardReplaced.current,
     extractResult: extractState.kind === "done" ? extractState.result : null,
   };
 
@@ -211,6 +216,7 @@ function App({ user }: { user: AppUser | null }) {
     setExtractState(savedExtractState(full));
     uploadRef.current = null;
     extractGen.current += 1;
+    clearedSent.current = cardReplaced.current;
     setMode("job");
     // Update the existing row in place — do not prepend (that reordered + duplicated under race).
     setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), toSummary(full)));
@@ -235,6 +241,8 @@ function App({ user }: { user: AppUser | null }) {
         extract: snap.extract,
       });
       if (snap.extract && snap.extractResult) storedReads.current.add(snap.extractResult);
+      // A clear or a replace both satisfy a pending card replacement.
+      if (snap.extract !== undefined) clearedSent.current = snap.replaceToken;
       if (gen !== saveGen.current) return;
       setProjects((prev) => upsertProjectSummary(prev, summary));
     } catch (err) {
@@ -693,6 +701,7 @@ function App({ user }: { user: AppUser | null }) {
                 setExtracting(false);
                 setExtractState({ kind: "idle" });
                 uploadRef.current = null;
+                cardReplaced.current += 1;
                 setText(raw);
                 applyCard(next);
                 remember(next, zip);
@@ -701,6 +710,9 @@ function App({ user }: { user: AppUser | null }) {
               loading={extracting}
               recents={recents}
               onOpenRecent={(next) => {
+                extractGen.current += 1;
+                setExtracting(false);
+                cardReplaced.current += 1;
                 setExtractState({ kind: "idle" });
                 applyCard(next);
               }}

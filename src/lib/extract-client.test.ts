@@ -15,6 +15,8 @@ import {
   EDITED_AT_UNKNOWN,
   formatEditedAt,
   toSavedExtract,
+  extractForSave,
+  fileTooLargeMessage,
   extractFlags,
   mimeTypeFor,
   normalizeProvider,
@@ -35,6 +37,7 @@ import {
 import { buildCardFromPds } from "./on-device-extract.ts";
 import { parseSavedExtract } from "./job-extract.ts";
 import { onDeviceProvider } from "./extract/on-device-provider.ts";
+import { checkRequest } from "./extract/extract-core.ts";
 import type { ExtractInput } from "./extract/provider.ts";
 import { SAMPLE_PDS_TEXT } from "./samples.ts";
 
@@ -612,5 +615,82 @@ describe("hand-edited fields", () => {
     provenanceRows(s.result.provenance, { current: { ...card, product: {} }, asRead: card });
     assert.equal(JSON.stringify(toSavedExtract(s)), before);
     assert.doesNotMatch(before, /edited/);
+  });
+});
+
+describe("save payload: extract keep / clear / replace (LEAD blocker 1)", () => {
+  const savedRecord = {
+    provider: "azure",
+    provenance: {
+      "product.name": {
+        edited: { by: "Isaiah Chester", at: "2026-10-18T19:30:00Z" },
+        sheetQuote: { page: 1, quote: "X" },
+      },
+    },
+    warnings: [],
+    extractedAt: "2026-10-18T19:00:00Z",
+    draft: false,
+    unverifiedTemps: false,
+  };
+  it("idle → omitted (not null)", () => {
+    assert.equal(extractForSave({ kind: "idle" }), undefined);
+  });
+  it("still reading → omitted", () => {
+    assert.equal(extractForSave({ kind: "loading" }), undefined);
+  });
+  it("failed read (old card still on screen) → omitted, stored quotes and stamps kept", async () => {
+    const s = await upload(png, fail("UNSUPPORTED_FILE_TYPE")).p;
+    assert.equal(s.kind, "error");
+    assert.equal(extractForSave(s), undefined);
+    assert.equal(extractForSave({ kind: "unauthenticated" }), undefined);
+  });
+  it("unparseable saved extract reopens idle → omitted", () => {
+    const s = savedExtractState({ card, extract: { provider: "nope", provenance: 7 } });
+    assert.deepEqual(s, { kind: "idle" });
+    assert.equal(extractForSave(s), undefined);
+  });
+  it("reopened job with no new read → omitted", () => {
+    const d = done(savedExtractState({ card, extract: savedRecord }));
+    assert.equal(extractForSave(d), undefined);
+  });
+  it("fresh successful read → the object once, with `edited` stripped; omitted once stored", async () => {
+    const s = done(
+      await upload(
+        pdf,
+        ok({
+          provenance: {
+            "product.name": { edited: { by: "x", at: "2026-10-18T19:30:00Z" }, sheetQuote: { quote: "Q" } },
+          } as unknown as ExtractResult["provenance"],
+        }),
+      ).p,
+    );
+    const out = extractForSave(s);
+    assert.ok(out && typeof out === "object");
+    assert.ok(!JSON.stringify(out).includes('"edited"'));
+    assert.equal(extractForSave(s, { alreadyStored: true }), undefined);
+  });
+  it("explicit new card or sample (no read) → null, only then", () => {
+    assert.equal(extractForSave({ kind: "idle" }, { cardReplaced: true }), null);
+    // A fresh read after the replacement wins over the pending clear.
+    const d = done(savedExtractState({ card, extract: savedRecord }));
+    assert.equal(extractForSave(d, { cardReplaced: true }), undefined);
+  });
+});
+
+describe("FILE_TOO_LARGE caught in the browser (LEAD blocker 2)", () => {
+  it("uses the server's limit message, same text as extract-core", async () => {
+    const limit = 3 * 1024 * 1024;
+    const s = await upload({ ...pdf, size: limit + 1 }, ok(), { maxUploadBytes: limit }).p;
+    assert.equal(s.kind, "error");
+    assert.equal(s.kind === "error" && s.message, "File is over 3 MB, the upload limit on this copy.");
+    const server = checkRequest(
+      { fileBase64: "A".repeat(limit * 2), mimeType: "application/pdf", fileName: "a.pdf" },
+      limit,
+    );
+    assert.ok(!server.ok);
+    assert.equal(!server.ok && server.message, fileTooLargeMessage(limit));
+  });
+  it("unknown limit falls back to the 10 MB ceiling copy", () => {
+    assert.equal(fileTooLargeMessage(), "File is over 10 MB, the upload limit on this copy.");
   });
 });
