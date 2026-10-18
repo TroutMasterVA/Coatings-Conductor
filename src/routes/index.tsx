@@ -43,7 +43,7 @@ import {
   type SiteContext,
 } from "@/lib/mitigations";
 import { downloadFieldCard, selectedMitigationLabels } from "@/lib/pdf-card";
-import { dedupeProjectsById, upsertProjectSummary } from "@/lib/project-list";
+import { dedupeProjectsById, summaryOfFull, upsertProjectSummary } from "@/lib/project-list";
 import {
   guestCreateProject,
   guestLoadWorkspace,
@@ -57,6 +57,7 @@ import {
 } from "@/lib/guest-workspace";
 import {
   archiveProject,
+  closeProject,
   createProject,
   defaultSite,
   deleteProject,
@@ -67,9 +68,9 @@ import {
   type ProjectFull,
   type ProjectSummary,
 } from "@/lib/project-store";
-import { callCloseProject } from "@/lib/job-close-server";
 import {
   canAutosave,
+  deleteErrorMessage,
   isJobClosedError,
   jobStatusOf,
   mapCloseError,
@@ -245,7 +246,7 @@ function App({ user }: { user: AppUser | null }) {
     clearedSent.current = cardReplaced.current;
     setMode("job");
     // Update the existing row in place — do not prepend (that reordered + duplicated under race).
-    setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), toSummary(full)));
+    setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), summaryOfFull(full)));
   }, []);
 
   const flushSave = useCallback(async () => {
@@ -677,7 +678,8 @@ function App({ user }: { user: AppUser | null }) {
         returnToLogin();
         return;
       }
-      toast.error(err instanceof Error ? err.message : "Could not remove project.");
+      // A closed job is a record: the server (or guest guard) refuses the delete.
+      toast.error(deleteErrorMessage(err));
     }
   }
 
@@ -946,18 +948,6 @@ function App({ user }: { user: AppUser | null }) {
   );
 }
 
-function toSummary(full: ProjectFull & JobStatusFields): JobSummary {
-  return {
-    ...jobStatusOf(full),
-    id: full.id,
-    name: full.name,
-    zip: full.zip,
-    archived: full.archived,
-    lastOpenedAt: full.lastOpenedAt,
-    updatedAt: full.updatedAt,
-    hasCard: Boolean(full.card),
-  };
-}
 
 function workspaceApi(signedIn: boolean) {
   const wrap = <T,>(p: Promise<T>) => (signedIn ? bounceExpired(p) : p);
@@ -979,10 +969,10 @@ function workspaceApi(signedIn: boolean) {
     save(data: Parameters<typeof guestSaveProject>[0]) {
       return wrap(signedIn ? saveProject({ data }) : Promise.resolve(guestSaveProject(data)));
     },
-    /** CONTRACT closeout: server fn (BE, via job-close-server) or the local store for guests. */
+    /** CONTRACT closeout: BE closeProject({ id }) or the guest workspace (BE 37 mirror). */
     close(id: string) {
       return wrap<unknown>(
-        signedIn ? callCloseProject(id) : Promise.resolve(guestCloseProject(id)),
+        signedIn ? closeProject({ data: { id } }) : Promise.resolve(guestCloseProject(id)),
       );
     },
     archive(id: string, archived: boolean) {

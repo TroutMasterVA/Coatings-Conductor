@@ -4,10 +4,14 @@
  * everything here is display and client-side courtesy, never authorization.
  */
 import { NOT_YOUR_JOB_MESSAGE } from "./guest-import.ts";
+import { JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE } from "./job-close.ts";
+
+/** BE's exported constants (#37 job-close.ts); one source for the text. */
+export { JOB_CLOSED_CODE, JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE } from "./job-close.ts";
 
 export type JobStatus = "open" | "closed";
 
-/** Fields `openProject` and the job list carry once BE's 0004 lands. Missing on older jobs = open. */
+/** Fields `openProject` and the job list carry (BE 0004). Optional here so pre-0004 data reads as open. */
 export type JobStatusFields = {
   status?: JobStatus;
   closedAt?: string | null;
@@ -16,21 +20,9 @@ export type JobStatusFields = {
 
 export type JobStatusView = { status: JobStatus; closedAt: string | null; closedBy: string | null };
 
-/**
- * CONTRACT text for a refused change on a closed job. BE exports the same constant (like
- * NOT_YOUR_JOB_MESSAGE) and throws `new Error(JOB_CLOSED_MESSAGE)` from saveProject.
- * TODO(BE): re-export BE's constant here once its PR is on this stack, so there is one source.
- */
-export const JOB_CLOSED_MESSAGE = "This job is closed and can't be changed.";
-/** `extractSheet` envelope code for a closed job. */
-export const JOB_CLOSED_CODE = "JOB_CLOSED";
-
 export const CLOSE_CONFIRM_TEXT = "Close this job? It becomes read-only.";
 export const CLOSE_JOB_LABEL = "Close job";
 export const CANCEL_LABEL = "Cancel";
-/** Shown when the server has no closeProject yet (BE half not deployed on this copy). */
-export const CLOSE_UNAVAILABLE_MESSAGE =
-  "Closing jobs isn’t available on this copy yet. The job is still open.";
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
@@ -126,13 +118,20 @@ export function mapCloseError(err: unknown): CloseOutcome {
   };
 }
 
-/** Guest (local) close: idempotent, keeps the first closedAt. No signed-in user, so no closedBy. */
-export function closeLocal<T extends JobStatusFields>(p: T, now: string): T {
-  if (p.status === "closed") return p;
-  return { ...p, status: "closed", closedAt: now, closedBy: null };
+/** PO ruling: a closed job can be archived but not deleted. Archived rows keep Restore. */
+export function rowActions(p: JobStatusFields & { archived: boolean }): {
+  open: boolean;
+  archive: boolean;
+  restore: boolean;
+  remove: boolean;
+} {
+  const closed = isClosed(p);
+  return { open: !p.archived, archive: !p.archived, restore: p.archived, remove: !closed };
 }
 
-/** Guest (local) refusal, mirroring the server's saveProject throw. */
-export function assertWritable(p: JobStatusFields): void {
-  if (isClosed(p)) throw new Error(JOB_CLOSED_MESSAGE);
+/** Delete refused: the server's (or guest guard's) text, so a closed job reads "can't be deleted". */
+export function deleteErrorMessage(err: unknown): string {
+  const msg = messageOf(err);
+  if (msg === JOB_CLOSED_DELETE_MESSAGE) return JOB_CLOSED_DELETE_MESSAGE;
+  return msg?.trim() ? msg : "Could not remove project.";
 }

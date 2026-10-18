@@ -338,18 +338,19 @@ export function mapServerResponse(res: unknown): ServerOutcome {
   if (!res || typeof res !== "object") return { ok: false, code: "EXTRACT_FAILED" };
   const r = res as {
     ok?: unknown;
-    /** CONTRACT closeout: `extractSheet` on a closed job returns `{ ok: false, code: "JOB_CLOSED" }` (top level). */
+    /** Fallback only: a bare top-level `code` (early CONTRACT wording for JOB_CLOSED). */
     code?: unknown;
     message?: unknown;
     error?: { code?: unknown; message?: unknown; retryAfterSec?: unknown };
   };
-  if (r.ok !== true && r.code === "JOB_CLOSED") {
-    const msg = typeof r.message === "string" && r.message.trim() ? r.message : undefined;
-    return { ok: false, code: "JOB_CLOSED", ...(msg ? { message: msg } : {}) };
-  }
   if (r.ok === true) {
     const result = parseExtractResult(res);
     return result ? { ok: true, result } : { ok: false, code: "EXTRACT_FAILED" };
+  }
+  // Main path (CONTRACT 438a63b): `{ ok:false, error:{ code, message } }`, incl. JOB_CLOSED.
+  if (!isErrorCode(r.error?.code) && r.code === "JOB_CLOSED") {
+    const msg = typeof r.message === "string" && r.message.trim() ? r.message : undefined;
+    return { ok: false, code: "JOB_CLOSED", ...(msg ? { message: msg } : {}) };
   }
   const code = isErrorCode(r.error?.code) ? r.error.code : "EXTRACT_FAILED";
   const retry = r.error?.retryAfterSec;

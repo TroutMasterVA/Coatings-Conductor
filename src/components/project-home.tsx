@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ProjectSummary } from "@/lib/project-store";
-import { jobStatusOf, type JobStatusFields } from "@/lib/job-status";
+import { jobStatusOf, rowActions, type JobStatusFields } from "@/lib/job-status";
 import { cn } from "@/lib/utils";
 
 export function ProjectHome({
@@ -159,6 +159,8 @@ function ProjectRow({
   onDelete: () => void;
 }) {
   const status = jobStatusOf(project);
+  // PO ruling: closed jobs keep Archive but have no Remove / Delete forever.
+  const actions = rowActions(project);
   const opened = project.lastOpenedAt ? new Date(project.lastOpenedAt) : null;
   const openedLabel =
     opened && !Number.isNaN(opened.getTime())
@@ -201,7 +203,7 @@ function ProjectRow({
               </Button>
             </>
           )}
-          {confirm ? (
+          {!actions.remove ? null : confirm ? (
             <Button
               type="button"
               variant="rail"

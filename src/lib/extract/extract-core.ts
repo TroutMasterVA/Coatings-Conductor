@@ -1,4 +1,5 @@
 import { cleanBase64, isImageMime, maxBase64Length, normalizeMime, sniffFileType, DOCX_MIME } from "./file-type.ts";
+import { JOB_CLOSED_MESSAGE } from "../job-close.ts";
 import { readDocxText, readPdfText, type ReadText } from "./server-read.ts";
 import { gateNumbers, leaves, quoteCoversNumbers, quoteIsVerbatim, sourceOf, unverifiedTempsFromGate, type SourceDoc } from "./provenance.ts";
 import type {
@@ -73,6 +74,8 @@ export type RunExtractDeps = {
   log?: ExtractLog;
   /** Server-side text readers (pdf.js, mammoth). Injected for tests. */
   readers?: TextReaders;
+  /** True when `input.jobId` is this user's closed job (server: isJobClosed). */
+  jobClosed?: (jobId: string) => Promise<boolean>;
 };
 
 class Timeout extends Error {
@@ -240,6 +243,11 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
   };
 
   if (!deps.userId) return done(fail("UNAUTHENTICATED", "Sign in to read a sheet."), "none", "UNAUTHENTICATED");
+
+  const jobId = deps.input?.jobId;
+  if (jobId && deps.jobClosed && (await deps.jobClosed(jobId))) {
+    return done(fail("JOB_CLOSED", JOB_CLOSED_MESSAGE), "none", "JOB_CLOSED");
+  }
 
   const checked = checkRequest(deps.input, maxFileBytes);
   if (!checked.ok) {
