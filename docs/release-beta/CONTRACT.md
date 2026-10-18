@@ -167,3 +167,27 @@ type EditedProvenance = {
 - A genuine signed read whose signature verifies saves clean (unstamped) as a fresh extract.
 - Ignore any `extractedAt` from the client; the server alone decides fresh-read vs hand-edit.
 - **Known limit (previews):** without a fixed `BETTER_AUTH_SECRET`, each preview instance has its own secret. A read signed on one instance and saved on another fails verification and shows "Edited by". That is the **safe failure**, not a bug. Documented for QA in #26 and the 4:40 in/out list until Isaiah approves a fixed secret for Preview.
+
+## Draft flag on extract response — PO 4:19 PM ET (PR #26)
+
+Owned by the extract endpoint in PR #26, for **every** provider (Azure and on-device).
+
+- The **server** sets `draft: true` when any of these hold:
+  - any shown field lacks its own **verbatim** sheet quote that backs its value;
+  - any field fell back to the gate's sheet line;
+  - the card's confidence is low.
+- **On-device reads are always draft.**
+- A card drops the Draft banner only when **every** shown value has a backing verbatim quote.
+- The **client never sets or clears** `draft`.
+- Tests cover each case (missing quote → draft; gate-line fallback → draft; low confidence → draft; on-device → always draft; all values quote-backed → not draft).
+
+## Duration fields (recoat / pot life) — PO 4:19 PM ET (PR #40)
+
+- **Recoat max**, **recoat min**, and **pot life** must show a **duration** taken from the sheet (e.g. `"1 year"`, `"8 h"`), read from the **table cell or row**.
+- If the reader finds **only prose**, the field is **Not stated**.
+- Lives in **PR #40**, not #36 (#36 stays cuttable).
+
+## After this release — surface-prep / thinner misreads (issue #30) — PO 4:19 PM ET
+
+- Surface-prep and thinner misreads are **out of this release**; they go to **issue #30** after this release.
+- **Condition:** every such card must always render as a **draft** with the **"check against the sheet"** warning, never as a confirmed reading. If any shows as confirmed, that is a blocker for this release.
