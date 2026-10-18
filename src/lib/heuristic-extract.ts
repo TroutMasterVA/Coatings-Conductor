@@ -32,7 +32,10 @@ function firstMatch(text: string, patterns: RegExp[]): string {
 
 function allMatches(text: string, pattern: RegExp, max = 8): string[] {
   const out: string[] = [];
-  const p = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
+  const p = new RegExp(
+    pattern.source,
+    pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g",
+  );
   let m: RegExpExecArray | null;
   while ((m = p.exec(text)) && out.length < max) {
     const v = (m[1] ?? m[0]).replace(/\s+/g, " ").trim();
@@ -95,7 +98,9 @@ export function dewPointSpreadFromText(raw: string): number | null {
 /** Degree glyphs (˚ º) to °, "40 ° F" to "40°F". Lengths may change; never quote from this. */
 export function normalizeTempText(t: string): string {
   return t
-    .replace(/[\u02DA\u00BA\u2103\u2109]/g, (c) => (c === "\u2103" ? "°C" : c === "\u2109" ? "°F" : "°"))
+    .replace(/[\u02DA\u00BA\u2103\u2109]/g, (c) =>
+      c === "\u2103" ? "°C" : c === "\u2109" ? "°F" : "°",
+    )
     .replace(/(\d)\s+°/g, "$1°")
     .replace(/°\s+([CF])\b/g, "°$1")
     .replace(/[\u2212\u2013\u2014]/g, "-");
@@ -132,7 +137,14 @@ function asF(n: number, u: TempUnit): number {
   return u === "C" ? cToF(n) : n;
 }
 
-type RawTemp = { start: number; end: number; lo: number; hi: number | null; loU: TempUnit; hiU: TempUnit | null };
+type RawTemp = {
+  start: number;
+  end: number;
+  lo: number;
+  hi: number | null;
+  loU: TempUnit;
+  hiU: TempUnit | null;
+};
 
 /** Every unit-bearing temperature or temperature range in one clause, in order. */
 function rawTemps(s: string): RawTemp[] {
@@ -145,9 +157,23 @@ function rawTemps(s: string): RawTemp[] {
       // Range: each end converts by its own unit; a bare first end inherits the second unit.
       const hiU = unitOf(bU)!;
       const loU = unitOf(aU) ?? hiU;
-      out.push({ start: m.index, end: m.index + whole.length, lo: Number(a), hi: Number(b), loU, hiU });
+      out.push({
+        start: m.index,
+        end: m.index + whole.length,
+        lo: Number(a),
+        hi: Number(b),
+        loU,
+        hiU,
+      });
     } else if (aU) {
-      out.push({ start: m.index, end: m.index + whole.length, lo: Number(a), hi: null, loU: unitOf(aU)!, hiU: null });
+      out.push({
+        start: m.index,
+        end: m.index + whole.length,
+        lo: Number(a),
+        hi: null,
+        loU: unitOf(aU)!,
+        hiU: null,
+      });
     }
     // A number with no °F/°C is not a temperature.
   }
@@ -184,7 +210,8 @@ function tempsInClause(s: string): TempExpr[] {
   return out;
 }
 
-const LABEL_RE = /\b(air|ambient|surfaces?|substrates?|steel|material|paint|product)\b(?!\s*prep)/gi;
+const LABEL_RE =
+  /\b(air|ambient|surfaces?|substrates?|steel|material|paint|product)\b(?!\s*prep)/gi;
 /** Words that mean a number belongs to some other quantity even if a gate label is nearby. */
 const BLOCKER_RE =
   /\b(humidity|rh|pressure|pot\s*life|time|times|thickness|dry|drying|cure|curing|cured|stor(?:e|ed|age)|service|resistance|immersion|immersed|water|flash|tip|mils?|hours?|minutes?|exposure|heat|shelf|touch|handle|recoat|mixed|base|curing agent|activat\w*|accelerat\w*|thinn\w*)\b/i;
@@ -216,7 +243,11 @@ function targetsOf(word: string): Target | null | "other" {
  * Labels joined only by spaces ("Material Surface Ambient Humidity") are a table header: ambiguous.
  */
 function labelGroups(s: string): LabelHit[] {
-  const hits = [...s.matchAll(LABEL_RE)].map((m) => ({ w: m[1], start: m.index!, end: m.index! + m[0].length }));
+  const hits = [...s.matchAll(LABEL_RE)].map((m) => ({
+    w: m[1],
+    start: m.index!,
+    end: m.index! + m[0].length,
+  }));
   const groups: LabelHit[] = [];
   let cur: { words: string[]; seps: string[]; start: number; end: number } | null = null;
   const flush = () => {
@@ -256,7 +287,10 @@ function labelGroups(s: string): LabelHit[] {
  * Re-join a line with the next when it ends in ":" or runs on into a lowercase continuation.
  */
 export function logicalLines(t: string): string[] {
-  const phys = t.split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const phys = t
+    .split(/\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
   const out: string[] = [];
   for (const l of phys) {
     const prev = out[out.length - 1];
@@ -275,7 +309,13 @@ function clauses(t: string): string[] {
     .filter(Boolean);
 }
 
-export type TempGate = { target: Target; kind: Qual | "range"; lo: number; hi: number | null; quote: string };
+export type TempGate = {
+  target: Target;
+  kind: Qual | "range";
+  lo: number;
+  hi: number | null;
+  quote: string;
+};
 
 /**
  * Air/surface temperature gates. A number counts only when it carries °F/°C AND a gate label
@@ -317,16 +357,25 @@ export function temperatureGates(raw: string): TempGate[] {
       if (/\b(if|unless)\b/i.test(lead)) return;
 
       const quote = c.slice(Math.min(g.start, tp.start), Math.max(g.end, tp.end)).trim();
-      const negated = /\b(?:not|never|avoid)\b/i.test(c.slice(Math.max(0, tp.start - 40), tp.start));
+      const negated = /\b(?:not|never|avoid)\b/i.test(
+        c.slice(Math.max(0, tp.start - 40), tp.start),
+      );
       for (const target of g.targets) {
         if (tp.hi !== null) {
           if (pre || post) continue; // "minimum 10-20°F" is unclear; skip.
-          out.push({ target, kind: "range", lo: Math.min(tp.lo, tp.hi), hi: Math.max(tp.lo, tp.hi), quote });
+          out.push({
+            target,
+            kind: "range",
+            lo: Math.min(tp.lo, tp.hi),
+            hi: Math.max(tp.lo, tp.hi),
+            quote,
+          });
         } else {
           const q = (pre ?? post)?.[1];
           if (!q) continue; // a bare temperature with no min/max is not a limit
           let kind = qualKind(q);
-          if (negated && /^(above|below|under)$/i.test(q.trim())) kind = kind === "min" ? "max" : "min";
+          if (negated && /^(above|below|under)$/i.test(q.trim()))
+            kind = kind === "min" ? "max" : "min";
           out.push({ target, kind, lo: tp.lo, hi: null, quote });
         }
       }
@@ -346,9 +395,182 @@ export function temperatureGates(raw: string): TempGate[] {
     }
     const lo = Number(m[2]);
     const hi = Number(m[3]);
-    for (const target of targets) out.push({ target, kind: "range", lo: Math.min(lo, hi), hi: Math.max(lo, hi), quote: m[0] });
+    for (const target of targets)
+      out.push({ target, kind: "range", lo: Math.min(lo, hi), hi: Math.max(lo, hi), quote: m[0] });
   }
   return out.filter((g) => g.lo >= -60 && g.lo <= 400 && (g.hi === null || g.hi <= 400));
+}
+
+/* ------------------------------------------------------------------ */
+/* Condition tables: a header row of columns, then labelled rows       */
+/* ------------------------------------------------------------------ */
+
+type ColKind = "temp" | "pct";
+type Col = { word: string; kind: ColKind; unit: TempUnit | "%" | null };
+type Cell = { kind: ColKind; lo: number; hi: number | null };
+
+const COL_WORD = String.raw`(?:material|surface|substrate|steel|ambient|air|humidity|rh)`;
+const COL_UNIT = String.raw`(?:\s*\(\s*(°\s?[CF]|%)\s*\))?`;
+const COL_RE = new RegExp(
+  String.raw`\b(${COL_WORD})(?:\s+temp(?:erature)?s?\.?)?${COL_UNIT}`,
+  "iy",
+);
+
+/**
+ * Header rows like "Condition Material Surface Ambient Humidity" or "Air (°F) Surface (°F) RH (%)":
+ * two or more column labels separated only by spaces. Returns the columns and where the header ends.
+ */
+function tableHeaders(t: string): { cols: Col[]; end: number; start: number }[] {
+  const out: { cols: Col[]; end: number; start: number }[] = [];
+  const startRe = new RegExp(String.raw`\b${COL_WORD}\b`, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = startRe.exec(t))) {
+    const cols: Col[] = [];
+    let pos = m.index;
+    for (;;) {
+      COL_RE.lastIndex = pos;
+      const c = COL_RE.exec(t);
+      if (!c) break;
+      const word = c[1]!.toLowerCase();
+      const u = c[2]?.replace(/\s/g, "");
+      cols.push({
+        word,
+        kind: word === "humidity" || word === "rh" ? "pct" : "temp",
+        unit: u === "%" ? "%" : u ? (unitOf(u) as TempUnit) : null,
+      });
+      pos = c.index + c[0].length;
+      const gap = t.slice(pos).match(/^[ \t]+/);
+      if (!gap) break;
+      pos += gap[0].length;
+    }
+    if (cols.length >= 2) {
+      // A header unit row right after the labels, e.g. "°F °F °F %", applies to every column below.
+      out.push({ cols, start: m.index, end: pos });
+      startRe.lastIndex = pos;
+    }
+  }
+  return out;
+}
+
+const ROW_LABEL = /^(normal|typical|recommended|minimum|maximum|min\.?|max\.?)(?![a-z])/i;
+
+/**
+ * Read the rows under a condition-table header. Cells may come before or after their row label
+ * (pdf.js puts a vertically centred label on its own line), so cells are chunked into rows of the
+ * header's width and row labels are matched to rows in order. Any token that is not a cell, a °C
+ * equivalent in parentheses, or a row label ends the table. A malformed table yields nothing.
+ */
+function readTableRows(t: string, from: number, cols: Col[]): { label: string; cells: Cell[] }[] {
+  const cells: Cell[] = [];
+  const labels: string[] = [];
+  let pos = from;
+  const tempCell = new RegExp(
+    String.raw`^(${NUM})(?:°\s?([CF])?)?(?:\s*(?:-|to)\s*(${NUM}))?(?:°\s?([CF]))?(?![\d.%])`,
+    "i",
+  );
+  for (let guard = 0; guard < 200; guard++) {
+    const rest = t.slice(pos);
+    const ws = rest.match(/^\s+/);
+    if (ws) {
+      pos += ws[0].length;
+      continue;
+    }
+    if (!rest) break;
+    const paren = rest.match(/^[([][^)\]\n]{0,24}[)\]]/);
+    if (paren && /°\s?C|°/.test(paren[0])) {
+      pos += paren[0].length; // °C equivalent of the cell above/before
+      continue;
+    }
+    const rl = rest.match(ROW_LABEL);
+    if (rl) {
+      labels.push(rl[1]!.toLowerCase().replace(/\.$/, ""));
+      pos += rl[0].length;
+      continue;
+    }
+    const col = cols[cells.length % cols.length]!;
+    if (col.kind === "pct") {
+      const pm = rest.match(/^(\d{1,3})(?:\s*(?:-|to)\s*(\d{1,3}))?\s*%/);
+      if (!pm) break;
+      cells.push({ kind: "pct", lo: Number(pm[1]), hi: pm[2] ? Number(pm[2]) : null });
+      pos += pm[0].length;
+      continue;
+    }
+    const tm = rest.match(tempCell);
+    if (!tm) break;
+    // Unit from the cell (either end), else from the column header. No unit at all → not a temperature.
+    const u = unitOf(tm[4] ?? tm[2]) ?? (col.unit && col.unit !== "%" ? col.unit : null);
+    if (!u) break;
+    const a = Number(tm[1]);
+    const b = tm[3] !== undefined ? Number(tm[3]) : null;
+    cells.push({ kind: "temp", lo: asF(a, u), hi: b === null ? null : asF(b, u) });
+    pos += tm[0].length;
+  }
+  const rows: { label: string; cells: Cell[] }[] = [];
+  if (!cells.length || cells.length % cols.length !== 0) return [];
+  const n = cells.length / cols.length;
+  if (labels.length !== n) return [];
+  for (let i = 0; i < n; i++)
+    rows.push({ label: labels[i]!, cells: cells.slice(i * cols.length, (i + 1) * cols.length) });
+  return rows;
+}
+
+export type TableLimits = { gates: TempGate[]; rhMax: number | null };
+
+/**
+ * Limits from condition tables: the Minimum/Maximum rows of air/surface temperature columns and
+ * the Maximum row of a humidity column. A "Normal" row is the recommended band, used only when the
+ * table has no Minimum/Maximum row. Units come from each cell or the column header ("(°F)", "%").
+ */
+export function conditionTableLimits(raw: string): TableLimits {
+  const t = normalizeTempText(raw);
+  const gates: TempGate[] = [];
+  let rhMax: number | null = null;
+  for (const h of tableHeaders(t)) {
+    const rows = readTableRows(t, h.end, h.cols);
+    if (!rows.length) continue;
+    const quote = t
+      .slice(h.start, Math.min(t.length, h.end + 200))
+      .split(/\n/)
+      .slice(0, 3)
+      .join(" ");
+    const hasLimitRows = rows.some((r) => /^(min|max)/.test(r.label));
+    for (const r of rows) {
+      const kind: Qual | "range" | null = /^min/.test(r.label)
+        ? "min"
+        : /^max/.test(r.label)
+          ? "max"
+          : hasLimitRows
+            ? null
+            : "range";
+      if (!kind) continue;
+      r.cells.forEach((cell, i) => {
+        const col = h.cols[i]!;
+        if (col.kind === "pct") {
+          if (kind === "max" && cell.hi === null && cell.lo > 0 && cell.lo <= 100)
+            rhMax ??= cell.lo;
+          return;
+        }
+        const target = targetsOf(col.word);
+        if (target !== "ambient" && target !== "substrate") return;
+        if (kind === "range") {
+          if (cell.hi !== null)
+            gates.push({
+              target,
+              kind,
+              lo: Math.min(cell.lo, cell.hi),
+              hi: Math.max(cell.lo, cell.hi),
+              quote,
+            });
+        } else if (cell.hi === null) {
+          gates.push({ target, kind, lo: cell.lo, hi: null, quote });
+        }
+      });
+    }
+  }
+  return {
+    gates: gates.filter((g) => g.lo >= -60 && g.lo <= 400 && (g.hi === null || g.hi <= 400)),
+    rhMax,
+  };
 }
 
 /** First stated value wins per slot; a range fills a target only when both ends are still open. */
@@ -365,7 +587,8 @@ function applyTempGates(env: Environmentals, gates: TempGate[]): void {
         env[maxK] = g.hi;
       }
     } else if (g.kind === "min") {
-      if (env[minK] == null && (env[maxK] == null || g.lo < (env[maxK] as number))) env[minK] = g.lo;
+      if (env[minK] == null && (env[maxK] == null || g.lo < (env[maxK] as number)))
+        env[minK] = g.lo;
     } else if (env[maxK] == null && (env[minK] == null || g.lo > (env[minK] as number))) {
       env[maxK] = g.lo;
     }
@@ -374,15 +597,23 @@ function applyTempGates(env: Environmentals, gates: TempGate[]): void {
 
 /** Max RH only from a humidity-labelled phrase; a stated minimum, a cure note or a test condition is not a limit. */
 export function relativeHumidityMaxFromText(t: string): number | null {
-  const MAXQ = /(?:max(?:imum)?\.?|below|less than|under|not (?:to )?exceed|up to|<|≤)\s*(?:of\s+)?$/i;
+  const MAXQ =
+    /(?:max(?:imum)?\.?|below|less than|under|not (?:to )?exceed|up to|<|≤)\s*(?:of\s+)?$/i;
   const MINQ = /(?:min(?:imum)?\.?|above|at least|over|>|≥)\s*(?:of\s+)?$/i;
   for (const c of clauses(t)) {
-    if (/\b(determined|tested|test conditions?|measured|require|longer|shorter|faster|slower|accelerat\w*)\b/i.test(c)) continue;
+    if (
+      /\b(determined|tested|test conditions?|measured|require|longer|shorter|faster|slower|accelerat\w*)\b/i.test(
+        c,
+      )
+    )
+      continue;
     for (const m of c.matchAll(/\b(?:relative\s+humidity|humidity|RH)\b/gi)) {
       const from = m.index! + m[0].length;
       const after = c.slice(from, from + 48);
       // Only "levels", "must/should be", ":" etc. may sit between the label and its first value.
-      const lead = after.match(/^[\s:\-–]*(?:levels?\s+|must\s+be\s+|should\s+be\s+|is\s+|shall\s+be\s+|range\s+)*/i)![0];
+      const lead = after.match(
+        /^[\s:\-–]*(?:levels?\s+|must\s+be\s+|should\s+be\s+|is\s+|shall\s+be\s+|range\s+)*/i,
+      )![0];
       for (const pm of after.matchAll(/(\d{1,3})\s*%/g)) {
         const pre = after.slice(0, pm.index!);
         const post = after.slice(pm.index! + pm[0].length);
@@ -408,13 +639,47 @@ export function mixRatioFromText(t: string): string {
   const BY = String.raw`(?:\s*\(?\s*by\s+(?:volume|weight)\s*\)?)`;
   const sane = (...n: (string | undefined)[]) =>
     n.filter((x): x is string => x !== undefined).every((x) => Number(x) > 0 && Number(x) <= 20);
+  const PARTS_COLON = String.raw`(\d{1,2}(?:\.\d)?)\s*part(?:s|\(s\))?\s*[:/]\s*(\d{1,2}(?:\.\d)?)\s*part(?:s|\(s\))?(\s*\(?by\s+(?:volume|weight)\)?)?`;
   const lines = logicalLines(t);
+  // Two-column layouts read as label line + value lines. "Mixing ratio (by volume)" then
+  // "… Comp A 6 part(s)" / "… Comp B 1 part(s)"; or the ratio alone at the start of the next line.
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (!/\bmix(?:ing)?\s+ratio\b/i.test(l)) continue;
+    const by = l.match(/by\s+(volume|weight)/i)?.[1]?.toLowerCase();
+    const next = lines.slice(i + 1, i + 5);
+    const comp = (letter: string) =>
+      next
+        .map((x) =>
+          x.match(
+            new RegExp(
+              String.raw`\b(?:comp(?:onent)?\.?|part)\s*${letter}\b.*?(\d{1,2}(?:\.\d)?)\s*part(?:s|\(s\))?\s*$`,
+              "i",
+            ),
+          ),
+        )
+        .find(Boolean)?.[1];
+    const a = comp("A");
+    const b = comp("B");
+    if (a && b && sane(a, b)) return `${a}:${b}${by ? ` by ${by}` : ""}`;
+    const own = l.match(new RegExp(PARTS_COLON, "i"));
+    if (own && sane(own[1], own[2])) return capToOneLine(own[0]);
+    if (!new RegExp(RATIO).test(l.replace(/\b\d{3,}\b/g, ""))) {
+      const nl = next[0]?.match(new RegExp("^" + RATIO + BY + "?", "i"));
+      if (nl && sane(nl[1], nl[2], nl[3]) && /by\s+(?:volume|weight)/i.test(nl[0]))
+        return capToOneLine(nl[0]);
+    }
+  }
   const cl = lines.flatMap((l, i) =>
     // "Mixing ratio" alone on its line: the value is on the next line or two.
-    /^\s*mix(?:ing)?\s+ratio\s*:?\s*$/i.test(l) ? [`${l} ${lines.slice(i + 1, i + 3).join(" ")}`] : clauses(l),
+    /^\s*mix(?:ing)?\s+ratio\s*:?\s*$/i.test(l)
+      ? [`${l} ${lines.slice(i + 1, i + 3).join(" ")}`]
+      : clauses(l),
   );
   for (const c of cl) {
-    for (const m of c.matchAll(/\b(?:mix(?:ing)?\s+ratio|ratio|combine(?:d)?\s+at|mix(?:ed)?\s+at)\b/gi)) {
+    for (const m of c.matchAll(
+      /\b(?:mix(?:ing)?\s+ratio|ratio|combine(?:d)?\s+at|mix(?:ed)?\s+at)\b/gi,
+    )) {
       if (/pump\s*$/i.test(c.slice(Math.max(0, m.index! - 8), m.index!))) continue;
       const i0 = m.index!;
       const after = c.slice(i0 + m[0].length, i0 + m[0].length + 120);
@@ -439,17 +704,26 @@ export function mixRatioFromText(t: string): string {
 
 /** Thinner only from its own labelled entry, stopping at the next label (cleaner, nozzle, …). */
 export function thinnerFromText(t: string): string {
-  const STOP = /\s(?:airless|cleaner|clean[\s-]?up|cleaning|equipment|nozzle|pot\s*life|work stoppages|application method|weight|voc)\b/i;
+  const STOP =
+    /\s(?:airless|cleaner|clean[\s-]?up|cleaning|equipment|nozzle|pot\s*life|work stoppages|application method|weight|voc)\b/i;
   for (const c of clauses(t)) {
-    for (const m of c.matchAll(/\b(?:thinn(?:er|ers|ing)|reducer)\b(?:\s*\([^)]{0,16}\))?\s*:?\s+/gi)) {
+    for (const m of c.matchAll(
+      /\b(?:thinn(?:er|ers|ing)|reducer)\b(?:\s*\([^)]{0,16}\))?\s*:?\s+/gi,
+    )) {
       const prev = c.slice(Math.max(0, m.index! - 14), m.index!);
       if (/\b(?:with|of|additional|alternative|the|or|no\.\s*\d+)\s*$/i.test(prev)) continue;
-      if (/\/\s*$/.test(m[0]) || /^[^:]*\/\s*clean/i.test(c.slice(m.index!, m.index! + 24))) continue;
+      if (/\/\s*$/.test(m[0]) || /^[^:]*\/\s*clean/i.test(c.slice(m.index!, m.index! + 24)))
+        continue;
       let v = c.slice(m.index! + m[0].length);
       const stop = v.match(STOP);
       if (stop) v = v.slice(0, stop.index);
       v = capToOneLine(v, 120);
-      if (!v || /^(?:to|is|are|may|can|should|cleaner)\b/i.test(v) || /^[a-z]/.test(v) && !/^thin\b/i.test(v)) continue;
+      if (
+        !v ||
+        /^(?:to|is|are|may|can|should|cleaner)\b/i.test(v) ||
+        (/^[a-z]/.test(v) && !/^thin\b/i.test(v))
+      )
+        continue;
       if (v.length < 3) continue;
       return v;
     }
@@ -487,9 +761,18 @@ export function heuristicExtract(text: string): FieldCardData {
     /(?:recommended\s+)?(?:dft|dry\s+film(?:\s+thickness)?)[:\s]+([^\n]+)/i,
     /(\d+\s*[–-]\s*\d+\s*mils?\s*(?:dft|dft)?)/i,
   ]);
-  const recoatMin = firstMatch(t, [/recoat(?:ing)?\s+(?:min(?:imum)?|window)[:\s]+([^\n]+)/i, /minimum\s+recoat[:\s]+([^\n]+)/i]);
-  const recoatMax = firstMatch(t, [/maximum\s+recoat[:\s]+([^\n]+)/i, /recoat(?:ing)?\s+max(?:imum)?[:\s]+([^\n]+)/i]);
-  const coverage = firstMatch(t, [/coverage[:\s]+([^\n]+)/i, /theoretical\s+coverage[:\s]+([^\n]+)/i]);
+  const recoatMin = firstMatch(t, [
+    /recoat(?:ing)?\s+(?:min(?:imum)?|window)[:\s]+([^\n]+)/i,
+    /minimum\s+recoat[:\s]+([^\n]+)/i,
+  ]);
+  const recoatMax = firstMatch(t, [
+    /maximum\s+recoat[:\s]+([^\n]+)/i,
+    /recoat(?:ing)?\s+max(?:imum)?[:\s]+([^\n]+)/i,
+  ]);
+  const coverage = firstMatch(t, [
+    /coverage[:\s]+([^\n]+)/i,
+    /theoretical\s+coverage[:\s]+([^\n]+)/i,
+  ]);
   const induction = firstMatch(t, [/induction[:\s]+([^\n]+)/i, /sweat-?in[:\s]+([^\n]+)/i]);
   const thinning = thinnerFromText(t);
 
@@ -497,10 +780,7 @@ export function heuristicExtract(text: string): FieldCardData {
   const substrates = substratesFromGates(prepGates);
   const methodsPrep = methodsFromGates(prepGates);
   // Per-gate profiles only — never a single first-hit mil string for the whole sheet.
-  const profile =
-    prepGates.length === 1 && prepGates[0].profile
-      ? prepGates[0].profile
-      : "";
+  const profile = prepGates.length === 1 && prepGates[0].profile ? prepGates[0].profile : "";
 
   const env: Environmentals = {
     ambientTempMinF: null,
@@ -517,8 +797,10 @@ export function heuristicExtract(text: string): FieldCardData {
     additional: [],
   };
 
-  applyTempGates(env, temperatureGates(t));
-  env.relativeHumidityMax = relativeHumidityMaxFromText(t);
+  // Prose limits first; a condition table fills only what prose left open.
+  const table = conditionTableLimits(t);
+  applyTempGates(env, [...temperatureGates(t), ...table.gates]);
+  env.relativeHumidityMax = relativeHumidityMaxFromText(t) ?? table.rhMax;
   env.dewPointSpreadMinF = dewPointSpreadFromText(t);
 
   const storageRange = firstMatch(t, [
@@ -538,9 +820,30 @@ export function heuristicExtract(text: string): FieldCardData {
       : "Prep per PDS / spec";
 
   const holdPoints: HoldPoint[] = [
-    { step: 1, name: "Material receipt", criteria: shelf ? `Unexpired (${shelf})` : "Verify batch and shelf life", owner: "QC", timing: "Before staging", source: "inferred" },
-    { step: 2, name: "Storage check", criteria: storageRange || "Stored per PDS temperature and dryness", owner: "QC", timing: "Before issuing to the crew", source: "inferred" },
-    { step: 3, name: "Credentials", criteria: "Applicator / inspector credentials on file", owner: "QC", timing: "Before work", source: "inferred" },
+    {
+      step: 1,
+      name: "Material receipt",
+      criteria: shelf ? `Unexpired (${shelf})` : "Verify batch and shelf life",
+      owner: "QC",
+      timing: "Before staging",
+      source: "inferred",
+    },
+    {
+      step: 2,
+      name: "Storage check",
+      criteria: storageRange || "Stored per PDS temperature and dryness",
+      owner: "QC",
+      timing: "Before issuing to the crew",
+      source: "inferred",
+    },
+    {
+      step: 3,
+      name: "Credentials",
+      criteria: "Applicator / inspector credentials on file",
+      owner: "QC",
+      timing: "Before work",
+      source: "inferred",
+    },
     {
       step: 4,
       name: "Surface preparation",
@@ -549,14 +852,52 @@ export function heuristicExtract(text: string): FieldCardData {
       timing: "Before coating or placement",
       source: prepGates.length ? "stated" : "inferred",
     },
-    { step: 5, name: "Ambient / dew point", criteria: "In-window air, substrate, RH, dew-point spread; no precipitation", owner: "Applicator + QC", timing: "Immediately before application", source: "inferred" },
-    { step: 6, name: "Mix", criteria: mixRatio ? `Ratio ${mixRatio}` : "Mix per PDS", owner: "Applicator", timing: "At combine; mark pot-life start", source: mixRatio ? "stated" : "inferred" },
-    { step: 7, name: "Application", criteria: dft || "Film build / placement per PDS", owner: "Applicator + QC", timing: "During work (WFT / workmanship)", source: dft ? "stated" : "inferred" },
-    { step: 8, name: "Cure / recoat", criteria: [recoatMin, recoatMax].filter(Boolean).join(" · ") || "Inside recoat window", owner: "QC", timing: "Before next coat or service", source: recoatMin ? "stated" : "inferred" },
-    { step: 9, name: "Final inspection", criteria: "Acceptance tests per PDS / project spec", owner: "QC / owner", timing: "After required cure", source: "inferred" },
+    {
+      step: 5,
+      name: "Ambient / dew point",
+      criteria: "In-window air, substrate, RH, dew-point spread; no precipitation",
+      owner: "Applicator + QC",
+      timing: "Immediately before application",
+      source: "inferred",
+    },
+    {
+      step: 6,
+      name: "Mix",
+      criteria: mixRatio ? `Ratio ${mixRatio}` : "Mix per PDS",
+      owner: "Applicator",
+      timing: "At combine; mark pot-life start",
+      source: mixRatio ? "stated" : "inferred",
+    },
+    {
+      step: 7,
+      name: "Application",
+      criteria: dft || "Film build / placement per PDS",
+      owner: "Applicator + QC",
+      timing: "During work (WFT / workmanship)",
+      source: dft ? "stated" : "inferred",
+    },
+    {
+      step: 8,
+      name: "Cure / recoat",
+      criteria: [recoatMin, recoatMax].filter(Boolean).join(" · ") || "Inside recoat window",
+      owner: "QC",
+      timing: "Before next coat or service",
+      source: recoatMin ? "stated" : "inferred",
+    },
+    {
+      step: 9,
+      name: "Final inspection",
+      criteria: "Acceptance tests per PDS / project spec",
+      owner: "QC / owner",
+      timing: "After required cure",
+      source: "inferred",
+    },
   ];
 
-  const ppe = allMatches(t, /(respirator|goggles|gloves|protective clothing|eye protection|face shield|tyvek)/gi);
+  const ppe = allMatches(
+    t,
+    /(respirator|goggles|gloves|protective clothing|eye protection|face shield|tyvek)/gi,
+  );
 
   const service = firstMatch(t, [
     /service[:\s]+([^\n]+)/i,
@@ -583,7 +924,10 @@ export function heuristicExtract(text: string): FieldCardData {
     },
     storage: {
       temperatureRange: storageRange,
-      conditions: allMatches(t, /(keep dry|protect from freeze|original container|tightly closed|fifo)/gi),
+      conditions: allMatches(
+        t,
+        /(keep dry|protect from freeze|original container|tightly closed|fifo)/gi,
+      ),
       notes: "",
     },
     shelfLife: {
@@ -615,7 +959,10 @@ export function heuristicExtract(text: string): FieldCardData {
       notes: "",
     },
     installation: {
-      methods: allMatches(t, /(airless|conventional spray|brush|roller|trowel|squeegee|caulk|plural|gun)/gi),
+      methods: allMatches(
+        t,
+        /(airless|conventional spray|brush|roller|trowel|squeegee|caulk|plural|gun)/gi,
+      ),
       filmThickness: dft,
       coverage,
       numberOfCoats: firstMatch(t, [/(?:number of )?coats?[:\s]+([^\n]+)/i]),
