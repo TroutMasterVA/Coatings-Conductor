@@ -145,3 +145,14 @@ type EditedProvenance = {
 - Any `edited` value sent by the client is ignored and overwritten by the server.
 - The UI shows "Edited by {by}, {at}" and must not present `sheetQuote` as backing the new value.
 - Saving without `extract` keeps the stored extract (and its edit stamps); `extract: null` clears it; a new object replaces it.
+
+## Job closeout (smallest version) — Lead ruling 2026-10-18 3:57 PM ET
+
+- Migration `0004_job_status.sql`: `projects.status text not null default 'open'` (`'open' | 'closed'`), `closed_at timestamptz null`, `closed_by text null`.
+- `closeProject({ id })`: `createServerFn` behind `authMiddleware`; owner-only (scoped by `user_id`); idempotent (closing a closed job returns it unchanged). Returns `{ ok: true, project: { ...project, status, closedAt, closedBy } }`.
+- `openProject` and the job list include `status`, `closedAt`, `closedBy`.
+- Any `saveProject`, `extractSheet` attach, or field edit on a closed job is refused with `{ ok: false, code: 'JOB_CLOSED' }`. The server enforces this; hiding UI is not enough.
+- No reopen in this release.
+- Guest (local) workspace mirrors the same status and refusal client-side.
+- UI: "Close job" button with a confirm step; "Closed" badge on the job and in the list; inputs read-only; `JOB_CLOSED` shows "This job is closed and can't be changed."
+- Tests: owner-only, idempotent close, save refused after close.
