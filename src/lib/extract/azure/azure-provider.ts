@@ -38,7 +38,7 @@ export type AzureExtractResult = ExtractResult & {
    * `runExtract` uses it for its second number check, including file-only uploads with no request
    * `text`. The server MUST strip it before responding: it is never sent to the browser and never saved.
    */
-  source: string;
+  source: { text: string; pages?: string[] };
 };
 
 export type AzureLog = (e: {
@@ -242,7 +242,7 @@ export function createAzureProvider(deps: AzureDeps = {}) {
         draft: false,
         unverifiedTemps,
         // Internal only: stripped by the server before the response (see AzureExtractResult.source).
-        source: source.text,
+        source: { text: source.text },
       };
     } catch (err) {
       const e = toAzureError(err, stage);
