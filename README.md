@@ -45,6 +45,32 @@ GitHub runs the same checks on every pull request, plus a Docker build and a con
 
 The app ships as one Docker container. It runs anywhere that runs containers, including Azure Container Apps and Azure App Service for Containers (PAVE). The existing Vercel practice copy still works and is unchanged.
 
+### Required for any real or shared copy: a database and a sign-in secret
+
+**Read this first.** Any copy that more than one person uses, or that has to keep its data, needs **both** of these. That covers the Docker / PAVE container and Vercel alike:
+
+- **`DATABASE_URL`**: the connection string of a real Postgres database.
+- **`BETTER_AUTH_SECRET`**: a random value of at least 32 bytes that signs sign-in sessions. Generate one with:
+
+  ```bash
+  openssl rand -base64 32
+  ```
+
+  Generate it once per copy, store it as a secret, and keep it. If you change it, everyone gets signed out.
+
+**What happens without them:** the app still starts, but it keeps every account, job and record **in memory only**. All of that disappears when the server restarts. On Vercel or any setup with more than one server instance, it also differs from one instance to the next, so people get signed out and then see "Invalid email or password" for an account they just made. A missing secret alone signs people out whenever the server restarts or a request reaches another instance. This fallback is only for local development, automated checks and throwaway previews.
+
+**Set up the database tables before the first sign-up.** A fresh, empty Postgres database needs every migration in `migrations/` applied (`0001` onward, currently `0001`–`0003`, plus any `0004` and later files on your branch) before anyone signs up. The app does **not** create tables by itself when `DATABASE_URL` is set: the self-setup in `src/lib/db.ts` (`ensureDbReady`) only runs for the in-memory database. Run them with:
+
+```bash
+DATABASE_URL='postgres://…' npm run db:migrate
+```
+
+`npm run db:migrate` (`scripts/migrate.mjs`) applies every `.sql` file in `migrations/` that has not run yet, in filename order. It reads the folder, so new files such as `0004_….sql` are picked up automatically with no list to update. Each file runs once inside a transaction and is recorded in a `_migrations` table, so running it again is safe.
+
+- **Docker / PAVE:** the image already does this. `scripts/docker-entrypoint.sh` runs the migrations each time the container starts, before the server accepts traffic, whenever `DATABASE_URL` is set and `RUN_MIGRATIONS` is not `false`. If a migration fails, the container stops instead of serving. If you would rather run migrations as a separate one-off job, set `RUN_MIGRATIONS=false` and run `npm run db:migrate` (or `node /app/migrate/scripts/migrate.mjs` inside the image) once against the database before starting the app.
+- **Vercel:** the build command `npm run build` ends with `npm run db:migrate` (`package.json`), so migrations run during each deploy **only if `DATABASE_URL` is available at build time** in that environment (Preview and/or Production). If it is set only at run time, run `npm run db:migrate` yourself once before the first sign-up.
+
 ### What you need
 
 1. **A Postgres database** (version 14 or newer). Azure Database for PostgreSQL – Flexible Server works. Create an empty database and a user that owns it.
@@ -71,7 +97,7 @@ To build without Docker: `npm ci && npm run build:docker && npm start` (listens 
 - **Migrations run automatically when the container starts**, before the server accepts traffic. Each file in `migrations/` is applied once, inside a transaction, and recorded in a `_migrations` table, so restarts are safe.
 - If a migration fails, the container stops instead of serving a half-updated database. Check the container logs.
 - To run migrations as a separate step instead (for example a one-off job), set `RUN_MIGRATIONS=false` on the app and run `npm run db:migrate` (or the image's `node /app/migrate/scripts/migrate.mjs`) with the same `DATABASE_URL`.
-- Without `DATABASE_URL` the container falls back to the in-memory database. Do not use that for real work.
+- Without `DATABASE_URL` the container falls back to the in-memory database, and the server logs a loud warning at start. Do not use that for real work.
 
 ### Environment variables
 
@@ -79,8 +105,8 @@ Copy [`.env.example`](.env.example) for a commented template.
 
 | Variable | Required | What it is |
 |---|---|---|
-| `DATABASE_URL` | Yes (real use) | Postgres connection string, e.g. `postgres://user:pass@host:5432/db?sslmode=require` |
-| `BETTER_AUTH_SECRET` | Yes | Long random string that signs sign-in sessions. Generate with `openssl rand -hex 32`. Changing it signs everyone out. |
+| `DATABASE_URL` | **Yes**, for any real or shared copy (Docker / PAVE and Vercel) | Postgres connection string, e.g. `postgres://user:pass@host:5432/db?sslmode=require`. Without it, all data and logins live in memory and vanish on restart or across instances. Apply the migrations before the first sign-up (see above). |
+| `BETTER_AUTH_SECRET` | **Yes**, for any real or shared copy (Docker / PAVE and Vercel) | Random value of 32+ bytes that signs sign-in sessions. Generate with `openssl rand -base64 32`. Without it, each server instance makes up its own and people get signed out. Changing it signs everyone out. |
 | `BETTER_AUTH_URL` | Yes | The public HTTPS address of the app, no trailing slash, e.g. `https://coatings.example.com` |
 | `VITE_AUTH_ENABLED` | Recommended | `true` (default). Email/password sign-in is enforced. The Docker image is built with `true`. |
 | `PORT` | No | Port inside the container. Default `3000`. |
@@ -127,7 +153,7 @@ The image has a Docker `HEALTHCHECK` on this path. On Azure, point the probes at
 
 ### Vercel (practice copy)
 
-Vercel remains the default build (`npm run build`, Nitro `vercel` preset). Import the GitHub repo into a Vercel project, and set `DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` and `VITE_AUTH_ENABLED=true` in the project's environment settings for a lasting copy. Also set `MAX_UPLOAD_MB=3` there, because Vercel rejects request bodies over about 4.5 MB. Pull-request previews without `DATABASE_URL` use the in-memory database.
+Vercel remains the default build (`npm run build`, Nitro `vercel` preset). Import the GitHub repo into a Vercel project, and set `DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` and `VITE_AUTH_ENABLED=true` in the project's environment settings. `DATABASE_URL` and `BETTER_AUTH_SECRET` are **required** for any copy people share, including a practice copy used for testing: without them, accounts and jobs disappear between requests. Make `DATABASE_URL` available at build time too, so the build applies the migrations. Also set `MAX_UPLOAD_MB=3` there, because Vercel rejects request bodies over about 4.5 MB. Pull-request previews without `DATABASE_URL` use the in-memory database.
 
 ---
 
