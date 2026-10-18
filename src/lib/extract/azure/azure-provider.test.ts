@@ -5,6 +5,7 @@ import { checkAzureEndpoint, isConfigured, readAzureConfig } from "./config.ts";
 import { azureFromEnv, createAzureProvider, sniffMime, type AzureDeps } from "./azure-provider.ts";
 import { AzureExtractError } from "./errors.ts";
 import { toSavedExtract } from "../provider.ts";
+import { quoteIsVerbatim } from "../provenance.ts";
 import { pageImages } from "./page-images.ts";
 import { fieldQuoteOk, tempQuoteOk } from "./gate.ts";
 import { FIXTURES } from "./__fixtures__/fixtures.ts";
@@ -272,6 +273,24 @@ describe("azure provider on mocked fixtures", () => {
     });
     const parts = JSON.parse(m.calls.find((c) => c.url.startsWith(OA))!.body!).messages[1].content;
     assert.equal(parts.filter((x: { type: string }) => x.type === "image_url").length, 0);
+  });
+
+  it("returns the internal Azure layout text as `source` for a file-only upload", async () => {
+    const f = FIXTURES.find((x) => x.name === "Carbomastic 615")!;
+    const m = mockAzure({ analyze: f.analyze, reply: f.reply });
+    const { p } = provider(m);
+    // File only: no request text, no pages.
+    const r = await p.extract({ fileBase64: f.fileBase64, mimeType: "application/pdf" });
+    assert.equal(typeof r.source, "string");
+    assert.ok(r.source.trim().length > 0);
+    assert.match(r.source, /Ratio: 4:1 Part A to Part B by volume/);
+    assert.match(r.source, /Surface: 20°F \(-7°C\)/, "labeled table rows are in the source");
+    // Every kept quote is in the returned source, so #26's second check can verify it.
+    for (const [path, prov] of Object.entries(r.provenance)) {
+      if (prov !== "not-stated") assert.ok(quoteIsVerbatim(prov.quote, r.source), path);
+    }
+    // Not part of what gets saved.
+    assert.equal("source" in toSavedExtract(r), false);
   });
 
   it("accepts #24's pdfBase64 input until BE-3 renames it", async () => {
