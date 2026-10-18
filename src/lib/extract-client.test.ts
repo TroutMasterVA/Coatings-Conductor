@@ -12,6 +12,7 @@ import {
   MAX_UPLOAD_BYTES,
   SESSION_EDIT_TEXT,
   toSavedExtract,
+  extractFlags,
   mimeTypeFor,
   normalizeProvider,
   savedExtractState,
@@ -50,21 +51,10 @@ function result(over: Over = {}): ExtractResult {
     warnings: [],
     ...over,
   } as ExtractResult;
-  base.extract = {
-    provider: base.provider,
-    provenance: base.provenance as never,
-    warnings: base.warnings,
-    extractedAt: "2026-10-18T19:00:00Z",
-    draft: false,
-    unverifiedTemps: false,
-  };
   return base;
 }
-/** Contract shape: nested { ok, card, extract }. */
-const ok = (over: Over = {}): Record<string, unknown> => {
-  const r = result(over);
-  return { ok: true, card: r.card, extract: { ...r.extract, provider: over.provider ?? "azure" } };
-};
+/** Contract shape (CONTRACT.md on #24): flat { ok, card, provenance, provider, deployment?, warnings, draft?, unverifiedTemps? }. */
+const ok = (over: Over = {}): Record<string, unknown> => ({ ok: true, ...result(over) });
 const fail = (code: string, retryAfterSec?: number): ExtractSheetResponse => ({
   ok: false,
   error: { code, message: "x", ...(retryAfterSec ? { retryAfterSec } : {}) },
@@ -134,17 +124,9 @@ describe("error-code mapping", () => {
   });
   it("accepts a documented success, ignores string warnings, rejects bad provenance", () => {
     assert.equal(mapServerResponse(ok()).ok, true);
-    const okx = ok() as { extract: Record<string, unknown> };
-    const strWarn = mapServerResponse({
-      ...okx,
-      extract: { ...okx.extract, warnings: ["AZURE_FALLBACK: x"] },
-    });
+    const strWarn = mapServerResponse({ ...ok(), warnings: ["AZURE_FALLBACK: x"] });
     assert.equal(strWarn.ok && strWarn.result.warnings.length, 0);
-    assert.equal(
-      mapServerResponse({ ...okx, extract: { ...okx.extract, provenance: { a: { quote: 3 } } } })
-        .ok,
-      false,
-    );
+    assert.equal(mapServerResponse({ ...ok(), provenance: { a: { quote: 3 } } }).ok, false);
   });
   it("adapter null = unavailable, thrown Unauthorized = UNAUTHENTICATED, slow = timeout", async () => {
     const input = { fileBase64: "", mimeType: "application/pdf", fileName: "a.pdf" };
@@ -393,10 +375,6 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
   it("unknown or malformed warnings never crash; unknown messages show plainly", () => {
     const out = mapServerResponse({
       ...ok(),
-      // top-level fields are still tolerated
-      extract: undefined,
-      provider: "azure",
-      provenance: {},
       warnings: [
         { code: "NEW_THING", message: "Heads up." },
         { code: 5 },
@@ -436,12 +414,39 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
       { kind: "idle" },
     );
   });
-  it("saves exactly the extract the server returned (nested)", async () => {
-    const s = done(await upload(pdf, ok()).p);
+  it("flat response: save uses #24's toSavedExtract; flags read top-level, missing = false", async () => {
+    const s = done(await upload(pdf, ok({ deployment: "gpt4o", draft: true })).p);
     const saved = toSavedExtract(s)!;
     assert.equal(saved.provider, "azure");
-    assert.equal(saved.extractedAt, "2026-10-18T19:00:00Z");
-    assert.equal(saved.draft, false);
+    assert.equal(saved.deployment, "gpt4o");
+    assert.equal(saved.draft, true);
+    assert.equal(saved.unverifiedTemps, false);
+    assert.ok(!Number.isNaN(Date.parse(saved.extractedAt)));
+    assert.deepEqual(extractFlags(s), { draft: true, unverifiedTemps: false });
+    assert.deepEqual(extractFlags(done(await upload(pdf, ok()).p)), {
+      draft: false,
+      unverifiedTemps: false,
+    });
+  });
+  it("reopen: flags from extract.draft/.unverifiedTemps; saved extract re-saved unchanged", () => {
+    const extract = {
+      provider: "on-device",
+      provenance: { "product.name": { quote: "X" } },
+      warnings: [],
+      extractedAt: "2026-10-18T18:00:00Z",
+      draft: true,
+      unverifiedTemps: true,
+    };
+    const d = done(savedExtractState({ card, extract }));
+    assert.deepEqual(extractFlags(d), { draft: true, unverifiedTemps: true });
+    assert.equal(toSavedExtract(d)!.extractedAt, "2026-10-18T18:00:00Z");
+    const old = done(
+      savedExtractState({
+        card,
+        extract: { ...extract, draft: undefined, unverifiedTemps: undefined },
+      }),
+    );
+    assert.deepEqual(extractFlags(old), { draft: false, unverifiedTemps: false });
   });
   it("FILE_TOO_LARGE from the server shows its message verbatim", async () => {
     const msg = "This file is 6.1 MB. The limit on this deploy is 4 MB.";

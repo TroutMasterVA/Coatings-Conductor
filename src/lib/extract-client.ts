@@ -15,13 +15,16 @@
  *   upload cap: server env MAX_UPLOAD_MB (default 10, practice 3); FILE_TOO_LARGE carries the
  *           limit in `message`, shown verbatim. The client only pre-checks the 10 MB ceiling.
  *
+ *   flags   `draft?`, `unverifiedTemps?` top-level on the (flat) response; missing = false.
+ *   save    `extract` = #24's `toSavedExtract(result)`; reopen reads `extract.draft/.unverifiedTemps`.
+ *   limits  `getExtractLimits()` → { maxUploadMb } for the pre-check, capped at the 10 MB ceiling.
+ *
  * PENDING CONTRACT:
- * - `extractSheet` input in BE-3 (#26) is still { text, pages?, pdfBase64?, fileName? }; see extract-server.ts.
- * - No limits endpoint / `maxUploadMb` field, so the client pre-check stays at the 10 MB ceiling.
- * - Response is nested { ok, card, extract } (LEAD); top-level provenance/provider/warnings are a fallback.
- * - Edited-field stamp `{ edited: { by, at }, sheetQuote? }` in provenance is proposed, not in CONTRACT.md.
+ * - Edited-field stamp `{ edited: { by, at }, sheetQuote? }` in provenance (server, #26 later).
+ *   Until then a field changed this session reads "Edited in this session — not from the sheet".
  */
 import { parseSavedExtract } from "./job-extract.ts";
+import { toSavedExtract as buildSavedExtract } from "./extract/provider.ts";
 import type {
   ExtractRequest,
   SavedExtract,
@@ -122,6 +125,8 @@ export type DoneState = {
   /** server = server answered; client-fallback = server failed and the browser read the PDF;
    *  on-device = no server call; saved = reopened from the job record. */
   source: "server" | "client-fallback" | "on-device" | "saved";
+  /** Reopened jobs: the saved extract exactly as stored (re-saved unchanged). */
+  saved?: SavedExtract;
   issue?: ServerIssue;
   retryAfterSec?: number;
 };
@@ -263,26 +268,20 @@ export function parseExtractResult(body: unknown): ExtractResult | null {
     !card.surfacePrep
   )
     return null;
-  // Nested { ok, card, extract } is the contract; top-level fields are a tolerated fallback.
-  const x = (b.extract && typeof b.extract === "object" ? b.extract : {}) as Record<
-    string,
-    unknown
-  >;
-  const providerRaw = x.provider ?? b.provider;
-  if (typeof providerRaw !== "string") return null;
-  const provenance = parseProvenance(x.provenance ?? b.provenance);
+  // Flat response (CONTRACT.md on #24): each field once, no `extract` object.
+  if (typeof b.provider !== "string") return null;
+  const provenance = parseProvenance(b.provenance);
   if (!provenance) return null;
-  const norm = normalizeProvider(providerRaw, x.deployment ?? b.deployment);
-  const warnings = parseWarnings(x.warnings ?? b.warnings);
-  const extract: SavedExtract = parseSavedExtract(b.extract) ?? {
+  const norm = normalizeProvider(b.provider, b.deployment);
+  const warnings = parseWarnings(b.warnings);
+  return {
+    card,
+    provenance,
     ...norm,
-    provenance: provenance as unknown as SavedExtract["provenance"],
     warnings,
-    extractedAt: card.extractedAt || new Date().toISOString(),
-    draft: false,
-    unverifiedTemps: false,
+    draft: b.draft === true,
+    unverifiedTemps: b.unverifiedTemps === true,
   };
-  return { card, provenance, ...norm, warnings, extract };
 }
 
 /** Map the server fn's returned value to an outcome. */
@@ -591,7 +590,22 @@ export function provenanceRows(
 
 /** What to save next to `card`: the extract object exactly as the reader returned it. */
 export function toSavedExtract(state: ExtractState): SavedExtract | null {
-  return state.kind === "done" ? state.result.extract : null;
+  if (state.kind !== "done") return null;
+  if (state.saved) return state.saved;
+  const r = state.result;
+  // #24's helper builds the saved object; client-only state (session edits) never goes in.
+  return buildSavedExtract({
+    ...r,
+    provider: r.provider,
+    provenance: r.provenance as unknown as Provenance,
+  });
+}
+
+/** Draft / unverified-temps flags for display. Missing = false. */
+export function extractFlags(state: ExtractState): { draft: boolean; unverifiedTemps: boolean } {
+  if (state.kind !== "done") return { draft: false, unverifiedTemps: false };
+  const src = state.saved ?? state.result;
+  return { draft: src.draft === true, unverifiedTemps: src.unverifiedTemps === true };
 }
 
 /** Reopen: rebuild the panel from the saved record. Missing or malformed → idle, never throws. */
@@ -610,17 +624,20 @@ export function savedExtractState(record: {
     return { kind: "idle" };
   const norm = normalizeProvider(raw.provider, raw.deployment);
   const warnings = parseWarnings(raw.warnings);
-  const extract: SavedExtract = saved ?? {
+  const draft = raw.draft === true;
+  const unverifiedTemps = raw.unverifiedTemps === true;
+  const savedOut: SavedExtract = saved ?? {
     ...norm,
     provenance: provenance as unknown as SavedExtract["provenance"],
     warnings,
     extractedAt: typeof raw.extractedAt === "string" ? raw.extractedAt : record.card.extractedAt,
-    draft: raw.draft === true,
-    unverifiedTemps: raw.unverifiedTemps === true,
+    draft,
+    unverifiedTemps,
   };
   return {
     kind: "done",
     source: "saved",
-    result: { card: record.card, provenance, ...norm, warnings, extract },
+    saved: savedOut,
+    result: { card: record.card, provenance, ...norm, warnings, draft, unverifiedTemps },
   };
 }
