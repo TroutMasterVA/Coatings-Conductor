@@ -322,6 +322,11 @@ export function parseExtractResult(body: unknown): ExtractResult | null {
     warnings,
     draft: b.draft === true,
     unverifiedTemps: b.unverifiedTemps === true,
+    // Signed read (CONTRACT "Signed extract read"): server-only, passed back untouched on the
+    // one fresh-read save. Never built, parsed into parts, or altered here.
+    ...(b.serverRead !== undefined
+      ? { serverRead: b.serverRead as ExtractResult["serverRead"] }
+      : {}),
   };
 }
 
@@ -464,7 +469,8 @@ export async function extractUpload(input: {
   maxUploadBytes?: number;
 }): Promise<ExtractState> {
   const pre = precheckFile(input.file, input.maxUploadBytes);
-  if (pre === "FILE_TOO_LARGE") return errorState(pre, undefined, fileTooLargeMessage(input.maxUploadBytes));
+  if (pre === "FILE_TOO_LARGE")
+    return errorState(pre, undefined, fileTooLargeMessage(input.maxUploadBytes));
   if (pre) return errorState(pre);
   const pdf = isPdf(input.file);
   if (!input.signedIn) {

@@ -100,9 +100,23 @@ function hasNumber(haystack: string, forms: string[]): boolean {
   return forms.some((f) => new RegExp(`(^|[^\\d.])${f.replace(".", "\\.")}([^\\d]|$)`).test(haystack));
 }
 
+function hasTemperature(haystack: string, forms: string[]): boolean {
+  const end = String.raw`(?:\s*(?:-|–|to)\s*-?\d+(?:\.\d+)?)?\s*(?:°|º|˚|deg|[FC]\b)`;
+  const start = String.raw`(?:\d+(?:\.\d+)?\s*°?\s*[FC]?\s*(?:-|–|to)\s*)?`;
+  return forms.some((f) =>
+    new RegExp(String.raw`(^|[^\d.])${start}${f.replace(".", "\\.")}${end}`, "i").test(haystack),
+  );
+}
+
 /** True when every number in `value` is present in `quote` (°C allowed for °F temp fields). */
 export function quoteCoversNumbers(path: string, value: string | number, quote: string): boolean {
-  return numbersIn(value).every((n) => hasNumber(quote, numberForms(path, n)));
+  const temp = TEMP_PATH.test(path) || /dewPointSpreadMinF$/.test(path);
+  // A temperature needs its number printed AS a temperature (unit after it or after its range end),
+  // and a dew margin needs "dew" on the line: "DFT: 5-7 mils" never backs a 5°F dew margin.
+  if (temp && /dewPointSpreadMinF$/.test(path) && !/dew/i.test(quote)) return false;
+  return numbersIn(value).every((n) =>
+    temp ? hasTemperature(quote, numberForms(path, n)) : hasNumber(quote, numberForms(path, n)),
+  );
 }
 
 const STOP = new Set(["no", "the", "and", "of", "or", "a", "to", "at", "by", "for", "in", "with"]);

@@ -118,7 +118,7 @@ type SavedExtract = {
 ```
 
 - `unverifiedTemps` covers `environmentals.ambientTempMinF/MaxF`, `substrateTempMinF/MaxF`, `dewPointSpreadMinF`. Interim rule (until the accuracy pack's `src/lib/extract/unverified-temps.ts` lands): true if any of those was dropped by the number gate or kept with an empty quote.
-- Storage: `projects.extract_json` (nullable text JSON, like `card_json`; migration `0003_job_extract.sql`). Save with `saveProject({ data: { id, card, extract: toSavedExtract(result) } })` (also accepted on `createProject` seed and guest import). `openProject` returns `extract` (or `null`). The server validates the object (`parseSavedExtract`, ≤ 1 MB), and replacing or clearing `card` without an `extract` clears the old one so quotes never describe a different card. Reads and writes are scoped by `user_id`.
+- Storage: `projects.extract_json` (nullable text JSON, like `card_json`; migration `0003_job_extract.sql`). Save with `saveProject({ data: { id, card, extract: toSavedExtract(result) } })` (also accepted on `createProject` seed and guest import). `openProject` returns `extract` (or `null`). The server validates the object (`parseSavedExtract`, ≤ 1 MB, including server edit stamps). Save rule: `extract` missing keeps the stored extract (and its edit stamps), `extract: null` clears it, an object replaces it. A client that loads a different sheet sends that read's `extract` (or `null`) with the new card. Reads and writes are scoped by `user_id`.
 - Older jobs have no `extract` (treat as missing; flags false). Stored under the same per-user isolation as the card (every query scoped by `user_id`).
 
 ### Provider interface
@@ -235,3 +235,25 @@ type EditedProvenance = {
 - Any `edited` value sent by the client is ignored and overwritten by the server.
 - The UI shows "Edited by {by}, {at}" and must not present `sheetQuote` as backing the new value.
 - Saving without `extract` keeps the stored extract (and its edit stamps); `extract: null` clears it; a new object replaces it.
+
+## Job closeout (smallest version) — Lead ruling 2026-10-18 3:57 PM ET; PO archive/delete 4:06 PM ET
+
+- Migration `0004_job_status.sql`: `projects.status text not null default 'open'` (`'open' | 'closed'`), `closed_at timestamptz null`, `closed_by text null`.
+- `closeProject({ id })`: `createServerFn` behind `authMiddleware`, same style as `archiveProject`. Owner-only: a non-owner gets the existing `NOT_YOUR_JOB_MESSAGE` throw (same as isolation). Idempotent. Returns `{ ok: true, status: 'closed', closedAt, closedBy }`.
+- `openProject` and the job list include `status`, `closedAt`, `closedBy`.
+- Closed job: `saveProject` (and any field edit) throws `new Error(JOB_CLOSED_MESSAGE)` (exported constant, like `NOT_YOUR_JOB_MESSAGE`; text "This job is closed and can't be changed."). `extractSheet` attaching to a closed job returns its normal envelope `{ ok: false, code: 'JOB_CLOSED' }`. The server enforces this; hiding UI is not enough.
+- A closed job is a record: opening, reading, and printing/saving the PDF stay allowed. Only edits and new reads stop. Autosave is off.
+- **Archive vs delete (PO 4:06 PM ET):** a closed job **can be archived** (archive only hides it from the list; the record is kept) but **cannot be deleted**. The server enforces this inside the delete itself: deleting a closed job throws `new Error(JOB_CLOSED_DELETE_MESSAGE)` (exported constant; text "This job is closed and can't be deleted."). The UI hides Delete on closed jobs, but the server check is the one that counts. Guest (local) workspace follows the same rule.
+- No reopen in this release.
+- Guest (local) workspace mirrors the same status and refusal client-side.
+- UI: "Close job" button, confirm "Close this job? It becomes read-only." (Close job / Cancel); "Closed" badge with date on the job and in the list; inputs disabled; print/PDF still available; `JOB_CLOSED` shows the server message; Delete hidden on closed jobs.
+- Tests: owner-only, idempotent close, save refused after close; deleting a closed job is refused and archiving still works.
+
+## Signed extract read (edit-stamp proof) — Lead + PO 2026-10-18 ~4:05 PM ET
+
+- `extractSheet`'s result carries a **server-only** read id and an HMAC signature built with the existing `BETTER_AUTH_SECRET` (**no new key**) and covering the user and card values.
+- The client sends the read id and signature back untouched and **never builds** them; they are **not stored**.
+- Saves **without a valid signature** are compared with what's stored, and every changed field is stamped `{edited:{by,at}, sheetQuote?}`.
+- A genuine signed read whose signature verifies saves clean (unstamped) as a fresh extract.
+- Ignore any `extractedAt` from the client; the server alone decides fresh-read vs hand-edit.
+- **Known limit (previews):** without a fixed `BETTER_AUTH_SECRET`, each preview instance has its own secret. A read signed on one instance and saved on another fails verification and shows "Edited by". That is the **safe failure**, not a bug. Documented for QA in #26 and the 4:40 in/out list until Isaiah approves a fixed secret for Preview.
