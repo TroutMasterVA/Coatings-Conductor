@@ -167,6 +167,8 @@ export type ForecastBundle = {
   days: DayWindow[];
   headline: string;
   rawHours?: RawHourLite[];
+  /** Set when scoring was skipped on purpose (e.g. temperature limits not verified on the sheet). */
+  paused?: { reason: string };
 };
 
 export type RawHourLite = {
