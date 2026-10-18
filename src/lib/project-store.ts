@@ -219,7 +219,7 @@ export const saveProject = createServerFn({ method: "POST" })
       calibration?: Calibration;
       site?: SiteContext;
       card?: FieldCardData | null;
-      /** Saved next to `card`. `null` clears it; omitted leaves it as is. A new card with no extract clears it. */
+      /** Saved next to `card`. Missing keeps the stored extract (and its edit stamps); `null` clears it; an object replaces it. */
       extract?: SavedExtract | null;
       pdsText?: string;
       recents?: SavedCard[];

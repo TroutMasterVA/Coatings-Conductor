@@ -118,7 +118,7 @@ type SavedExtract = {
 ```
 
 - `unverifiedTemps` covers `environmentals.ambientTempMinF/MaxF`, `substrateTempMinF/MaxF`, `dewPointSpreadMinF`. Interim rule (until the accuracy pack's `src/lib/extract/unverified-temps.ts` lands): true if any of those was dropped by the number gate or kept with an empty quote.
-- Storage: `projects.extract_json` (nullable text JSON, like `card_json`; migration `0003_job_extract.sql`). Save with `saveProject({ data: { id, card, extract: toSavedExtract(result) } })` (also accepted on `createProject` seed and guest import). `openProject` returns `extract` (or `null`). The server validates the object (`parseSavedExtract`, ≤ 1 MB), and replacing or clearing `card` without an `extract` clears the old one so quotes never describe a different card. Reads and writes are scoped by `user_id`.
+- Storage: `projects.extract_json` (nullable text JSON, like `card_json`; migration `0003_job_extract.sql`). Save with `saveProject({ data: { id, card, extract: toSavedExtract(result) } })` (also accepted on `createProject` seed and guest import). `openProject` returns `extract` (or `null`). The server validates the object (`parseSavedExtract`, ≤ 1 MB, including server edit stamps). Save rule: `extract` missing keeps the stored extract (and its edit stamps), `extract: null` clears it, an object replaces it. A client that loads a different sheet sends that read's `extract` (or `null`) with the new card. Reads and writes are scoped by `user_id`.
 - Older jobs have no `extract` (treat as missing; flags false). Stored under the same per-user isolation as the card (every query scoped by `user_id`).
 
 ### Provider interface

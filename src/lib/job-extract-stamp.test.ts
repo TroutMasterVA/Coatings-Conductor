@@ -182,6 +182,23 @@ describe("server edit stamp on save (CONTRACT.md 'Edit stamp')", () => {
 });
 
 describe("parseSavedExtract accepts the edited shape", () => {
+  it("write → read round-trip keeps stamps (the extract does not vanish on reopen)", async () => {
+    const sql = await db();
+    const x: SavedExtract = {
+      ...EXTRACT,
+      provenance: {
+        ...EXTRACT.provenance,
+        "environmentals.substrateTempMinF": {
+          edited: { by: "Alice Inspector", at: T1 },
+          sheetQuote: { page: 1, quote: "Surface temperature 35°F minimum." },
+        },
+        "mixing.potLife": { edited: { by: "Alice Inspector", at: T1 } },
+      },
+    };
+    assert.equal(await writeJobExtract(sql, "alice", "job-a", x), true);
+    assert.deepEqual(await readJobExtract(sql, "alice", "job-a"), x);
+  });
+
   it("round-trips a stamp with and without sheetQuote", () => {
     const x = {
       ...EXTRACT,
