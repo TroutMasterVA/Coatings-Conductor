@@ -235,3 +235,15 @@ type EditedProvenance = {
 - Any `edited` value sent by the client is ignored and overwritten by the server.
 - The UI shows "Edited by {by}, {at}" and must not present `sheetQuote` as backing the new value.
 - Saving without `extract` keeps the stored extract (and its edit stamps); `extract: null` clears it; a new object replaces it.
+
+## Job closeout (smallest version) — Lead ruling 2026-10-18 3:57 PM ET
+
+- Migration `0004_job_status.sql`: `projects.status text not null default 'open'` (`'open' | 'closed'`), `closed_at timestamptz null`, `closed_by text null`.
+- `closeProject({ id })`: `createServerFn` behind `authMiddleware`, same style as `archiveProject`. Owner-only: a non-owner gets the existing `NOT_YOUR_JOB_MESSAGE` throw (same as isolation). Idempotent. Returns `{ ok: true, status: 'closed', closedAt, closedBy }`.
+- `openProject` and the job list include `status`, `closedAt`, `closedBy`.
+- Closed job: `saveProject` (and any field edit) throws `new Error(JOB_CLOSED_MESSAGE)` (exported constant, like `NOT_YOUR_JOB_MESSAGE`; text "This job is closed and can't be changed."). `extractSheet` attaching to a closed job returns its normal envelope `{ ok: false, code: 'JOB_CLOSED' }`. The server enforces this; hiding UI is not enough.
+- A closed job is a record: opening, reading, and printing/saving the PDF stay allowed. Only edits and new reads stop. Autosave is off.
+- No reopen in this release.
+- Guest (local) workspace mirrors the same status and refusal client-side.
+- UI: "Close job" button, confirm "Close this job? It becomes read-only." (Close job / Cancel); "Closed" badge with date on the job and in the list; inputs disabled; print/PDF still available; `JOB_CLOSED` shows the server message.
+- Tests: owner-only, idempotent close, save refused after close.
