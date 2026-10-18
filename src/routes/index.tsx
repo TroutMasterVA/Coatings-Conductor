@@ -67,7 +67,14 @@ import {
 } from "@/lib/project-store";
 import { rescoreForecast } from "@/lib/score-windows";
 import { loadZip } from "@/lib/storage";
-import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, ForecastBundle, SavedCard } from "@/lib/types";
+import type {
+  Calibration,
+  CustomMitigation,
+  FieldCardData,
+  FieldOutcome,
+  ForecastBundle,
+  SavedCard,
+} from "@/lib/types";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -100,7 +107,9 @@ function siteFromCard(card: FieldCardData, prev?: SiteContext): SiteContext {
   return {
     substrate,
     mitigations: sanitizeMitigations(
-      (prev?.substrate === substrate ? prev.mitigations : []).filter((id) => Boolean(mitigationById(id))),
+      (prev?.substrate === substrate ? prev.mitigations : []).filter((id) =>
+        Boolean(mitigationById(id)),
+      ),
     ),
     customMitigationIds: prev?.customMitigationIds ?? [],
     moistureTolerant: isMoistureTolerant(notes),
@@ -277,7 +286,13 @@ function App({ user }: { user: AppUser | null }) {
                   summary: c.summary,
                   helps: (c.helps ?? []) as Limiter[],
                   before: { air: null, steel: null, rh: null, dew: null, wind: null },
-                  after: { air: c.dAirF, steel: c.dSubstrateF, rh: c.dRh, dew: c.dDewF, wind: c.dWindMph },
+                  after: {
+                    air: c.dAirF,
+                    steel: c.dSubstrateF,
+                    rh: c.dRh,
+                    dew: c.dDewF,
+                    wind: c.dWindMph,
+                  },
                   notes: c.notes,
                 });
               }
@@ -319,7 +334,20 @@ function App({ user }: { user: AppUser | null }) {
     window.clearTimeout(persistTimer.current);
     persistTimer.current = window.setTimeout(() => persist(), 600);
     return () => window.clearTimeout(persistTimer.current);
-  }, [projectId, projectName, zip, calibration, site, card, text, recents, outcomes, extractState, mode, persist]);
+  }, [
+    projectId,
+    projectName,
+    zip,
+    calibration,
+    site,
+    card,
+    text,
+    recents,
+    outcomes,
+    extractState,
+    mode,
+    persist,
+  ]);
 
   useEffect(() => {
     if (!card) return;
@@ -340,8 +368,15 @@ function App({ user }: { user: AppUser | null }) {
   }, [forecast, card, scoringSite]);
 
   function remember(next: FieldCardData, nextZip: string) {
-    const entry: SavedCard = { id: next.id, savedAt: new Date().toISOString(), card: next, zip: nextZip };
-    setRecents((prev) => [entry, ...prev.filter((r) => r.card.product.name !== next.product.name)].slice(0, 8));
+    const entry: SavedCard = {
+      id: next.id,
+      savedAt: new Date().toISOString(),
+      card: next,
+      zip: nextZip,
+    };
+    setRecents((prev) =>
+      [entry, ...prev.filter((r) => r.card.product.name !== next.product.name)].slice(0, 8),
+    );
   }
 
   function applyCard(next: FieldCardData) {
@@ -536,7 +571,9 @@ function App({ user }: { user: AppUser | null }) {
               className="size-12 rounded-md object-cover object-top shadow-[0_0_0_1px_rgba(255,183,3,0.45)] sm:size-14"
             />
             <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Job-site conductor</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">
+                Job-site conductor
+              </p>
               <p className="text-base font-bold tracking-tight sm:text-lg">Coatings Conductor</p>
               <p className="truncate text-xs text-muted">
                 {mode === "job" && projectName ? (
@@ -558,11 +595,22 @@ function App({ user }: { user: AppUser | null }) {
             ) : null}
             {mode === "job" ? (
               <>
-                <Button type="button" variant="outline" size="sm" disabled={!card} onClick={() => window.print()}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!card}
+                  onClick={() => window.print()}
+                >
                   <Printer />
                   Print
                 </Button>
-                <Button type="button" size="sm" disabled={!card || downloading} onClick={() => void handleDownloadPdf()}>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!card || downloading}
+                  onClick={() => void handleDownloadPdf()}
+                >
                   <Download />
                   Download PDF
                 </Button>
@@ -618,10 +666,12 @@ function App({ user }: { user: AppUser | null }) {
                 className="hidden size-20 shrink-0 rounded-lg object-cover object-top shadow-[0_0_0_1px_rgba(232,93,4,0.45)] sm:block"
               />
               <div>
-                <h1 className="max-w-xl text-3xl font-bold tracking-tight sm:text-4xl">Call the coating window.</h1>
+                <h1 className="max-w-xl text-3xl font-bold tracking-tight sm:text-4xl">
+                  Call the coating window.
+                </h1>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
-                  {projectName} at {zip || "this ZIP"}. Storage through safety in job order, then NOAA windows scored
-                  against the real substrate — this project’s model only.
+                  {projectName} at {zip || "this ZIP"}. Storage through safety in job order, then
+                  NOAA windows scored against the real substrate — this project’s model only.
                 </p>
               </div>
             </section>
@@ -693,7 +743,9 @@ function App({ user }: { user: AppUser | null }) {
                 const cur = site.customMitigationIds ?? [];
                 setSite({
                   ...site,
-                  customMitigationIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
+                  customMitigationIds: cur.includes(id)
+                    ? cur.filter((x) => x !== id)
+                    : [...cur, id],
                 });
               }}
               onAddCustom={(input) => {
@@ -701,7 +753,11 @@ function App({ user }: { user: AppUser | null }) {
                   .saveCustom(input)
                   .then((created) => {
                     setCustom((prev) => {
-                      const rest = prev.filter((c) => c.id !== created.id && c.label.toLowerCase() !== created.label.toLowerCase());
+                      const rest = prev.filter(
+                        (c) =>
+                          c.id !== created.id &&
+                          c.label.toLowerCase() !== created.label.toLowerCase(),
+                      );
                       return [created, ...rest];
                     });
                     const cur = site.customMitigationIds ?? [];
@@ -731,7 +787,9 @@ function App({ user }: { user: AppUser | null }) {
               substrateLabel={substrateById(site.substrate).label}
               mitigationsInPlay={[
                 ...site.mitigations,
-                ...custom.filter((c) => (site.customMitigationIds ?? []).includes(c.id)).map((c) => c.label),
+                ...custom
+                  .filter((c) => (site.customMitigationIds ?? []).includes(c.id))
+                  .map((c) => c.label),
               ]}
               forecast={scored}
               disabled={!card}
@@ -762,7 +820,11 @@ function workspaceApi(signedIn: boolean) {
       return wrap(signedIn ? loadWorkspace() : Promise.resolve(guestLoadWorkspace()));
     },
     create(data: { name: string; zip: string; seed?: Partial<ProjectFull> }) {
-      return wrap(signedIn ? createProject({ data }) : Promise.resolve(guestCreateProject(data.name, data.zip, data.seed)));
+      return wrap(
+        signedIn
+          ? createProject({ data })
+          : Promise.resolve(guestCreateProject(data.name, data.zip, data.seed)),
+      );
     },
     open(id: string) {
       return wrap(signedIn ? openProject({ data: id }) : Promise.resolve(guestOpenProject(id)));
@@ -772,13 +834,21 @@ function workspaceApi(signedIn: boolean) {
       return wrap(signedIn ? saveProject({ data }) : Promise.resolve(guestSaveProject(data)));
     },
     archive(id: string, archived: boolean) {
-      return wrap<void | { ok: true }>(signedIn ? archiveProject({ data: { id, archived } }) : Promise.resolve(guestArchiveProject(id, archived)));
+      return wrap<void | { ok: true }>(
+        signedIn
+          ? archiveProject({ data: { id, archived } })
+          : Promise.resolve(guestArchiveProject(id, archived)),
+      );
     },
     remove(id: string) {
-      return wrap<void | { ok: true }>(signedIn ? deleteProject({ data: id }) : Promise.resolve(guestDeleteProject(id)));
+      return wrap<void | { ok: true }>(
+        signedIn ? deleteProject({ data: id }) : Promise.resolve(guestDeleteProject(id)),
+      );
     },
     saveCustom(data: CustomMitigationInput) {
-      return wrap(signedIn ? saveCustomMitigation({ data }) : Promise.resolve(guestSaveCustom(data)));
+      return wrap(
+        signedIn ? saveCustomMitigation({ data }) : Promise.resolve(guestSaveCustom(data)),
+      );
     },
   };
 }

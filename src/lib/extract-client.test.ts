@@ -9,7 +9,9 @@ import {
   extractUpload,
   IMAGE_ONLY_NOTICE,
   mapServerResponse,
-  MAX_FILE_BYTES,
+  MAX_UPLOAD_BYTES,
+  SESSION_EDIT_TEXT,
+  toSavedExtract,
   mimeTypeFor,
   normalizeProvider,
   savedExtractState,
@@ -27,13 +29,18 @@ import {
   type ExtractState,
 } from "./extract-client.ts";
 import { buildCardFromPds } from "./on-device-extract.ts";
+import { onDeviceProvider } from "./extract/on-device-provider.ts";
+import type { ExtractInput } from "./extract/provider.ts";
 import { SAMPLE_PDS_TEXT } from "./samples.ts";
 
 const sampleText = Object.values(SAMPLE_PDS_TEXT).find((t) => t && t.length > 200) ?? "";
 const card = buildCardFromPds(sampleText);
 
-function result(over: Partial<ExtractResult> = {}): ExtractResult {
-  return {
+type Over = Partial<Omit<ExtractResult, "warnings">> & {
+  warnings?: { code: string; message: string }[];
+};
+function result(over: Over = {}): ExtractResult {
+  const base = {
     card,
     provenance: {
       "product.name": { page: 1, quote: "Carbomastic 615" },
@@ -42,16 +49,30 @@ function result(over: Partial<ExtractResult> = {}): ExtractResult {
     provider: "azure",
     warnings: [],
     ...over,
+  } as ExtractResult;
+  base.extract = {
+    provider: base.provider,
+    provenance: base.provenance as never,
+    warnings: base.warnings,
+    extractedAt: "2026-10-18T19:00:00Z",
+    draft: false,
+    unverifiedTemps: false,
   };
+  return base;
 }
-const ok = (over: Partial<ExtractResult> = {}): ExtractSheetResponse => ({
-  ok: true,
-  ...result(over),
-});
+/** Contract shape: nested { ok, card, extract }. */
+const ok = (over: Over = {}): Record<string, unknown> => {
+  const r = result(over);
+  return { ok: true, card: r.card, extract: { ...r.extract, provider: over.provider ?? "azure" } };
+};
 const fail = (code: string, retryAfterSec?: number): ExtractSheetResponse => ({
   ok: false,
   error: { code, message: "x", ...(retryAfterSec ? { retryAfterSec } : {}) },
 });
+const onDevice = (input: ExtractInput) => onDeviceProvider.extract(input);
+const throwing = async (): Promise<never> => {
+  throw new Error("Could not read this sheet.");
+};
 
 const pdf = { name: "sheet.pdf", type: "application/pdf", size: 1000 };
 const png = { name: "scan.png", type: "image/png", size: 1000 };
@@ -67,7 +88,7 @@ function upload(
     file,
     text: file === pdf ? sampleText : "",
     signedIn: true,
-    onDevice: buildCardFromPds,
+    onDevice,
     readBase64: async () => "QUJD",
     server: async (input) => {
       seen.push(input);
@@ -94,23 +115,36 @@ describe("error-code mapping", () => {
     "UNSUPPORTED_FILE_TYPE",
   ]) {
     it(`maps ${code}`, () => {
-      assert.deepEqual(mapServerResponse(fail(code)), { ok: false, code });
+      assert.deepEqual(mapServerResponse(fail(code)), { ok: false, code, message: "x" });
     });
   }
   it("unknown code or junk is EXTRACT_FAILED; retryAfterSec carried", () => {
-    assert.deepEqual(mapServerResponse(fail("NOPE")), { ok: false, code: "EXTRACT_FAILED" });
+    assert.deepEqual(mapServerResponse(fail("NOPE")), {
+      ok: false,
+      code: "EXTRACT_FAILED",
+      message: "x",
+    });
     assert.deepEqual(mapServerResponse(null), { ok: false, code: "EXTRACT_FAILED" });
     assert.deepEqual(mapServerResponse(fail("RATE_LIMITED", 42)), {
       ok: false,
       code: "RATE_LIMITED",
+      message: "x",
       retryAfterSec: 42,
     });
   });
   it("accepts a documented success, ignores string warnings, rejects bad provenance", () => {
     assert.equal(mapServerResponse(ok()).ok, true);
-    const strWarn = mapServerResponse({ ...ok(), warnings: ["AZURE_FALLBACK: x"] });
+    const okx = ok() as { extract: Record<string, unknown> };
+    const strWarn = mapServerResponse({
+      ...okx,
+      extract: { ...okx.extract, warnings: ["AZURE_FALLBACK: x"] },
+    });
     assert.equal(strWarn.ok && strWarn.result.warnings.length, 0);
-    assert.equal(mapServerResponse({ ...ok(), provenance: { a: { quote: 3 } } }).ok, false);
+    assert.equal(
+      mapServerResponse({ ...okx, extract: { ...okx.extract, provenance: { a: { quote: 3 } } } })
+        .ok,
+      false,
+    );
   });
   it("adapter null = unavailable, thrown Unauthorized = UNAUTHENTICATED, slow = timeout", async () => {
     const input = { fileBase64: "", mimeType: "application/pdf", fileName: "a.pdf" };
@@ -140,8 +174,14 @@ describe("file type and size pre-check", () => {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     );
     assert.equal(precheckFile({ name: "a.exe", size: 1 }), "UNSUPPORTED_FILE_TYPE");
-    assert.equal(precheckFile({ ...pdf, size: MAX_FILE_BYTES + 1 }), "FILE_TOO_LARGE");
-    assert.equal(precheckFile({ ...pdf, size: MAX_FILE_BYTES }), null);
+    assert.equal(precheckFile({ ...pdf, size: MAX_UPLOAD_BYTES + 1 }), "FILE_TOO_LARGE");
+    assert.equal(precheckFile({ ...pdf, size: MAX_UPLOAD_BYTES }), null);
+    // getExtractLimits() lower than the ceiling wins; higher never lifts the 10 MB ceiling.
+    assert.equal(precheckFile({ ...pdf, size: 4_000_001 }, 4_000_000), "FILE_TOO_LARGE");
+    assert.equal(
+      precheckFile({ ...pdf, size: MAX_UPLOAD_BYTES + 1 }, 50 * 1024 * 1024),
+      "FILE_TOO_LARGE",
+    );
   });
   it("unsupported type and oversize never call the server", async () => {
     const a = upload({ name: "a.xlsx", size: 1 }, ok());
@@ -151,7 +191,7 @@ describe("file type and size pre-check", () => {
       s.kind === "error" ? s.message : "",
       /PDF, photo or scan \(PNG, JPG, TIFF\), or Word \(\.docx\)/,
     );
-    const b = upload({ ...pdf, size: MAX_FILE_BYTES + 1 }, ok());
+    const b = upload({ ...pdf, size: MAX_UPLOAD_BYTES + 1 }, ok());
     assert.equal(((await b.p) as { issue?: string }).issue, "FILE_TOO_LARGE");
     assert.equal(a.seen.length + b.seen.length, 0);
   });
@@ -243,9 +283,9 @@ describe("fallback", () => {
     assert.equal(a.seen.length + b.seen.length, 0);
   });
   it("error when server and on-device both fail; pasted text reads on-device", async () => {
-    const s = await upload(pdf, fail("EXTRACT_FAILED"), { text: "" }).p;
+    const s = await upload(pdf, fail("EXTRACT_FAILED"), { onDevice: throwing }).p;
     assert.equal(s.kind, "error");
-    assert.equal(done(extractPasted(sampleText, buildCardFromPds)).source, "on-device");
+    assert.equal(done(await extractPasted(sampleText, onDevice)).source, "on-device");
   });
 });
 
@@ -258,7 +298,9 @@ describe("image-only needs Azure", () => {
     assert.equal(
       needsAzureReader(
         result({
-          warnings: [{ code: "OTHER", message: "IMAGE_ONLY_NEEDS_AZURE scanned, needs Azure" }],
+          warnings: [
+            { code: "OTHER" as never, message: "IMAGE_ONLY_NEEDS_AZURE scanned, needs Azure" },
+          ],
         }),
       ),
       false,
@@ -278,7 +320,7 @@ describe("image-only needs Azure", () => {
           provenance: { "product.name": "not-stated" },
           warnings: [
             { code: "IMAGE_ONLY_NEEDS_AZURE", message: "scan" },
-            { code: "X", message: "Check the mix ratio." },
+            { code: "X" as never, message: "Check the mix ratio." },
           ],
         }),
       ).p,
@@ -317,9 +359,7 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
     assert.deepEqual(normalizeProvider("azure:gpt4o"), { provider: "azure", deployment: "gpt4o" });
     assert.deepEqual(normalizeProvider("on-device"), { provider: "on-device" });
     assert.deepEqual(normalizeProvider("weird"), { provider: "on-device" });
-    const s = done(
-      await upload(pdf, { ...ok(), provider: "azure:gpt4o" } as unknown as ExtractSheetResponse).p,
-    );
+    const s = done(await upload(pdf, ok({ provider: "azure:gpt4o" as never })).p);
     assert.equal(s.result.provider, "azure");
     assert.equal(providerLabel(s), "Azure reader (gpt4o).");
   });
@@ -353,6 +393,10 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
   it("unknown or malformed warnings never crash; unknown messages show plainly", () => {
     const out = mapServerResponse({
       ...ok(),
+      // top-level fields are still tolerated
+      extract: undefined,
+      provider: "azure",
+      provenance: {},
       warnings: [
         { code: "NEW_THING", message: "Heads up." },
         { code: 5 },
@@ -370,24 +414,96 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
     assert.equal(rows[0]?.label, "Surface Prep › Prep Gates › #1 › Profile");
   });
   it("reopen shows saved provenance + provider; nothing saved = idle", () => {
-    const s = savedExtractState({
-      card,
+    const extract = {
+      provider: "azure",
+      deployment: "gpt4o",
       provenance: { "product.name": { page: 2, quote: "Carbomastic 615" } },
-      provider: "azure:gpt4o",
-      extractWarnings: [{ code: "VALUES_DROPPED_UNQUOTED", message: "m" }],
-    });
-    const d = done(s);
+      warnings: [{ code: "VALUES_DROPPED_UNQUOTED", message: "m" }],
+      extractedAt: "2026-10-18T19:00:00Z",
+      draft: false,
+      unverifiedTemps: false,
+    };
+    const d = done(savedExtractState({ card, extract }));
     assert.equal(d.source, "saved");
     assert.equal(providerLabel(d), "Azure reader (gpt4o).");
     assert.equal(provenanceRows(d.result.provenance)[0]?.text, "p. 2 — “Carbomastic 615”");
     assert.deepEqual(displayWarnings(d.result), [VALUES_DROPPED_NOTE]);
+    assert.deepEqual(toSavedExtract(d), extract);
     assert.deepEqual(savedExtractState({ card }), { kind: "idle" });
-    assert.deepEqual(savedExtractState({ card: null, provenance: {}, provider: "azure" }), {
-      kind: "idle",
-    });
+    assert.deepEqual(savedExtractState({ card: null, extract }), { kind: "idle" });
     assert.deepEqual(
-      savedExtractState({ card, provenance: { a: { quote: 1 } }, provider: "azure" }),
+      savedExtractState({ card, extract: { ...extract, provenance: { a: { quote: 1 } } } }),
       { kind: "idle" },
     );
+  });
+  it("saves exactly the extract the server returned (nested)", async () => {
+    const s = done(await upload(pdf, ok()).p);
+    const saved = toSavedExtract(s)!;
+    assert.equal(saved.provider, "azure");
+    assert.equal(saved.extractedAt, "2026-10-18T19:00:00Z");
+    assert.equal(saved.draft, false);
+  });
+  it("FILE_TOO_LARGE from the server shows its message verbatim", async () => {
+    const msg = "This file is 6.1 MB. The limit on this deploy is 4 MB.";
+    const s = await upload(png, {
+      ok: false,
+      error: { code: "FILE_TOO_LARGE", message: msg, maxUploadMb: 4 },
+    }).p;
+    assert.equal(s.kind === "error" && s.message, msg);
+  });
+  it("on-device paths go through onDeviceProvider (provenance + warnings)", async () => {
+    const s = done(await upload(pdf, fail("EXTRACT_FAILED"), { pages: [sampleText] }).p);
+    assert.equal(s.result.provider, "on-device");
+    assert.ok(Object.keys(s.result.provenance).length > 0);
+  });
+});
+
+describe("hand-edited fields", () => {
+  it("server-stamped edit renders 'Edited by [user], [time]'", () => {
+    const rows = provenanceRows({
+      "product.name": { edited: { by: "Isaiah Chester", at: "2026-10-18T19:30:00Z" } },
+    });
+    assert.equal(rows[0]?.edited, true);
+    assert.match(rows[0]!.text, /^Edited by Isaiah Chester, Oct 18, 2026/);
+  });
+  it("saved extract with a stamped edit still reopens", () => {
+    const d = done(
+      savedExtractState({
+        card,
+        extract: {
+          provider: "azure",
+          provenance: {
+            "product.name": {
+              edited: { by: "Isaiah Chester", at: "2026-10-18T19:30:00Z" },
+              sheetQuote: { page: 1, quote: "X" },
+            },
+          },
+          warnings: [],
+          extractedAt: "2026-10-18T19:00:00Z",
+          draft: false,
+          unverifiedTemps: false,
+        },
+      }),
+    );
+    assert.match(provenanceRows(d.result.provenance)[0]!.text, /^Edited by Isaiah Chester/);
+  });
+  it("no stamp yet: a field changed this session reads the session text; unchanged keep the quote", () => {
+    const prov = result().provenance;
+    const edited = { ...card, product: { ...card.product, name: "Hand typed" } };
+    const rows = provenanceRows(prov, { current: edited, asRead: card });
+    const name = rows.find((r) => r.fieldPath === "product.name")!;
+    assert.equal(name.text, SESSION_EDIT_TEXT);
+    assert.equal(name.edited, true);
+    assert.equal(SESSION_EDIT_TEXT, "Edited in this session — not from the sheet");
+    const wind = rows.find((r) => r.fieldPath === "environmentals.windMaxMph")!;
+    assert.equal(wind.text, "Not stated");
+    assert.equal(wind.edited, false);
+  });
+  it("session edits never write a user/time into the saved extract", async () => {
+    const s = done(await upload(pdf, ok()).p);
+    const before = JSON.stringify(toSavedExtract(s));
+    provenanceRows(s.result.provenance, { current: { ...card, product: {} }, asRead: card });
+    assert.equal(JSON.stringify(toSavedExtract(s)), before);
+    assert.doesNotMatch(before, /edited/);
   });
 });

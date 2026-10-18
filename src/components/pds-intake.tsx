@@ -62,7 +62,9 @@ export function PdsIntake({
       if (extracted) onText(extracted);
     }
     setFileNote(
-      extracted ? `Loaded ${file.name} (${extracted.length.toLocaleString()} characters).` : `Loaded ${file.name}.`,
+      extracted
+        ? `Loaded ${file.name} (${extracted.length.toLocaleString()} characters).`
+        : `Loaded ${file.name}.`,
     );
     onUpload(file, extracted, pages);
   }
@@ -72,7 +74,9 @@ export function PdsIntake({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <Label htmlFor="pds">Product data sheet</Label>
-          <p className="mt-1 text-sm text-muted">Paste the PDS, or upload a PDF, photo or scan, or Word file. Samples skip the wait.</p>
+          <p className="mt-1 text-sm text-muted">
+            Paste the PDS, or upload a PDF, photo or scan, or Word file. Samples skip the wait.
+          </p>
         </div>
         <div className="flex gap-2">
           <input
@@ -82,7 +86,12 @@ export function PdsIntake({
             className="sr-only"
             onChange={(e) => void onFile(e.target.files?.[0])}
           />
-          <Button type="button" variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => fileRef.current?.click()}
+          >
             <Upload />
             Upload sheet
           </Button>
@@ -105,7 +114,9 @@ export function PdsIntake({
       </div>
 
       <div className="mt-5">
-        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted">Sample products</p>
+        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted">
+          Sample products
+        </p>
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
           {SAMPLES.map((s) => (
             <button
@@ -126,7 +137,9 @@ export function PdsIntake({
 
       {recents.length ? (
         <div className="mt-5">
-          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted">Recent cards</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted">
+            Recent cards
+          </p>
           <ul className="mt-2 divide-y divide-border">
             {recents.map((r) => (
               <li key={r.id}>

@@ -532,8 +532,11 @@ function formatEditedAt(at: string): string {
   const d = new Date(at);
   if (Number.isNaN(d.getTime())) return at;
   return d.toLocaleString("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     timeZoneName: "short",
   });
 }
@@ -602,16 +605,22 @@ export function savedExtractState(record: {
     record.extract && typeof record.extract === "object" ? record.extract : null
   ) as Record<string, unknown> | null;
   const provenance = parseProvenance(raw?.provenance);
-  if (!saved || !provenance) return { kind: "idle" };
+  // parseSavedExtract (#24) rejects server-stamped edited entries; tolerate them here.
+  if (!raw || !provenance || (raw.provider !== "azure" && raw.provider !== "on-device"))
+    return { kind: "idle" };
+  const norm = normalizeProvider(raw.provider, raw.deployment);
+  const warnings = parseWarnings(raw.warnings);
+  const extract: SavedExtract = saved ?? {
+    ...norm,
+    provenance: provenance as unknown as SavedExtract["provenance"],
+    warnings,
+    extractedAt: typeof raw.extractedAt === "string" ? raw.extractedAt : record.card.extractedAt,
+    draft: raw.draft === true,
+    unverifiedTemps: raw.unverifiedTemps === true,
+  };
   return {
     kind: "done",
     source: "saved",
-    result: {
-      card: record.card,
-      provenance,
-      ...normalizeProvider(saved.provider, saved.deployment),
-      warnings: parseWarnings(saved.warnings),
-      extract: saved,
-    },
+    result: { card: record.card, provenance, ...norm, warnings, extract },
   };
 }
