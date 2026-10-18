@@ -1,0 +1,63 @@
+import { createMiddleware, createServerFn } from "@tanstack/react-start";
+import type { ExtractInput, ExtractResponse } from "./provider.ts";
+import { EXTRACT_DEFAULT_MAX_FILE_MB, runExtract, type RateStore } from "./extract-core.ts";
+import { onDeviceProvider } from "./on-device-provider.ts";
+
+/**
+ * Like `authMiddleware`, but a missing session becomes `userId: null` so the handler can return
+ * the coded UNAUTHENTICATED error instead of a thrown 500. Cross-site requests still throw (403).
+ */
+const extractAuth = createMiddleware({ type: "function" })
+  .client(async ({ next }) => {
+    const { getBearerToken } = await import("../auth/client");
+    return next({ sendContext: { bearerToken: getBearerToken() ?? undefined } });
+  })
+  .server(async ({ next, context }) => {
+    const { assertSameSiteRequest } = await import("../auth/isolation.server");
+    const { requireUserId, UnauthorizedError } = await import("../auth/verify.server");
+    assertSameSiteRequest();
+    let userId: string | null = null;
+    try {
+      userId = await requireUserId(context.bearerToken);
+    } catch (err) {
+      if (!(err instanceof UnauthorizedError)) throw err;
+      userId = null;
+    }
+    return next({ context: { userId } });
+  });
+
+const g = globalThis as typeof globalThis & { __ccExtractRate__?: RateStore };
+/** In-memory, per instance. Multi-instance deploys get 10/min per user per instance. */
+function rateStore(): RateStore {
+  g.__ccExtractRate__ ??= new Map();
+  return g.__ccExtractRate__;
+}
+
+function maxFileBytes(): number {
+  const mb = Number(process.env.EXTRACT_MAX_FILE_MB);
+  return (Number.isFinite(mb) && mb > 0 ? mb : EXTRACT_DEFAULT_MAX_FILE_MB) * 1024 * 1024;
+}
+
+export const extractSheet = createServerFn({ method: "POST" })
+  .middleware([extractAuth])
+  .validator((input: ExtractInput): ExtractInput => {
+    const i = (input ?? {}) as Partial<ExtractInput>;
+    return {
+      text: typeof i.text === "string" ? i.text : "",
+      pages: Array.isArray(i.pages) ? i.pages.filter((p): p is string => typeof p === "string").slice(0, 200) : undefined,
+      pdfBase64: typeof i.pdfBase64 === "string" ? i.pdfBase64 : undefined,
+      fileName: typeof i.fileName === "string" ? i.fileName : undefined,
+    };
+  })
+  .handler(async ({ data, context }): Promise<ExtractResponse> => {
+    const { azureFromEnv } = await import("./azure-provider.ts");
+    return runExtract({
+      userId: context.userId,
+      input: data,
+      azure: azureFromEnv(),
+      onDevice: onDeviceProvider,
+      rate: rateStore(),
+      maxFileBytes: maxFileBytes(),
+      log: (entry) => console.info(JSON.stringify(entry)),
+    });
+  });
