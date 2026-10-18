@@ -79,20 +79,12 @@ describe("on-device extract provider", () => {
       }
     }
     const amb = r.provenance["environmentals.ambientTempMinF"];
-    // What the reader produced before the number gate ran.
-    const read = buildCardFromPds(text).environmentals.ambientTempMinF;
     if (r.card.environmentals.ambientTempMinF !== null) {
       assert.ok(amb && amb !== "not-stated" && /Minimum 50/.test(amb.quote));
-    } else if (read !== null) {
-      // The reader produced a number the gate could not pin: dropped, and the user is told.
+    } else {
       assert.equal(amb, "not-stated");
       assert.ok(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"));
       assert.equal(r.unverifiedTemps, true);
-    } else {
-      // The reader read no temperature (no unit on the line): Not stated, nothing invented.
-      assert.equal(amb, "not-stated");
-      assert.equal(r.card.environmentals.ambientTempMaxF, null);
-      assert.equal(r.provenance["environmentals.ambientTempMaxF"], "not-stated");
     }
   });
 
