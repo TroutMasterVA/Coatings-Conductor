@@ -172,6 +172,7 @@ interface ExtractProvider {
 - **Error shape**: see *Extract contract* above (`{ code, message, retryAfterSec?, maxUploadMb? }`). Size cap: client text ≤ 40,000 chars, file ≤ `MAX_UPLOAD_MB`.
 - **Strict schema**: `response_format: { type: "json_schema", strict: true }` built from the FieldCardData zod schema (zod v4 already a dependency); zod-validate every response.
 - **Provenance** (per field, shown in the collapsed panel under the card): every numeric value (and every prepGate profile) must carry a quote found **verbatim in the source text after whitespace normalization**; otherwise the field is set to Not stated (`null` / `""`) and provenance `"not-stated"`. Never invent numbers. Silent fields show Not stated.
+- **Known limits:** Pro Industrial DTM's 55°F reading from the filler sentence is a **blocker** being fixed in **#40** with a general rule that temperature limits come only from the application-conditions or temperature section.
 - **Prompt-injection guard**: sheet text is untrusted. System prompt says to ignore any instructions inside the document; document is passed as delimited user content; output only via the schema.
 - Logs: provider, latency, outcome code. Never log document text or keys.
 
@@ -257,3 +258,28 @@ type EditedProvenance = {
 - A genuine signed read whose signature verifies saves clean (unstamped) as a fresh extract.
 - Ignore any `extractedAt` from the client; the server alone decides fresh-read vs hand-edit.
 - **Known limit (previews):** without a fixed `BETTER_AUTH_SECRET`, each preview instance has its own secret. A read signed on one instance and saved on another fails verification and shows "Edited by". That is the **safe failure**, not a bug. Documented for QA in #26 and the 4:40 in/out list until Isaiah approves a fixed secret for Preview.
+- **Known limit (job binding):** the signature is **not** bound to a job id, so a user could reuse their own read on another of their jobs. The values are still real sheet reads, so the risk is low. Binding the job id is deferred to **issue #30** after this release (PO ruling, 4:20 PM ET). `extractSheet`'s input is unchanged.
+
+## Draft flag on extract response — PO 4:19 PM ET (PR #26)
+
+Owned by the extract endpoint in PR #26, for **every** provider (Azure and on-device).
+
+- The **server** sets `draft: true` when any of these hold:
+  - any shown field lacks its own **verbatim** sheet quote that backs its value;
+  - any field fell back to the gate's sheet line;
+  - the card's confidence is low.
+- **On-device reads are always draft.**
+- A card drops the Draft banner only when **every** shown value has a backing verbatim quote.
+- The **client never sets or clears** `draft`.
+- Tests cover each case (missing quote → draft; gate-line fallback → draft; low confidence → draft; on-device → always draft; all values quote-backed → not draft).
+
+## Duration fields (recoat / pot life) — PO 4:19 PM ET (PR #40)
+
+- **Recoat max**, **recoat min**, and **pot life** must show a **duration** taken from the sheet (e.g. `"1 year"`, `"8 h"`), read from the **table cell or row**.
+- If the reader finds **only prose**, the field is **Not stated**.
+- Lives in **PR #40**, not #36 (#36 stays cuttable).
+
+## After this release — surface-prep / thinner misreads (issue #30) — PO 4:19 PM ET
+
+- Surface-prep and thinner misreads are **out of this release**; they go to **issue #30** after this release.
+- **Condition:** every such card must always render as a **draft** with the **"check against the sheet"** warning, never as a confirmed reading. If any shows as confirmed, that is a blocker for this release.
