@@ -103,8 +103,8 @@ function headerUnitRow(s: string, inheritedTemps: number[] = []): string | null 
 }
 
 /**
- * Durations right after a label. Up to 16 characters of non-label noise (e.g. a kit size) may sit
- * between the label and the first cell; a colon (another label) stops the search.
+ * Durations right after a label. Up to 16 characters of kit-size noise (e.g. "8 2 gallons") may sit
+ * between the label and the first cell; any other text or a colon (another label) stops the search.
  */
 function afterLabel(s: string, inheritedTemps: number[] = []): string | null {
   const hu = headerUnitRow(s, inheritedTemps);
@@ -113,6 +113,13 @@ function afterLabel(s: string, inheritedTemps: number[] = []): string | null {
   for (let skip = 0; skip <= 16 && skip < body.length; skip++) {
     if (skip > 0 && /[:]/.test(body.slice(0, skip))) break;
     if (skip > 0 && !/\s/.test(body[skip - 1]!)) continue; // start at a word boundary
+    // Only kit-size noise ("8 2 gallons") may sit in the gap; any other word belongs to another
+    // label or sentence, so its duration is not this field's.
+    if (
+      skip > 0 &&
+      !/^[\d\s¼½¾/.\-–]*(?:gallons?|gal\.?|kits?|lit(?:re|er)s?|L)?\s*$/i.test(body.slice(0, skip))
+    )
+      break;
     const run = durationRun(body.slice(skip));
     if (run)
       return cap(
