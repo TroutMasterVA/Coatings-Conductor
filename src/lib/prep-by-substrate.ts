@@ -25,6 +25,12 @@ const MARKERS: { family: SubstrateFamily; re: RegExp }[] = [
     re: /immersion(?:\s+service)?|immersed(?:\s+service)?|steel\s+immersion/gi,
   },
   {
+    // A bare steel label ("Iron & Steel:", "Carbon steel", "STEEL:") opens a steel gate, so its
+    // methods are not filed under whatever substrate was named before it.
+    family: "steel-non-immersion",
+    re: /(?<!stainless\s|galvanized\s|galvanised\s|primed\s|shop\s|weathering\s)\b(?:iron\s*(?:&|and)\s*)?(?:carbon\s+|bare\s+|new\s+)?steel\b(?!\s*(?:immersion|immersed|wool|grit|shot))/gi,
+  },
+  {
     family: "concrete",
     re: /\bconcrete\b|\bmasonry\b|\bicri\b|\bcsp\b/gi,
   },
@@ -109,7 +115,7 @@ function collectMarkers(text: string): MarkerHit[] {
   return out;
 }
 
-function chunkForFamily(text: string, family: SubstrateFamily, markers: MarkerHit[]): string {
+function chunksForFamily(text: string, family: SubstrateFamily, markers: MarkerHit[]): string[] {
   const parts: string[] = [];
   for (let i = 0; i < markers.length; i++) {
     const m = markers[i];
@@ -119,13 +125,15 @@ function chunkForFamily(text: string, family: SubstrateFamily, markers: MarkerHi
     const end = next ? next.index : Math.min(text.length, start + 400);
     parts.push(text.slice(start, end));
   }
-  return parts.join("\n\n");
+  return parts;
 }
 
-function gateFromChunk(family: SubstrateFamily, chunk: string): SubstratePrepGate | null {
+function gateFromChunks(family: SubstrateFamily, parts: string[]): SubstratePrepGate | null {
+  const chunk = parts.join("\n\n");
   if (!chunk.trim()) return null;
   const methods = extractMethods(chunk);
-  const profile = extractProfileStrict(chunk);
+  // Profile from the first gate chunk that states one; a DFT range in one chunk must not hide it.
+  const profile = parts.map(extractProfileStrict).find(Boolean) ?? extractProfileStrict(chunk);
   if (!methods.length && !profile) return null;
   return {
     family,
@@ -145,8 +153,7 @@ export function parsePrepBySubstrate(text: string): SubstratePrepGate[] {
   const gates: SubstratePrepGate[] = [];
 
   for (const family of FAMILIES) {
-    const chunk = chunkForFamily(n, family, markers);
-    const gate = gateFromChunk(family, chunk);
+    const gate = gateFromChunks(family, chunksForFamily(n, family, markers));
     if (gate) gates.push(gate);
   }
 

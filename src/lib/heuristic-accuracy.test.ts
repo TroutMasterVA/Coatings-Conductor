@@ -403,3 +403,24 @@ describe("humidity and one-line values", () => {
     assert.equal(card.mixing.thinning, "Amercoat 65, Amercoat 101");
   });
 });
+
+describe("substrate labels come from their own gate lines", () => {
+  // Real text from SW Pro Industrial DTM Acrylic p1, preceded by a concrete line as on the sheet.
+  const DTM =
+    "Concrete & Masonry: Weathered masonry and concrete should be cleaned. Recognize that any surface preparation short of total removal of the old coating may compromise the service length of the system. Iron & Steel - Minimum surface preparation is Hand Tool Clean per SSPC-SP2. Remove all oil and grease from surface per SSPC-SP1. For better performance, use Commercial Blast Cleaning per SSPC-SP6.";
+  // Real text from Jotun Jotamastic 87 p3 (surface preparation table).
+  const JOTUN =
+    "Technical Data Sheet Jotamastic 87 Substrate Minimum Recommended St 2 (ISO 8501-1) or SSPC SP-2 Carbon steel Sa 2 (ISO 8501-1) / SP 6 / NACE No. 3 (SSPC-VIS 1) Shop primed steel Clean, dry and undamaged shop primer. Galvanized steel Sweep blast.";
+  const gates = (t: string) => heuristicExtract(t).surfacePrep.prepGates ?? [];
+  it("'Iron & Steel - … SSPC-SP2' is a steel gate, not Concrete", () => {
+    const g = gates(DTM);
+    const steel = g.find((x) => x.family === "steel-non-immersion");
+    assert.ok(steel?.methods.includes("SSPC-SP2"));
+    assert.ok(!g.find((x) => x.family === "concrete")?.methods.includes("SSPC-SP2"));
+  });
+  it("'Carbon steel … NACE No. 3' is a steel gate, not Non-ferrous", () => {
+    const g = gates(JOTUN);
+    assert.ok(g.find((x) => x.family === "steel-non-immersion")?.methods.includes("NACE 3"));
+    assert.ok(!g.find((x) => x.family === "non-ferrous")?.methods.includes("NACE 3"));
+  });
+});
