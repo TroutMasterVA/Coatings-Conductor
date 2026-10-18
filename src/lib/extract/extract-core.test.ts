@@ -34,7 +34,7 @@ async function okAzure(): Promise<ExtractResult> {
     provider: "azure",
     deployment: "gpt-4o",
     warnings: [],
-    extract: { ...r.extract, provider: "azure", deployment: "gpt-4o", warnings: [], draft: false },
+    draft: false,
   };
 }
 
@@ -121,8 +121,8 @@ describe("runExtract (BE-3 contract)", () => {
     if (r.ok) {
       assert.equal(r.provider, "azure");
       assert.equal(r.deployment, "gpt-4o");
-      assert.equal(r.extract.draft, false);
-      assert.equal(r.extract.provider, "azure");
+      assert.equal(r.draft, false);
+      assert.equal("extract" in r, false);
     }
   });
 
@@ -133,8 +133,8 @@ describe("runExtract (BE-3 contract)", () => {
       assert.equal(r.provider, "on-device");
       assert.equal(r.deployment, undefined);
       assert.ok(r.warnings.some((w) => w.code === "AZURE_FALLBACK"));
-      assert.deepEqual(r.extract.warnings, r.warnings);
-      assert.equal(r.extract.draft, true);
+      assert.ok(Array.isArray(r.warnings));
+      assert.equal(r.draft, true);
     }
   });
 
@@ -222,7 +222,7 @@ describe("runExtract (BE-3 contract)", () => {
 
   it("text-only (paste) input still works", async () => {
     const r = await runExtract(base({ input: { text: SHEET } }));
-    assert.ok(r.ok && r.extract.draft === true && typeof r.extract.unverifiedTemps === "boolean");
+    assert.ok(r.ok && r.draft === true && typeof r.unverifiedTemps === "boolean");
   });
 
   it("EXTRACT_FAILED for unreadable text", async () => {

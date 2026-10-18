@@ -61,7 +61,8 @@ type ExtractResponse =
       provider: "azure" | "on-device";
       deployment?: string;          // Azure deployment name, display only
       warnings: { code: ExtractWarningCode; message: string }[];
-      extract: SavedExtract;        // exactly what the UI saves next to `card` (see below)
+      draft?: boolean;              // true on on-device results; missing = false
+      unverifiedTemps?: boolean;    // true when any temperature value has no verbatim quote; missing = false
     }
   | {
       ok: false;
@@ -101,7 +102,7 @@ type Provenance = Record<string, { page?: number; quote: string } | "not-stated"
 
 ### Saved with the job
 
-The ok response carries `extract`; the UI saves it unchanged next to `card` on the job:
+The response is flat (each field once; no `extract` object on the response). The UI builds `extract` from the response fields (`toSavedExtract(result)` in `src/lib/extract/provider.ts`) and saves it next to `card` on the job:
 
 ```ts
 type SavedExtract = {
@@ -110,15 +111,15 @@ type SavedExtract = {
   provenance: Provenance;
   warnings: { code: string; message: string }[];
   extractedAt: string;          // ISO 8601, set by the server
-  draft: boolean;               // true for on-device results, false for Azure
-  unverifiedTemps: boolean;     // true when any temperature value on the card has no verbatim quote
+  draft?: boolean;              // copied from the response; missing = false
+  unverifiedTemps?: boolean;    // copied from the response; missing = false
 };
 // job record: { ..., card, extract?: SavedExtract }
 ```
 
 - `unverifiedTemps` covers `environmentals.ambientTempMinF/MaxF`, `substrateTempMinF/MaxF`, `dewPointSpreadMinF`. Interim rule (until the accuracy pack's `src/lib/extract/unverified-temps.ts` lands): true if any of those was dropped by the number gate or kept with an empty quote.
-- Storage: `projects.extract_json` (nullable text JSON, like `card_json`; migration `0003_job_extract.sql`). Save with `saveProject({ data: { id, card, extract } })` (also accepted on `createProject` seed and guest import). `openProject` returns `extract` (or `null`). The server validates the object (`parseSavedExtract`, ≤ 1 MB), and replacing or clearing `card` without an `extract` clears the old one so quotes never describe a different card. Reads and writes are scoped by `user_id`.
-- Older jobs have no `extract` (treat as missing; flags false). The top-level `provider` / `deployment` / `provenance` / `warnings` on the response mirror `extract` and stay for FE compatibility. Stored under the same per-user isolation as the card (every query scoped by `user_id`).
+- Storage: `projects.extract_json` (nullable text JSON, like `card_json`; migration `0003_job_extract.sql`). Save with `saveProject({ data: { id, card, extract: toSavedExtract(result) } })` (also accepted on `createProject` seed and guest import). `openProject` returns `extract` (or `null`). The server validates the object (`parseSavedExtract`, ≤ 1 MB), and replacing or clearing `card` without an `extract` clears the old one so quotes never describe a different card. Reads and writes are scoped by `user_id`.
+- Older jobs have no `extract` (treat as missing; flags false). Stored under the same per-user isolation as the card (every query scoped by `user_id`).
 
 ### Provider interface
 

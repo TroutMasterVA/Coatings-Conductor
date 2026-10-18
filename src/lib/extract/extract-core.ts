@@ -103,11 +103,11 @@ function withDeadline<T>(p: Promise<T>, ms: number, ctl: AbortController): Promi
   });
 }
 
-/** Keep `extract.warnings` identical to the top-level list the UI shows. */
+/** De-duplicate warnings by code. */
 function withWarnings(r: ExtractResult, warnings: ExtractWarning[]): ExtractResult {
   const seen = new Set<string>();
   const list = warnings.filter((w) => (seen.has(w.code) ? false : (seen.add(w.code), true)));
-  return { ...r, warnings: list, extract: { ...r.extract, warnings: list } };
+  return { ...r, warnings: list };
 }
 
 function fail(code: ExtractErrorCode, message: string, retryAfterSec?: number): ExtractResponse {
