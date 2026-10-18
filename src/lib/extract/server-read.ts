@@ -3,6 +3,8 @@
  * and mammoth for DOCX. No network. Text only; never logged.
  */
 
+import { fromPdfJsItems, pageText } from "../pdf-lines.ts";
+
 /** Server-read text is capped here (client-sent text stays capped at 40,000 characters). */
 export const SERVER_TEXT_MAX_CHARS = 200_000;
 export const SERVER_PDF_MAX_PAGES = 200;
@@ -38,13 +40,8 @@ export async function readPdfText(bytes: Uint8Array, signal?: AbortSignal): Prom
     for (let i = 1; i <= n; i++) {
       if (signal?.aborted) throw new Error("aborted");
       const content = await (await doc.getPage(i)).getTextContent();
-      pages.push(
-        content.items
-          .map((it) => ("str" in it ? it.str : ""))
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim(),
-      );
+      // Same line rebuild as the browser (pdf-lines.ts, FE #31), so server and browser quotes match.
+      pages.push(pageText(fromPdfJsItems(content.items)));
     }
     await task.destroy();
     const capped = cap(pages);

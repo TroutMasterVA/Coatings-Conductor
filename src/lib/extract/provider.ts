@@ -10,6 +10,19 @@ export type ProvenanceQuote = { page?: number; quote: string };
  */
 export type Provenance = Record<string, ProvenanceQuote | "not-stated">;
 
+/**
+ * A hand edit, stamped by the SERVER on save (CONTRACT.md "Edit stamp (hand edits)").
+ * `by` = session user's display name, else email; `at` = server time (ISO-8601).
+ * `sheetQuote` is the prior sheet quote, kept as history only: it does not back the new value.
+ */
+export type EditedProvenance = {
+  edited: { by: string; at: string };
+  sheetQuote?: ProvenanceQuote;
+};
+
+/** Provenance as stored on a job: reader quotes plus server edit stamps. */
+export type SavedProvenance = Record<string, ProvenanceQuote | "not-stated" | EditedProvenance>;
+
 /** Which reader produced the card. The Azure deployment name, when known, is in `deployment`. */
 export type ProviderLabel = "azure" | "on-device";
 
@@ -84,7 +97,7 @@ export type ExtractResult = {
 export type SavedExtract = {
   provider: ProviderLabel;
   deployment?: string;
-  provenance: Provenance;
+  provenance: SavedProvenance;
   warnings: ExtractWarning[];
   /** ISO 8601. */
   extractedAt: string;

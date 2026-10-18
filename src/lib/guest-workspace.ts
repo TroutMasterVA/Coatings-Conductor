@@ -1,4 +1,5 @@
 import { guestMigrateResult } from "@/lib/guest-import";
+import { planExtractSave } from "@/lib/job-extract";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import {
   defaultSite,
@@ -140,6 +141,9 @@ export function guestOpenProject(id: string): ProjectFull {
   return next;
 }
 
+/** `edited.by` on a guest (signed-out, this-device) job. */
+export const GUEST_EDITOR = "Guest (this device)";
+
 export function guestSaveProject(input: {
   id: string;
   name?: string;
@@ -156,6 +160,14 @@ export function guestSaveProject(input: {
   const found = s.projects.find((p) => p.id === input.id);
   if (!found) throw new Error("Project not found.");
   const now = new Date().toISOString();
+  // Same edit-stamp rule as the server, on this device only (no account, so "by" is the guest).
+  const plan = planExtractSave({
+    storedCard: found.card,
+    storedExtract: found.extract ?? null,
+    card: input.card,
+    extract: input.extract,
+    editor: { by: GUEST_EDITOR, at: now },
+  });
   const next: ProjectFull = {
     ...found,
     name: input.name?.trim() || found.name,
@@ -163,7 +175,7 @@ export function guestSaveProject(input: {
     calibration: input.calibration ?? found.calibration,
     site: input.site ?? found.site,
     card: input.card !== undefined ? input.card : found.card,
-    extract: input.extract !== undefined ? input.extract : found.extract,
+    extract: plan.extract,
     pdsText: input.pdsText ?? found.pdsText,
     recents: input.recents ?? found.recents,
     outcomes: input.outcomes ?? found.outcomes,
