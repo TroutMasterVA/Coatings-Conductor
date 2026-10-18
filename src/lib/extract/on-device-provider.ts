@@ -9,14 +9,8 @@ function result(card: ExtractResult["card"], provenance: Provenance, warnings: E
     provenance,
     provider: "on-device",
     warnings,
-    extract: {
-      provider: "on-device",
-      provenance,
-      warnings,
-      extractedAt: new Date().toISOString(),
-      draft: true,
-      unverifiedTemps: unverifiedTempsFromGate(provenance, droppedPaths),
-    },
+    draft: true,
+    unverifiedTemps: unverifiedTempsFromGate(provenance, droppedPaths),
   };
 }
 
