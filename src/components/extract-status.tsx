@@ -90,8 +90,8 @@ export function ProvenancePanel({ state }: { state: ExtractState }) {
         <p>{providerLabel(state)}</p>
         {warnings.length ? (
           <ul className="mt-1 list-disc pl-4">
-            {warnings.map((w) => (
-              <li key={w}>{w}</li>
+            {warnings.map((w, i) => (
+              <li key={`${i}:${w}`}>{w}</li>
             ))}
           </ul>
         ) : null}

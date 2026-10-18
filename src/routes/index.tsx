@@ -13,14 +13,15 @@ import { WeatherPanel } from "@/components/weather-panel";
 import { isUnauthorized, returnToLogin } from "@/lib/auth/expired";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
-import { buildCardFromPds } from "@/lib/on-device-extract";
+import { onDeviceProvider } from "@/lib/extract/on-device-provider";
 import {
   bytesToBase64,
   extractPasted,
   extractUpload,
   savedExtractState,
+  toSavedExtract,
   type ExtractState,
-  type SavedExtractFields,
+  type SavedExtract,
 } from "@/lib/extract-client";
 import { callExtractSheet } from "@/lib/extract-server";
 import { loadForecast } from "@/lib/forecast";
@@ -154,6 +155,7 @@ function App({ user }: { user: AppUser | null }) {
     text: "",
     recents: [] as SavedCard[],
     outcomes: [] as FieldOutcome[],
+    extract: null as SavedExtract | null,
   });
   jobRef.current = {
     projectId,
@@ -165,6 +167,7 @@ function App({ user }: { user: AppUser | null }) {
     text,
     recents,
     outcomes,
+    extract: toSavedExtract(extractState),
   };
 
   const applyFull = useCallback((full: ProjectFull) => {
@@ -179,7 +182,7 @@ function App({ user }: { user: AppUser | null }) {
     setOutcomes(full.outcomes);
     setForecast(null);
     setWxError(null);
-    setExtractState(savedExtractState(full as ProjectFull & SavedExtractFields));
+    setExtractState(savedExtractState(full as ProjectFull & { extract?: unknown }));
     uploadRef.current = null;
     extractGen.current += 1;
     setMode("job");
@@ -203,6 +206,7 @@ function App({ user }: { user: AppUser | null }) {
         pdsText: snap.text,
         recents: snap.recents,
         outcomes: snap.outcomes,
+        extract: snap.extract,
       });
       if (gen !== saveGen.current) return;
       setProjects((prev) => upsertProjectSummary(prev, summary));
@@ -305,7 +309,7 @@ function App({ user }: { user: AppUser | null }) {
     window.clearTimeout(persistTimer.current);
     persistTimer.current = window.setTimeout(() => persist(), 600);
     return () => window.clearTimeout(persistTimer.current);
-  }, [projectId, projectName, zip, calibration, site, card, text, recents, outcomes, mode, persist]);
+  }, [projectId, projectName, zip, calibration, site, card, text, recents, outcomes, extractState, mode, persist]);
 
   useEffect(() => {
     if (!card) return;
@@ -347,11 +351,11 @@ function App({ user }: { user: AppUser | null }) {
             text: source.text,
             pages: source.pages,
             signedIn,
-            onDevice: buildCardFromPds,
+            onDevice: (input) => onDeviceProvider.extract(input),
             readBase64: async () => bytesToBase64(new Uint8Array(await file.arrayBuffer())),
             server: callExtractSheet,
           })
-        : extractPasted(source.text, buildCardFromPds);
+        : await extractPasted(source.text, (input) => onDeviceProvider.extract(input));
       if (gen !== extractGen.current) return;
       if (state.kind === "unauthenticated") {
         returnToLogin();
@@ -752,6 +756,7 @@ function workspaceApi(signedIn: boolean) {
     open(id: string) {
       return wrap(signedIn ? openProject({ data: id }) : Promise.resolve(guestOpenProject(id)));
     },
+    /** `extract` rides along next to `card` (pending BE-3 server write; guests store it locally). */
     save(data: Parameters<typeof guestSaveProject>[0]) {
       return wrap(signedIn ? saveProject({ data }) : Promise.resolve(guestSaveProject(data)));
     },

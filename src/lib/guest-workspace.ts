@@ -149,6 +149,8 @@ export function guestSaveProject(input: {
   pdsText?: string;
   recents?: SavedCard[];
   outcomes?: FieldOutcome[];
+  /** Saved extract (provider, provenance, warnings) next to `card`. Opaque here; read via extract-client. */
+  extract?: unknown;
 }): ProjectSummary {
   const s = read();
   const found = s.projects.find((p) => p.id === input.id);
@@ -167,6 +169,7 @@ export function guestSaveProject(input: {
     updatedAt: now,
     hasCard: Boolean(input.card !== undefined ? input.card : found.card),
   };
+  if (input.extract !== undefined) (next as ProjectFull & { extract?: unknown }).extract = input.extract;
   s.projects = s.projects.map((p) => (p.id === input.id ? next : p));
   write(s);
   return summaryOf(next);
