@@ -4,7 +4,7 @@ import { getSql } from "@/lib/db";
 import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
-import { applyExtractOnSave, decodeSavedExtract, encodeSavedExtract, parseSavedExtract } from "@/lib/job-extract";
+import { decodeSavedExtract, saveJobCard, encodeSavedExtract, parseSavedExtract } from "@/lib/job-extract";
 import type { SavedExtract } from "@/lib/extract/provider";
 import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, SavedCard } from "@/lib/types";
 
@@ -219,7 +219,7 @@ export const saveProject = createServerFn({ method: "POST" })
       calibration?: Calibration;
       site?: SiteContext;
       card?: FieldCardData | null;
-      /** Saved next to `card`. `null` clears it; omitted leaves it as is. A new card with no extract clears it. */
+      /** Saved next to `card`. Missing keeps the stored extract (and its edit stamps); `null` clears it; an object replaces it. */
       extract?: SavedExtract | null;
       pdsText?: string;
       recents?: SavedCard[];
@@ -239,18 +239,21 @@ export const saveProject = createServerFn({ method: "POST" })
     const zip = data.zip != null ? data.zip.replace(/\D/g, "").slice(0, 5) : row.zip;
     const cal = data.calibration ?? parseJson(row.calibration_json, DEFAULT_CALIBRATION);
     const site = data.site ?? parseJson(row.site_json, defaultSite());
-    const card = data.card !== undefined ? data.card : parseJson<FieldCardData | null>(row.card_json, null);
     const pdsText = data.pdsText ?? row.pds_text;
     const recents = data.recents ?? parseJson<SavedCard[]>(row.recents_json, []);
     const outcomes = data.outcomes ?? parseJson<FieldOutcome[]>(row.outcomes_json, []);
     const now = new Date().toISOString();
+    // Card + extract in one statement. Missing `extract` keeps the stored quotes; null clears; an
+    // object replaces. Fields that differ from the stored card get a server edit stamp
+    // (CONTRACT.md "Edit stamp"); anything the client sent as `edited` is ignored.
+    const saved = await saveJobCard(sql, context.userId, data.id, { card: data.card, extract: data.extract }, now);
+    if (!saved) throw new Error(NOT_YOUR_JOB_MESSAGE);
     const updated = await sql<ProjectRow>`
       update projects set
         name = ${name},
         zip = ${zip},
         calibration_json = ${JSON.stringify(cal)},
         site_json = ${JSON.stringify(site)},
-        card_json = ${card ? JSON.stringify(card) : null},
         pds_text = ${pdsText},
         recents_json = ${JSON.stringify(recents)},
         outcomes_json = ${JSON.stringify(outcomes)},
@@ -259,9 +262,8 @@ export const saveProject = createServerFn({ method: "POST" })
       returning id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
                 recents_json, outcomes_json, last_opened_at, updated_at
     `;
-    // Missing `extract` keeps the stored quotes (autosave after a field edit); null clears; object replaces.
-    await applyExtractOnSave(sql, context.userId, data.id, data.extract);
-    return toSummary(updated[0]!);
+    if (!updated[0]) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    return toSummary(updated[0]);
   });
 
 export const archiveProject = createServerFn({ method: "POST" })

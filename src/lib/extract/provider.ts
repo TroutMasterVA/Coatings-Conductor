@@ -10,6 +10,19 @@ export type ProvenanceQuote = { page?: number; quote: string };
  */
 export type Provenance = Record<string, ProvenanceQuote | "not-stated">;
 
+/**
+ * A hand edit, stamped by the SERVER on save (CONTRACT.md "Edit stamp (hand edits)").
+ * `by` = session user's display name, else email; `at` = server time (ISO-8601).
+ * `sheetQuote` is the prior sheet quote, kept as history only: it does not back the new value.
+ */
+export type EditedProvenance = {
+  edited: { by: string; at: string };
+  sheetQuote?: ProvenanceQuote;
+};
+
+/** Provenance as stored on a job: reader quotes plus server edit stamps. */
+export type SavedProvenance = Record<string, ProvenanceQuote | "not-stated" | EditedProvenance>;
+
 /** Which reader produced the card. The Azure deployment name, when known, is in `deployment`. */
 export type ProviderLabel = "azure" | "on-device";
 
@@ -76,20 +89,31 @@ export type ExtractResult = {
   draft?: boolean;
   /** true when any temperature field (ambient/substrate min/max, dew-point spread) has no verbatim quote. Missing = false. */
   unverifiedTemps?: boolean;
+  /** Set by extractSheet (server-only signature). The client copies it into the saved extract untouched. */
+  serverRead?: ServerRead;
   /** Internal only: the text a remote provider read (e.g. Document Intelligence content). The server gates against it and strips it before responding. */
   source?: { text: string; pages?: string[] };
 };
+
+/**
+ * Server-issued proof that a card came from this user's read (CONTRACT.md "Signed reads").
+ * SERVER-ONLY: returned by extractSheet, passed back untouched on save, never built by the client,
+ * and stripped before the extract is stored or returned.
+ */
+export type ServerRead = { id: string; sig: string; fields: Record<string, string> };
 
 /** Saved next to `card` in the job record. Older jobs have no `extract` (treat as missing; flags false). */
 export type SavedExtract = {
   provider: ProviderLabel;
   deployment?: string;
-  provenance: Provenance;
+  provenance: SavedProvenance;
   warnings: ExtractWarning[];
   /** ISO 8601. */
   extractedAt: string;
   draft?: boolean;
   unverifiedTemps?: boolean;
+  /** Inbound only (save requests): the signed read this extract came from. Never stored. */
+  serverRead?: ServerRead;
 };
 
 /** Builds the object the UI saves next to `card` from the flat extract response. */
@@ -102,6 +126,7 @@ export function toSavedExtract(r: ExtractResult, extractedAt: string = new Date(
     extractedAt,
     draft: r.draft === true,
     unverifiedTemps: r.unverifiedTemps === true,
+    ...(r.serverRead ? { serverRead: r.serverRead } : {}),
   };
 }
 
