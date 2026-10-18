@@ -101,9 +101,10 @@ describe("prep-by-substrate (Carbomastic 615–style fixture)", () => {
     assert.ok(labels.includes("Steel non-immersion"));
     assert.ok(labels.includes("Concrete"));
     assert.ok(labels.includes("Non-ferrous metals"));
-    assert.equal(card.surfacePrep.prepGates.length, 4);
+    const gates = card.surfacePrep.prepGates ?? [];
+    assert.equal(gates.length, 4);
 
-    const immersion = card.surfacePrep.prepGates.find((g) => g.family === "steel-immersion");
+    const immersion = gates.find((g) => g.family === "steel-immersion");
     assert.ok(immersion);
     assert.match(immersion.profile, /2-3/);
 
