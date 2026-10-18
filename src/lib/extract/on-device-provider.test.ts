@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { heuristicExtract } from "../heuristic-extract.ts";
 import { onDeviceProvider } from "./on-device-provider.ts";
+import { buildCardFromPds } from "../on-device-extract.ts";
+import { gateNumbers, sourceOf, unverifiedTempsFromGate } from "./provenance.ts";
 
 const SHEET = `
 Product data sheet
@@ -77,13 +79,33 @@ describe("on-device extract provider", () => {
       }
     }
     const amb = r.provenance["environmentals.ambientTempMinF"];
+    // What the reader produced before the number gate ran.
+    const read = buildCardFromPds(text).environmentals.ambientTempMinF;
     if (r.card.environmentals.ambientTempMinF !== null) {
       assert.ok(amb && amb !== "not-stated" && /Minimum 50/.test(amb.quote));
-    } else {
+    } else if (read !== null) {
+      // The reader produced a number the gate could not pin: dropped, and the user is told.
       assert.equal(amb, "not-stated");
       assert.ok(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"));
       assert.equal(r.unverifiedTemps, true);
+    } else {
+      // The reader read no temperature (no unit on the line): Not stated, nothing invented.
+      assert.equal(amb, "not-stated");
+      assert.equal(r.card.environmentals.ambientTempMaxF, null);
+      assert.equal(r.provenance["environmentals.ambientTempMaxF"], "not-stated");
     }
+  });
+
+  it("drops a read temperature with no backing line to Not stated and flags temps unverified", () => {
+    const text = "Product data sheet\nField Epoxy 100\nMix ratio: 1:1 by volume\nApplication conditions\nMinimum 50 Maximum 120";
+    const misread = buildCardFromPds(text);
+    misread.environmentals.ambientTempMinF = 55; // a number that is not on the sheet
+    const g = gateNumbers(misread, sourceOf({ text }));
+    assert.equal(g.card.environmentals.ambientTempMinF, null);
+    assert.equal(g.provenance["environmentals.ambientTempMinF"], "not-stated");
+    assert.ok(g.droppedPaths.includes("environmentals.ambientTempMinF"));
+    assert.ok(g.dropped >= 1);
+    assert.equal(unverifiedTempsFromGate(g.provenance, g.droppedPaths), true);
   });
 
   it("does not flag ON_DEVICE_UNPINNED just for inferred hold points", async () => {
