@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
-import { closeJob, deleteOpenProject, statusFields, throwWriteRefused, type JobStatus } from "@/lib/job-close";
+import { closeJob, deleteOpenProject, GUEST_CLOSED_BY, statusFields, throwWriteRefused, type JobStatus } from "@/lib/job-close";
 import { listProjectRows, openProjectRow, readProjectRow, toRowSummary, type ProjectRow } from "@/lib/project-rows";
 import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
@@ -337,7 +337,13 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
       const lastOpened = p.lastOpenedAt || now;
       const updated = p.updatedAt || now;
       // A job closed on this device stays closed (read-only record) in the account.
-      const closed = statusFields({ status: p.status, closed_at: p.closedAt ?? null, closed_by: p.closedBy ?? null });
+      // closedBy is always "This device" (the browser's value is not trusted); a missing or invalid
+      // closedAt falls back to the import time.
+      const guestStatus = statusFields({ status: p.status, closed_at: p.closedAt ?? null });
+      const closed =
+        guestStatus.status === "closed"
+          ? { status: "closed", closedAt: guestStatus.closedAt ?? now, closedBy: GUEST_CLOSED_BY }
+          : { status: "open", closedAt: null, closedBy: null };
       await sql`
         insert into projects (
           id, user_id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,

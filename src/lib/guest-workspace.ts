@@ -1,5 +1,5 @@
 import { guestMigrateResult, NOT_YOUR_JOB_MESSAGE } from "@/lib/guest-import";
-import { JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE, statusFields, type CloseResult } from "@/lib/job-close";
+import { GUEST_CLOSED_BY, JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE, statusFields, type CloseResult } from "@/lib/job-close";
 import { guestTrust, planExtractSave } from "@/lib/job-extract";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import {
@@ -201,13 +201,13 @@ export function guestCloseProject(id: string): CloseResult {
   const found = s.projects.find((p) => p.id === id);
   if (!found) throw new Error(NOT_YOUR_JOB_MESSAGE);
   if (found.status === "closed" && found.closedAt) {
-    return { ok: true, status: "closed", closedAt: found.closedAt, closedBy: found.closedBy ?? "This device" };
+    return { ok: true, status: "closed", closedAt: found.closedAt, closedBy: found.closedBy ?? GUEST_CLOSED_BY };
   }
   const now = new Date().toISOString();
-  const next: ProjectFull = { ...found, status: "closed", closedAt: now, closedBy: "This device", updatedAt: now };
+  const next: ProjectFull = { ...found, status: "closed", closedAt: now, closedBy: GUEST_CLOSED_BY, updatedAt: now };
   s.projects = s.projects.map((p) => (p.id === id ? next : p));
   write(s);
-  return { ok: true, status: "closed", closedAt: now, closedBy: "This device" };
+  return { ok: true, status: "closed", closedAt: now, closedBy: GUEST_CLOSED_BY };
 }
 
 export function guestArchiveProject(id: string, archived: boolean) {

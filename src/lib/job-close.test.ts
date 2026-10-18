@@ -354,4 +354,12 @@ describe("job closeout (CONTRACT.md Job closeout, 5b2d320)", () => {
     assert.equal(row?.archived, true);
     assert.equal(statusFields(row!).status, "closed");
   });
+
+  it("statusFields turns an invalid closedAt into null up front (guest import then uses the import time)", () => {
+    assert.deepEqual(statusFields({ status: "closed", closed_at: "not a date", closed_by: "x" }), {
+      status: "closed",
+      closedAt: null,
+      closedBy: "x",
+    });
+  });
 });
