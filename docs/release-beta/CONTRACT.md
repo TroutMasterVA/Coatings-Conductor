@@ -5,11 +5,13 @@ Not in scope for agents: merge to `main`, version tag, real Azure keys/endpoints
 
 ## Goal
 
-A stable release employees can deploy and use.
+A stable release employees can deploy and use, reading any coatings sheet accurately.
 
-- **No keys set → best on-device extract**: `buildCardFromPds` (`src/lib/on-device-extract.ts`) → `heuristicExtract` (`src/lib/heuristic-extract.ts`) → `parsePrepBySubstrate` (`src/lib/prep-by-substrate.ts`, writes `surfacePrep.prepGates`).
-- **Azure AI Foundry is a plug-in adapter** that company IT wires later. Env vars only. Mocked in tests. **No keys in git** (`.env*` stays ignored; only `.env.example` is committed).
-- Login, per-user isolation, job loop (open → inspect → save → close), NOAA/Open-Meteo windows + sliders, and the printable card stay unchanged.
+- **Azure is the PRIMARY reader** when configured (company IT wires it; env vars only; mocked in tests; **no keys in git**, only `.env.example` committed).
+- **On-device is fallback only** (no Azure configured, or Azure fails): `buildCardFromPds` (`src/lib/on-device-extract.ts`) → `heuristicExtract` (`src/lib/heuristic-extract.ts`) → `parsePrepBySubstrate` (`src/lib/prep-by-substrate.ts`, writes `surfacePrep.prepGates`).
+- **Never tune to a single sheet.** Carbomastic 615 is one scored check in a varied fixture set, not the target.
+- **No xAI** anywhere. The old xAI `extractPds` is reference only (prompt/shape ideas), not reused as a service.
+- Login, per-user isolation, job loop (open → inspect → save → close), NOAA/Open-Meteo windows + sliders, and the printable card stay unchanged. **Card face, windows and print are unchanged**; FE provenance quotes live in a **collapsed panel under the card**.
 
 ## Current layout (as found)
 
@@ -47,23 +49,29 @@ interface ExtractProvider {
 }
 ```
 
-## Provider selection (server)
+## Azure path (primary)
 
-Server reads env:
+1. **Document Intelligence** `prebuilt-layout` (model from `AZURE_DOCINTEL_MODEL`): text with page numbers, tables, figures, and OCR for scanned/image PDFs.
+2. **Render PDF pages to images server-side** (capped page count / resolution) so brochure and chart layouts are readable.
+3. **Vision-capable Azure OpenAI / Foundry deployment (GPT-4o class)** gets the layout text + tables + page images, returns `response_format: { type: "json_schema", strict: true }`.
+4. zod-validate, then **provenance check**: numbers without a verbatim (whitespace-normalized) quote in the DocIntel text become Not stated.
+
+## Provider selection (server)
 
 | Var | Purpose |
 |---|---|
-| `AZURE_DOCINTEL_ENDPOINT` | Document Intelligence (layout/read) endpoint |
-| `AZURE_DOCINTEL_KEY` | DocIntel key (omit with managed identity) |
+| `AZURE_DOCINTEL_ENDPOINT` | Document Intelligence endpoint |
+| `AZURE_DOCINTEL_MODEL` | Default `prebuilt-layout` |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI / Foundry endpoint |
-| `AZURE_OPENAI_DEPLOYMENT` | Chat deployment name |
-| `AZURE_OPENAI_API_VERSION` | API version |
-| `AZURE_OPENAI_API_KEY` | Key (omit with managed identity) |
-| `AZURE_USE_MANAGED_IDENTITY` | `true` → `DefaultAzureCredential` (Entra / managed identity) |
+| `AZURE_OPENAI_DEPLOYMENT` | Vision-capable chat deployment name (GPT-4o class) |
+| `AZURE_OPENAI_API_VERSION` | API version (must support json_schema + image input) |
+| `AZURE_DOCINTEL_KEY` | Optional — key auth fallback |
+| `AZURE_OPENAI_API_KEY` | Optional — key auth fallback |
 
-- Azure is used only when **fully configured** (endpoints + deployment + api version + (keys or `AZURE_USE_MANAGED_IDENTITY=true`)). Otherwise → on-device.
-- Azure failure / timeout / schema-invalid → **fall back to on-device** and add a warning shown to the user.
-- Config is never sent to the browser. `/api/health` may report `extractProvider: "on-device"|"azure"` but never values.
+- **Auth order**: `DefaultAzureCredential` (managed identity / Entra) **first**; API-key env vars only if set and credential is not used/available.
+- Azure is used when endpoints + deployment + API version are set. Otherwise → on-device fallback.
+- Azure failure / timeout / schema-invalid → **fall back to on-device** with a user-visible warning.
+- Config is never sent to the browser. `/api/health` may report `extractProvider: "azure"|"on-device"` but never values.
 
 ## Rules
 
@@ -72,26 +80,45 @@ Server reads env:
 - **Rate limit**: per user, 10/min (in-memory token bucket is acceptable for single-instance beta; document the limit for multi-instance).
 - **Timeout**: 60 s total per extract (`AbortSignal.timeout`).
 - **Error shape**: `{ code, message }` with `code` ∈ `UNAUTHENTICATED`, `RATE_LIMITED`, `EXTRACT_TIMEOUT`, `EXTRACT_FAILED`, `FILE_TOO_LARGE`. Size cap: text ≤ 40,000 chars (old validator), file ≤ agreed MB.
-- **Strict schema**: Azure OpenAI `response_format: { type: "json_schema", strict: true }` built from the FieldCardData zod schema (zod v4 already a dependency); zod-validate every response.
-- **Provenance**: every numeric value (and every prepGate profile) must carry a quote found **verbatim in the source text after whitespace normalization**; otherwise the field is set to Not stated (`null` / `""`) and provenance `"not-stated"`. Never invent numbers. Silent fields show Not stated.
+- **Strict schema**: `response_format: { type: "json_schema", strict: true }` built from the FieldCardData zod schema (zod v4 already a dependency); zod-validate every response.
+- **Provenance** (per field, shown in the collapsed panel under the card): every numeric value (and every prepGate profile) must carry a quote found **verbatim in the source text after whitespace normalization**; otherwise the field is set to Not stated (`null` / `""`) and provenance `"not-stated"`. Never invent numbers. Silent fields show Not stated.
 - **Prompt-injection guard**: sheet text is untrusted. System prompt says to ignore any instructions inside the document; document is passed as delimited user content; output only via the schema.
 - Logs: provider, latency, outcome code. Never log document text or keys.
+
+## Test fixtures (mocked Azure responses)
+
+`tests/fixtures/extract/` — each fixture = source text/pages + mocked DocIntel layout JSON + mocked Azure OpenAI response + expected card:
+
+1. Dense table spec sheet
+2. Brochure-style sheet (charts/columns; page images matter)
+3. Scanned image PDF (OCR-only text)
+4. Multi-product sheet (must not cross-wire products)
+5. Carbomastic 615 (scored check)
+
+Plus negative mocks: invented number not in text → Not stated; injection text in sheet ignored; timeout → fallback; malformed JSON → fallback.
 
 ## Ticket graph
 
 | Ticket | Owner | Scope | Deps |
 |---|---|---|---|
-| BE-1 | BE | `ExtractProvider` interface + on-device provider wrapping `buildCardFromPds`/`heuristicExtract` (+ provenance from the heuristic's matched text where available) | — |
-| BE-2 | BE | Azure adapter: DocIntel layout → Azure OpenAI `json_schema`; reuse old `extractPds` SYSTEM prompt/shape from `eaff352:src/lib/extract-pds.ts`; mocked fetch fixtures; provenance validator | BE-1 |
-| BE-3 | BE | Server extract fn (`createServerFn` POST + `authMiddleware`): rate limit, 60 s timeout, error shapes, fallback | BE-1 |
-| BE-4 | BE | Carbomastic 615 gold-bar scoring script comparing providers (Azure mocked) | BE-1, BE-2 (mocked) |
-| FE-1 | FE | Upload any PDF → server extract (or on-device), per-field provenance tooltip/quote, loading / empty / error / rate-limited / fallback states | BE-3 contract only |
-| PLAT-1 | Platform | Dockerfile (Nitro `node-server` preset via env switch, keep `vercel` for practice), `/api/health` (db ping), `.env.example`, README Deploy (Docker / PAVE / Azure, env table, Postgres `DATABASE_URL`), bring CI (`ci.yml` from PR #1) onto this branch and green | — |
+| BE-1 | BE | `ExtractProvider` interface + on-device fallback provider wrapping `buildCardFromPds`/`heuristicExtract` | — |
+| BE-2 | BE | Azure adapter (primary): DocIntel prebuilt-layout → server-side page images → vision deployment `json_schema`; `DefaultAzureCredential` first, keys secondary; provenance validator; mocks for all fixtures. Old `eaff352:src/lib/extract-pds.ts` SYSTEM prompt may seed the schema/prompt (no xAI). | BE-1 |
+| BE-3 | BE | Server extract fn (`createServerFn` POST + `authMiddleware`), accepts file upload server-side; rate limit, 60 s timeout, error shapes, fallback | BE-1 |
+| BE-4 | BE | Scoring harness across the full fixture set (per-field precision/recall, invented-number count = must be 0), Azure-mocked vs on-device; Carbomastic 615 is one row | BE-1, BE-2 (mocked) |
+| FE-1 | FE | Upload any PDF/image → server extract; provenance quotes in a collapsed panel under the card (card face/windows/print unchanged); loading / empty / error / rate-limited / fallback-warning states | BE-3 contract only |
+| PLAT-1 | Platform | Dockerfile (Nitro `node-server` preset via env switch, keep `vercel` for practice), `/api/health` (db ping), `.env.example`, README Deploy (Docker / PAVE, env table, Postgres `DATABASE_URL`) + **"IT: connect your Azure Foundry"** section, `npm run azure:check`, CI (`ci.yml` from PR #1) green on this branch | — |
+
+### README — "IT: connect your Azure Foundry" (PLAT-1)
+
+- Resources: Azure AI Document Intelligence (or AI Services multi-service) resource; Azure OpenAI / AI Foundry project with a vision-capable GPT-4o-class deployment; the app host (PAVE container) with a managed identity.
+- Role assignments for the app identity: **Cognitive Services User** (Document Intelligence) and **Cognitive Services OpenAI User** (Azure OpenAI).
+- Env vars: table above (keys optional; managed identity preferred).
+- Test command: `npm run azure:check` — verifies config, auth, DocIntel and deployment reachability with a tiny bundled sample; prints pass/fail, never prints secrets.
 
 ## Definition of done
 
 - CI green on `release/beta-azure`.
-- Tests: provider selection, fallback, provenance validator, rate limit, error shapes.
+- Tests: provider selection, auth order, fallback, provenance validator, rate limit, error shapes, all five mocked fixtures + negative mocks.
 - Unchanged and passing: login, isolation, job loop, NOAA windows + sliders, printable card.
 - QA + AppSec review comments on the PR.
 - PR `release/beta-azure` → `main` opened as **draft**. **Not merged. Not tagged.**
@@ -99,6 +126,6 @@ Server reads env:
 ## Checkpoints (ET, Oct 18)
 
 - **3:50 PM** — BE-1, PLAT-1 CI landed; BE-2/BE-3 in review.
-- **4:50 PM** — all tickets in PR; Carbomastic 615 gold-bar side-by-side (on-device vs Azure-mocked vs old prompt).
+- **4:50 PM** — all tickets in PR; scoring harness side-by-side across the fixture set (Azure-mocked vs on-device), Carbomastic 615 row included.
 - **5:05–5:35 PM** — QA + AppSec final pass.
 - **5:30 PM** — status to PO; draft PR + merge/tag/keys/hosting checklist for Isaiah.
