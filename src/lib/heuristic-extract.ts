@@ -36,6 +36,12 @@ function toF(value: number, unit: string | undefined): number {
   return value;
 }
 
+/** A temperature *difference* (dew-point spread): 3°C apart is 5°F apart, not 37°F. */
+function toDeltaF(value: number, unit: string | undefined): number {
+  if (!unit || /f/i.test(unit)) return value;
+  return Math.round((value * 9) / 5);
+}
+
 /** Rain is not allowed unless the sheet says it is. Forbid wins. */
 function precipitationAllowedFromText(t: string): boolean {
   if (
@@ -52,6 +58,11 @@ function precipitationAllowedFromText(t: string): boolean {
 
 /** Stated dew-point spread only — never invent 5°F from a bare dew mention. */
 function dewPointSpreadFromText(t: string): number | null {
+  // "3°C (5°F) above the dew point": the sheet already gave °F, use it.
+  const paired = t.match(
+    /(\d+(?:\.\d+)?)\s*°?\s*C\s*\(\s*(\d+(?:\.\d+)?)\s*°?\s*F\s*\)\s*(?:above|over|higher than)\s+(?:the\s+)?dew/i,
+  );
+  if (paired?.[2]) return Number(paired[2]);
   const patterns: RegExp[] = [
     // "5°F above the dew point"
     /(\d+(?:\.\d+)?)\s*°?\s*([CF])?(?:\s*\([^)]{0,16}\))?\s*(?:above|over|higher than)\s+(?:the\s+)?dew/i,
@@ -63,7 +74,7 @@ function dewPointSpreadFromText(t: string): number | null {
   ];
   for (const p of patterns) {
     const m = t.match(p);
-    if (m?.[1]) return toF(Number(m[1]), m[2]);
+    if (m?.[1]) return toDeltaF(Number(m[1]), m[2]);
   }
   return null;
 }
