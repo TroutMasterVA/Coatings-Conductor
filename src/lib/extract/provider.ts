@@ -76,6 +76,8 @@ export type ExtractResult = {
   draft?: boolean;
   /** true when any temperature field (ambient/substrate min/max, dew-point spread) has no verbatim quote. Missing = false. */
   unverifiedTemps?: boolean;
+  /** Internal only: the text a remote provider read (e.g. Document Intelligence content). The server gates against it and strips it before responding. */
+  source?: { text: string; pages?: string[] };
 };
 
 /** Saved next to `card` in the job record. Older jobs have no `extract` (treat as missing; flags false). */

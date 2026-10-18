@@ -263,3 +263,28 @@ describe("takeRateSlot", () => {
     assert.equal(takeRateSlot(s, "u", 60_000).ok, true);
   });
 });
+
+describe("one number gate for every provider", () => {
+  it("drops an invented number from a mocked Azure result and never returns `source`", async () => {
+    const az = await okAzure();
+    const invented = {
+      ...az,
+      card: { ...az.card, environmentals: { ...az.card.environmentals, windMaxMph: 99 } },
+      source: { text: SHEET },
+    };
+    const r = await runExtract(base({ azure: fakeAzure(async () => invented) }));
+    assert.ok(r.ok);
+    if (r.ok) {
+      assert.equal(r.provider, "azure");
+      assert.equal(r.card.environmentals.windMaxMph, null);
+      assert.equal(r.provenance["environmentals.windMaxMph"], "not-stated");
+      assert.ok(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"));
+      assert.equal("source" in r, false);
+    }
+  });
+
+  it("keeps a quoted Azure number", async () => {
+    const r = await runExtract(base({ azure: fakeAzure(async () => ({ ...(await okAzure()), source: { text: SHEET } })) }));
+    assert.ok(r.ok && r.card.environmentals.dewPointSpreadMinF === 5);
+  });
+});

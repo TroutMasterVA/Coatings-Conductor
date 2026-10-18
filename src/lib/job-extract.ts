@@ -86,3 +86,24 @@ export async function readJobExtract(sql: Sql, userId: string, jobId: string): P
   `;
   return decodeSavedExtract(rows[0]?.extract_json);
 }
+
+/**
+ * Save rule for `extract` (CONTRACT.md): missing keeps what is stored (so autosave after a field
+ * edit never wipes the quotes), `null` clears it, an object replaces it. Returns what was done.
+ */
+export async function applyExtractOnSave(
+  sql: Sql,
+  userId: string,
+  jobId: string,
+  extract: unknown,
+): Promise<"kept" | "cleared" | "replaced"> {
+  if (extract === undefined) return "kept";
+  if (extract === null) {
+    await writeJobExtract(sql, userId, jobId, null);
+    return "cleared";
+  }
+  const parsed = parseSavedExtract(extract);
+  if (!parsed) throw new Error("Saved source quotes are malformed.");
+  await writeJobExtract(sql, userId, jobId, parsed);
+  return "replaced";
+}
