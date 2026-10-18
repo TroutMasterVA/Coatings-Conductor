@@ -49,10 +49,14 @@ export type ExtractRequest = {
   pages?: string[];
 };
 
-/** What a provider gets after the server has validated the request and read any text it can. */
+/**
+ * What a provider gets after the server has validated the request and read any text it can.
+ * `fileBase64`/`mimeType` are optional so the paste-text path still works; with neither text nor
+ * pages, the on-device provider returns an all-Not-stated card with IMAGE_ONLY_NEEDS_AZURE.
+ */
 export type ExtractInput = {
-  /** Plain text of the sheet. Pages joined by a blank line. May be "" for photos and scans. */
-  text: string;
+  /** Plain text of the sheet. Pages joined by a blank line. May be absent or "" for photos and scans. */
+  text?: string;
   /** Optional per-page text. When set, quotes carry page numbers. */
   pages?: string[];
   /** Raw file bytes, base64, already size- and type-checked. Remote providers send this to Azure. */
@@ -68,6 +72,10 @@ export type ExtractResult = {
   /** Azure deployment name, for display only. */
   deployment?: string;
   warnings: ExtractWarning[];
+  /** Set on on-device results: the card is a draft to check against the sheet. */
+  draft?: true;
+  /** True when a temperature value's unit could not be verified (implemented by the accuracy pack). */
+  unverifiedTemps?: boolean;
 };
 
 /** Saved next to `card` in the job record. Older jobs have no `extract` (treat as missing). */
@@ -78,6 +86,8 @@ export type SavedExtract = {
   warnings: ExtractWarning[];
   /** ISO 8601. */
   extractedAt: string;
+  draft?: true;
+  unverifiedTemps?: boolean;
 };
 
 export interface ExtractProvider {
@@ -97,4 +107,14 @@ export type ExtractErrorCode =
 
 export type ExtractResponse =
   | ({ ok: true } & ExtractResult)
-  | { ok: false; error: { code: ExtractErrorCode; message: string; retryAfterSec?: number } };
+  | {
+      ok: false;
+      error: {
+        code: ExtractErrorCode;
+        message: string;
+        /** RATE_LIMITED only. */
+        retryAfterSec?: number;
+        /** FILE_TOO_LARGE only: the upload limit on this copy (MAX_UPLOAD_MB). */
+        maxUploadMb?: number;
+      };
+    };
