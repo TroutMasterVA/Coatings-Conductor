@@ -30,6 +30,7 @@
  */
 import { parseSavedExtract } from "./job-extract.ts";
 import { toSavedExtract as buildSavedExtract } from "./extract/provider.ts";
+import { JOB_CLOSED_MESSAGE } from "./job-status.ts";
 import type {
   ExtractRequest,
   SavedExtract,
@@ -81,8 +82,9 @@ export const IMAGE_ONLY_NOTICE =
   "This sheet needs the Azure reader. Showing what could be read on-device.";
 
 /** BE-1's codes plus UNSUPPORTED_FILE_TYPE (LEAD ruling; not yet in BE-1's union). */
-export type ExtractErrorCode = ProviderErrorCode | "UNSUPPORTED_FILE_TYPE";
+export type ExtractErrorCode = ProviderErrorCode | "UNSUPPORTED_FILE_TYPE" | "JOB_CLOSED";
 export const EXTRACT_ERROR_CODES: readonly ExtractErrorCode[] = [
+  "JOB_CLOSED",
   "UNAUTHENTICATED",
   "RATE_LIMITED",
   "EXTRACT_TIMEOUT",
@@ -160,6 +162,7 @@ export const ISSUE_COPY: Record<ServerIssue, string> = {
   UNSUPPORTED_FILE_TYPE:
     "That file type isn’t supported. Use a PDF, photo or scan (PNG, JPG, TIFF), or Word (.docx) file.",
   SERVER_UNAVAILABLE: "The server reader isn’t reachable right now.",
+  JOB_CLOSED: JOB_CLOSED_MESSAGE,
 };
 
 export const FALLBACK_NOTE = "Used the on-device reader. Check every value against the sheet.";
@@ -335,11 +338,19 @@ export function mapServerResponse(res: unknown): ServerOutcome {
   if (!res || typeof res !== "object") return { ok: false, code: "EXTRACT_FAILED" };
   const r = res as {
     ok?: unknown;
+    /** Fallback only: a bare top-level `code` (early CONTRACT wording for JOB_CLOSED). */
+    code?: unknown;
+    message?: unknown;
     error?: { code?: unknown; message?: unknown; retryAfterSec?: unknown };
   };
   if (r.ok === true) {
     const result = parseExtractResult(res);
     return result ? { ok: true, result } : { ok: false, code: "EXTRACT_FAILED" };
+  }
+  // Main path (CONTRACT 438a63b): `{ ok:false, error:{ code, message } }`, incl. JOB_CLOSED.
+  if (!isErrorCode(r.error?.code) && r.code === "JOB_CLOSED") {
+    const msg = typeof r.message === "string" && r.message.trim() ? r.message : undefined;
+    return { ok: false, code: "JOB_CLOSED", ...(msg ? { message: msg } : {}) };
   }
   const code = isErrorCode(r.error?.code) ? r.error.code : "EXTRACT_FAILED";
   const retry = r.error?.retryAfterSec;
@@ -445,7 +456,8 @@ function errorState(
   retryAfterSec?: number,
   serverMessage?: string,
 ): ExtractState {
-  const base = issue === "FILE_TOO_LARGE" && serverMessage ? serverMessage : ISSUE_COPY[issue];
+  const verbatim = issue === "FILE_TOO_LARGE" || issue === "JOB_CLOSED";
+  const base = verbatim && serverMessage ? serverMessage : ISSUE_COPY[issue];
   const message = issue === "RATE_LIMITED" ? `${base} ${retryCopy(retryAfterSec)}` : base;
   return { kind: "error", message, issue, ...(retryAfterSec ? { retryAfterSec } : {}) };
 }

@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Archive, FolderOpen, Plus, Trash2 } from "lucide-react";
+import { ClosedBadge } from "@/components/close-job";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ProjectSummary } from "@/lib/project-store";
+import { jobStatusOf, rowActions, type JobStatusFields } from "@/lib/job-status";
 import { cn } from "@/lib/utils";
 
 export function ProjectHome({
@@ -17,7 +19,7 @@ export function ProjectHome({
   onArchive,
   onDelete,
 }: {
-  projects: ProjectSummary[];
+  projects: (ProjectSummary & JobStatusFields)[];
   creating?: boolean;
   error?: string | null;
   guest?: boolean;
@@ -149,13 +151,16 @@ function ProjectRow({
   onArchive,
   onDelete,
 }: {
-  project: ProjectSummary;
+  project: ProjectSummary & JobStatusFields;
   confirm: boolean;
   onConfirm: (v: boolean) => void;
   onOpen: () => void;
   onArchive: () => void;
   onDelete: () => void;
 }) {
+  const status = jobStatusOf(project);
+  // PO ruling: closed jobs keep Archive but have no Remove / Delete forever.
+  const actions = rowActions(project);
   const opened = project.lastOpenedAt ? new Date(project.lastOpenedAt) : null;
   const openedLabel =
     opened && !Number.isNaN(opened.getTime())
@@ -170,7 +175,10 @@ function ProjectRow({
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-medium text-fg">{project.name}</p>
+          <p className="flex flex-wrap items-center gap-2 font-medium text-fg">
+            {project.name}
+            {status.status === "closed" ? <ClosedBadge view={status} /> : null}
+          </p>
           <p className="mt-0.5 font-mono text-xs text-muted">
             {project.zip}
             {project.hasCard ? " · card on stand" : " · no card yet"}
@@ -195,7 +203,7 @@ function ProjectRow({
               </Button>
             </>
           )}
-          {confirm ? (
+          {!actions.remove ? null : confirm ? (
             <Button
               type="button"
               variant="rail"
