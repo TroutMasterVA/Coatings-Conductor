@@ -107,13 +107,49 @@ function underLimit(value: number, min: number, axis: number, unitSoft = 8): "ha
   return null;
 }
 
+/** Why weather scoring is paused when a card's temperature limits have no verbatim quote. */
+export const TEMPS_UNVERIFIED_REASON = "temperature limits not verified on the sheet";
+export const TEMPS_UNVERIFIED_HEADLINE = `Weather windows paused: ${TEMPS_UNVERIFIED_REASON}.`;
+
+/** Optional scoring inputs. Additive: omitting them scores exactly as before. */
+export type ScoreOptions = {
+  /** `extract.unverifiedTemps`: when true, no hour or day is scored go/caution/no-go. */
+  unverifiedTemps?: boolean;
+};
+
+/** Non-null when scoring must be skipped; the reason is shown instead of windows. */
+export function scoringPause(opts?: ScoreOptions): { reason: string } | null {
+  return opts?.unverifiedTemps ? { reason: TEMPS_UNVERIFIED_REASON } : null;
+}
+
 export function scoreHour(
   raw: RawHour,
   env: Environmentals,
   timeZone = "UTC",
   site?: SiteContext,
+  opts?: ScoreOptions,
 ): HourWindow {
   const z = zoned(raw.startIso, timeZone);
+  const pause = scoringPause(opts);
+  if (pause) {
+    return {
+      startIso: raw.startIso,
+      hour: z.hour,
+      weekday: z.weekday,
+      dateLabel: z.dateLabel,
+      dateKey: z.dateKey,
+      status: "unknown",
+      reasons: [pause.reason],
+      tempF: raw.tempF,
+      rh: raw.rh,
+      dewpointF: raw.dewpointF,
+      spreadF: null,
+      pop: raw.pop,
+      precipIn: raw.precipIn,
+      windMph: raw.windMph,
+      shortForecast: raw.shortForecast,
+    };
+  }
   const reasons: string[] = [];
   let hard = 0;
   let soft = 0;
@@ -425,7 +461,9 @@ export function bundleDays(
   meta: Omit<ForecastBundle, "days" | "headline">,
   env: Environmentals,
   site?: SiteContext,
+  opts?: ScoreOptions,
 ): ForecastBundle {
+  const pause = scoringPause(opts);
   const byDate = new Map<string, HourWindow[]>();
   for (const h of hours) {
     const key = h.dateKey || h.startIso.slice(0, 10);
@@ -495,6 +533,18 @@ export function bundleDays(
       : "No in-window hours in this forecast. Hold the product or add a mitigation.";
   }
 
+  if (pause) {
+    for (const d of days) {
+      d.status = "unknown";
+      d.goHours = 0;
+      d.cautionHours = 0;
+      d.nogoHours = 0;
+      d.bestRange = null;
+      d.limiting = [pause.reason];
+    }
+    return { ...meta, days, headline: TEMPS_UNVERIFIED_HEADLINE, paused: pause };
+  }
+
   return { ...meta, days, headline };
 }
 
@@ -502,10 +552,14 @@ export function rescoreForecast(
   forecast: ForecastBundle,
   env: Environmentals,
   site: SiteContext,
+  opts?: ScoreOptions,
 ): ForecastBundle {
   const raw = forecast.rawHours ?? [];
-  if (!raw.length) return forecast;
-  const hours = raw.map((h) => scoreHour(h, env, forecast.timezone, site));
+  if (!raw.length) {
+    const pause = scoringPause(opts);
+    return pause ? { ...forecast, headline: TEMPS_UNVERIFIED_HEADLINE, paused: pause } : forecast;
+  }
+  const hours = raw.map((h) => scoreHour(h, env, forecast.timezone, site, opts));
   return bundleDays(
     hours,
     {
@@ -521,15 +575,17 @@ export function rescoreForecast(
     },
     env,
     site,
+    opts,
   );
 }
 
-export function goHourCount(forecast: ForecastBundle, env: Environmentals, site: SiteContext) {
+export function goHourCount(forecast: ForecastBundle, env: Environmentals, site: SiteContext, opts?: ScoreOptions) {
   const raw = forecast.rawHours ?? [];
-  return raw.map((h) => scoreHour(h, env, forecast.timezone, site)).filter((h) => h.status === "go").length;
+  return raw.map((h) => scoreHour(h, env, forecast.timezone, site, opts)).filter((h) => h.status === "go").length;
 }
 
-export function unlockedGoHours(forecast: ForecastBundle, env: Environmentals, site: SiteContext) {
+export function unlockedGoHours(forecast: ForecastBundle, env: Environmentals, site: SiteContext, opts?: ScoreOptions) {
+  if (scoringPause(opts)) return 0;
   const raw = forecast.rawHours ?? [];
   const none: SiteContext = { ...site, mitigations: [] };
   let n = 0;
@@ -541,7 +597,13 @@ export function unlockedGoHours(forecast: ForecastBundle, env: Environmentals, s
   return n;
 }
 
-export function detectLimiters(forecast: ForecastBundle, env: Environmentals, site: SiteContext): Limiter[] {
+export function detectLimiters(
+  forecast: ForecastBundle,
+  env: Environmentals,
+  site: SiteContext,
+  opts?: ScoreOptions,
+): Limiter[] {
+  if (scoringPause(opts)) return [];
   const raw = forecast.rawHours ?? [];
   const none: SiteContext = { ...site, mitigations: [] };
   const counts: Record<Limiter, number> = {
