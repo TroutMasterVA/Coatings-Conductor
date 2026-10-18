@@ -11,6 +11,10 @@ import {
   mapServerResponse,
   MAX_FILE_BYTES,
   mimeTypeFor,
+  normalizeProvider,
+  savedExtractState,
+  UNPINNED_TEXT,
+  VALUES_DROPPED_NOTE,
   needsAzureReader,
   precheckFile,
   provenanceRows,
@@ -102,9 +106,10 @@ describe("error-code mapping", () => {
       retryAfterSec: 42,
     });
   });
-  it("accepts a documented success and rejects string warnings / bad provenance", () => {
+  it("accepts a documented success, ignores string warnings, rejects bad provenance", () => {
     assert.equal(mapServerResponse(ok()).ok, true);
-    assert.equal(mapServerResponse({ ...ok(), warnings: ["AZURE_FALLBACK: x"] }).ok, false);
+    const strWarn = mapServerResponse({ ...ok(), warnings: ["AZURE_FALLBACK: x"] });
+    assert.equal(strWarn.ok && strWarn.result.warnings.length, 0);
     assert.equal(mapServerResponse({ ...ok(), provenance: { a: { quote: 3 } } }).ok, false);
   });
   it("adapter null = unavailable, thrown Unauthorized = UNAUTHENTICATED, slow = timeout", async () => {
@@ -298,6 +303,91 @@ describe("provenance rendering helper", () => {
         ["environmentals.windMaxMph", "Environmentals › Wind Max Mph", false],
         ["product.name", "Product › Name", true],
       ],
+    );
+  });
+});
+
+describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
+  it("provider normalizes; azure:<x> is tolerated; deployment is display-only", async () => {
+    assert.deepEqual(normalizeProvider("azure"), { provider: "azure" });
+    assert.deepEqual(normalizeProvider("azure", "gpt4o-prod"), {
+      provider: "azure",
+      deployment: "gpt4o-prod",
+    });
+    assert.deepEqual(normalizeProvider("azure:gpt4o"), { provider: "azure", deployment: "gpt4o" });
+    assert.deepEqual(normalizeProvider("on-device"), { provider: "on-device" });
+    assert.deepEqual(normalizeProvider("weird"), { provider: "on-device" });
+    const s = done(
+      await upload(pdf, { ...ok(), provider: "azure:gpt4o" } as unknown as ExtractSheetResponse).p,
+    );
+    assert.equal(s.result.provider, "azure");
+    assert.equal(providerLabel(s), "Azure reader (gpt4o).");
+  });
+  it("PDF sends per-page text; dropped with text over 40k; never for images", async () => {
+    const pages = ["page one text", "", "page three"];
+    const a = upload(pdf, ok(), { pages });
+    await a.p;
+    assert.deepEqual(a.seen[0]!.pages, pages);
+    const long = "x".repeat(40_001);
+    const b = upload(pdf, ok(), { text: long, pages: [long] });
+    await b.p;
+    assert.equal("text" in b.seen[0]!, false);
+    assert.equal("pages" in b.seen[0]!, false);
+    const c = upload(png, ok(), { pages });
+    await c.p;
+    assert.equal("pages" in c.seen[0]!, false);
+  });
+  it("VALUES_DROPPED_UNQUOTED shows our note; ON_DEVICE_UNPINNED quote '' shows the no-exact-line text", () => {
+    const r = result({
+      provider: "on-device",
+      provenance: { "mixing.ratio": { quote: "" }, "product.name": { page: 1, quote: "X" } },
+      warnings: [
+        { code: "VALUES_DROPPED_UNQUOTED", message: "server prose" },
+        { code: "ON_DEVICE_UNPINNED", message: "server prose 2" },
+      ],
+    });
+    assert.deepEqual(displayWarnings(r), [VALUES_DROPPED_NOTE]);
+    assert.equal(provenanceRows(r.provenance)[0]?.text, UNPINNED_TEXT);
+    assert.equal(UNPINNED_TEXT, "Found on the sheet, no exact line.");
+  });
+  it("unknown or malformed warnings never crash; unknown messages show plainly", () => {
+    const out = mapServerResponse({
+      ...ok(),
+      warnings: [
+        { code: "NEW_THING", message: "Heads up." },
+        { code: 5 },
+        null,
+        "str",
+        { code: "NO_MSG" },
+      ],
+    });
+    assert.equal(out.ok, true);
+    if (!out.ok) return;
+    assert.deepEqual(displayWarnings(out.result), ["Heads up."]);
+  });
+  it("prepGates dot-index paths get readable labels", () => {
+    const rows = provenanceRows({ "surfacePrep.prepGates.0.profile": { quote: "2-3 mils" } });
+    assert.equal(rows[0]?.label, "Surface Prep › Prep Gates › #1 › Profile");
+  });
+  it("reopen shows saved provenance + provider; nothing saved = idle", () => {
+    const s = savedExtractState({
+      card,
+      provenance: { "product.name": { page: 2, quote: "Carbomastic 615" } },
+      provider: "azure:gpt4o",
+      extractWarnings: [{ code: "VALUES_DROPPED_UNQUOTED", message: "m" }],
+    });
+    const d = done(s);
+    assert.equal(d.source, "saved");
+    assert.equal(providerLabel(d), "Azure reader (gpt4o).");
+    assert.equal(provenanceRows(d.result.provenance)[0]?.text, "p. 2 — “Carbomastic 615”");
+    assert.deepEqual(displayWarnings(d.result), [VALUES_DROPPED_NOTE]);
+    assert.deepEqual(savedExtractState({ card }), { kind: "idle" });
+    assert.deepEqual(savedExtractState({ card: null, provenance: {}, provider: "azure" }), {
+      kind: "idle",
+    });
+    assert.deepEqual(
+      savedExtractState({ card, provenance: { a: { quote: 1 } }, provider: "azure" }),
+      { kind: "idle" },
     );
   });
 });

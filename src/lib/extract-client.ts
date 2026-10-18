@@ -4,14 +4,18 @@
  * No AI runs here, no keys, no xAI. The browser sends the file to our own server function;
  * the server decides which reader (Azure or on-device) reads it and whether a sheet is image-only.
  *
- * Contract: docs/release-beta/CONTRACT.md + LEAD-approved BE-3 changes (Oct 18):
+ * Contract: docs/release-beta/CONTRACT.md + LEAD rulings (Oct 18). Input also carries optional
+ * `pages: string[]` (pdf.js text per page, index 0 = page 1; PDFs only; dropped over 40,000 chars).
+ * Provider is "azure" | "on-device" with optional display-only `deployment`; "azure:<x>" is tolerated.
+ * LEAD-approved shapes:
  *   input   { fileBase64, mimeType, fileName, text? }   (file ≤ 10 MB; text = pdf.js text for PDFs only)
  *   success { ok: true, card, provenance, provider: "azure" | "on-device", warnings: { code, message }[] }
  *   error   { ok: false, error: { code, message, retryAfterSec? } }
  *
  * PENDING CONTRACT (until BE-3's CONTRACT.md lands):
  * - `extractSheet` module (`@/lib/extract/extract-sheet`) is not on the branch yet; see extract-server.ts.
- * - Warning codes AZURE_NOT_CONFIGURED / AZURE_FALLBACK / IMAGE_ONLY_NEEDS_AZURE.
+ * - Warning codes AZURE_NOT_CONFIGURED / AZURE_FALLBACK / IMAGE_ONLY_NEEDS_AZURE /
+ *   VALUES_DROPPED_UNQUOTED / ON_DEVICE_UNPINNED (as typed in BE-1 provider.ts).
  * - Text cap: we omit `text` above 40,000 chars rather than reject (server reads the file).
  */
 import type { FieldCardData } from "./types.ts";
@@ -40,6 +44,11 @@ export const ALLOWED_MIME_TYPES = [...new Set(Object.values(MIME_BY_EXT))];
 export const WARNING_AZURE_NOT_CONFIGURED = "AZURE_NOT_CONFIGURED";
 export const WARNING_AZURE_FALLBACK = "AZURE_FALLBACK";
 export const WARNING_IMAGE_ONLY_NEEDS_AZURE = "IMAGE_ONLY_NEEDS_AZURE";
+export const WARNING_VALUES_DROPPED_UNQUOTED = "VALUES_DROPPED_UNQUOTED";
+export const WARNING_ON_DEVICE_UNPINNED = "ON_DEVICE_UNPINNED";
+export const VALUES_DROPPED_NOTE =
+  "Some values were left Not stated because no line on the sheet backed them.";
+export const UNPINNED_TEXT = "Found on the sheet, no exact line.";
 export const IMAGE_ONLY_NOTICE =
   "This sheet needs the Azure reader. Showing what could be read on-device.";
 
@@ -59,10 +68,14 @@ export type ProvenanceEntry = { page?: number; quote: string } | "not-stated";
 export type Provenance = Record<string, ProvenanceEntry>;
 export type ExtractWarning = { code: string; message: string };
 
+export type ExtractProvider = "azure" | "on-device";
+
 export type ExtractResult = {
   card: FieldCardData;
   provenance: Provenance;
-  provider: string;
+  provider: ExtractProvider;
+  /** Display only. */
+  deployment?: string;
   warnings: ExtractWarning[];
 };
 
@@ -71,6 +84,8 @@ export type ExtractSheetInput = {
   mimeType: string;
   fileName: string;
   text?: string;
+  /** pdf.js text, one entry per page (index 0 = page 1). PDFs only. */
+  pages?: string[];
 };
 export type ExtractSheetResponse =
   | ({ ok: true } & ExtractResult)
@@ -82,8 +97,9 @@ export type ServerOutcome =
 export type DoneState = {
   kind: "done";
   result: ExtractResult;
-  /** server = server answered; client-fallback = server failed and the browser read the PDF; on-device = no server call. */
-  source: "server" | "client-fallback" | "on-device";
+  /** server = server answered; client-fallback = server failed and the browser read the PDF;
+   *  on-device = no server call; saved = reopened from the job record. */
+  source: "server" | "client-fallback" | "on-device" | "saved";
   issue?: ServerIssue;
   retryAfterSec?: number;
 };
@@ -155,10 +171,40 @@ function isProvenanceEntry(v: unknown): v is ProvenanceEntry {
   return typeof e.quote === "string" && (e.page === undefined || typeof e.page === "number");
 }
 
-function isWarning(v: unknown): v is ExtractWarning {
-  if (!v || typeof v !== "object") return false;
-  const w = v as { code?: unknown; message?: unknown };
-  return typeof w.code === "string" && typeof w.message === "string";
+/** Tolerant: malformed warnings are dropped, missing messages become "". Never throws. */
+export function parseWarnings(raw: unknown): ExtractWarning[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ExtractWarning[] = [];
+  for (const v of raw) {
+    if (!v || typeof v !== "object") continue;
+    const w = v as { code?: unknown; message?: unknown };
+    if (typeof w.code !== "string") continue;
+    out.push({ code: w.code, message: typeof w.message === "string" ? w.message : "" });
+  }
+  return out;
+}
+
+/** "azure", "azure:<deployment>", or "on-device". Anything else reads as on-device. */
+export function normalizeProvider(
+  raw: unknown,
+  deployment?: unknown,
+): { provider: ExtractProvider; deployment?: string } {
+  const p = typeof raw === "string" ? raw : "";
+  let dep = typeof deployment === "string" && deployment ? deployment : undefined;
+  if (p !== "azure" && !p.startsWith("azure:")) return { provider: "on-device" };
+  if (!dep && p.startsWith("azure:")) dep = p.slice("azure:".length) || undefined;
+  return dep ? { provider: "azure", deployment: dep } : { provider: "azure" };
+}
+
+/** Provenance map, or null when any entry is malformed. */
+export function parseProvenance(raw: unknown): Provenance | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const provenance: Provenance = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isProvenanceEntry(v)) return null;
+    provenance[k] = v;
+  }
+  return provenance;
 }
 
 /** Only the documented result fields. Anything malformed is EXTRACT_FAILED. */
@@ -175,15 +221,14 @@ export function parseExtractResult(body: unknown): ExtractResult | null {
   )
     return null;
   if (typeof b.provider !== "string") return null;
-  if (!Array.isArray(b.warnings) || !b.warnings.every(isWarning)) return null;
-  const rawProv = b.provenance;
-  if (!rawProv || typeof rawProv !== "object" || Array.isArray(rawProv)) return null;
-  const provenance: Provenance = {};
-  for (const [k, v] of Object.entries(rawProv as Record<string, unknown>)) {
-    if (!isProvenanceEntry(v)) return null;
-    provenance[k] = v;
-  }
-  return { card, provenance, provider: b.provider, warnings: b.warnings as ExtractWarning[] };
+  const provenance = parseProvenance(b.provenance);
+  if (!provenance) return null;
+  return {
+    card,
+    provenance,
+    ...normalizeProvider(b.provider, b.deployment),
+    warnings: parseWarnings(b.warnings),
+  };
 }
 
 /** Map the server fn's returned value to an outcome. */
@@ -293,6 +338,8 @@ export async function extractUpload(input: {
   file: { name: string; type?: string; size: number };
   /** pdf.js text (PDFs only; "" when unreadable). */
   text: string;
+  /** pdf.js per-page text (PDFs only). */
+  pages?: string[];
   signedIn: boolean;
   onDevice: (text: string) => FieldCardData;
   readBase64: () => Promise<string>;
@@ -316,7 +363,11 @@ export async function extractUpload(input: {
       : { kind: "error", message: "Could not open this file." };
   }
   const payload: ExtractSheetInput = { fileBase64, mimeType, fileName: input.file.name };
-  if (pdf && input.text && input.text.length <= MAX_TEXT_CHARS) payload.text = input.text;
+  if (pdf && input.text && input.text.length <= MAX_TEXT_CHARS) {
+    payload.text = input.text;
+    const pages = input.pages;
+    if (pages?.length && pages.join("\n\n").length <= MAX_TEXT_CHARS) payload.pages = pages;
+  }
   const out = await callServer(input.server, payload);
   if (out.ok) return { kind: "done", result: out.result, source: "server" };
   if (out.code === "UNAUTHENTICATED") return { kind: "unauthenticated" };
@@ -356,18 +407,28 @@ const HANDLED_CODES = new Set([
   WARNING_AZURE_NOT_CONFIGURED,
   WARNING_AZURE_FALLBACK,
   WARNING_IMAGE_ONLY_NEEDS_AZURE,
+  WARNING_VALUES_DROPPED_UNQUOTED,
+  WARNING_ON_DEVICE_UNPINNED,
 ]);
 
-/** Warnings shown as plain messages; codes with their own notice are not repeated. */
+/** Small neutral notes under the card. Known codes get our copy; unknown codes show their message. */
 export function displayWarnings(result: ExtractResult): string[] {
-  return result.warnings.filter((w) => !HANDLED_CODES.has(w.code)).map((w) => w.message);
+  const notes: string[] = [];
+  if (hasWarning(result, WARNING_VALUES_DROPPED_UNQUOTED)) notes.push(VALUES_DROPPED_NOTE);
+  for (const w of result.warnings) {
+    if (HANDLED_CODES.has(w.code) || !w.message.trim()) continue;
+    if (!notes.includes(w.message)) notes.push(w.message);
+  }
+  return notes;
 }
 
 /** Small provider note under the card. */
 export function providerLabel(state: DoneState): string {
   if (usedOnDeviceFallback(state)) return FALLBACK_NOTE;
-  if (state.source === "server" && state.result.provider === "azure") return "Azure reader.";
-  if (state.source === "server" && azureNotConfigured(state)) return "On-device reader.";
+  if (state.result.provider === "azure") {
+    return state.result.deployment ? `Azure reader (${state.result.deployment}).` : "Azure reader.";
+  }
+  if (azureNotConfigured(state)) return "On-device reader.";
   return "On-device reader. Check every value against the sheet.";
 }
 
@@ -376,13 +437,19 @@ export type ProvenanceRow = { fieldPath: string; label: string; stated: boolean;
 function labelFor(path: string): string {
   return path
     .split(".")
-    .map((seg) => seg.replace(/\[(\d+)\]/g, " $1").replace(/([a-z])([A-Z])/g, "$1 $2"))
+    .map((seg) => (/^\d+$/.test(seg) ? `#${Number(seg) + 1}` : seg))
+    .map((seg) =>
+      seg
+        .replace(/\[(\d+)\]/g, (_m, n: string) => ` #${Number(n) + 1}`)
+        .replace(/([a-z])([A-Z])/g, "$1 $2"),
+    )
     .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
     .join(" › ");
 }
 
 export function describeProvenance(entry: ProvenanceEntry): string {
   if (entry === "not-stated") return "Not stated";
+  if (!entry.quote.trim()) return UNPINNED_TEXT;
   const q = `“${entry.quote}”`;
   return typeof entry.page === "number" ? `p. ${entry.page} — ${q}` : q;
 }
@@ -400,4 +467,34 @@ export function provenanceRows(provenance: Provenance): ProvenanceRow[] {
         text: describeProvenance(entry),
       };
     });
+}
+
+/**
+ * Reopen: provenance + provider saved with the job record (LEAD ruling: BE saves them).
+ * PENDING CONTRACT: field names on the job record are not published yet. We read optional
+ * `provenance`, `provider`, `deployment`, `extractWarnings` here and nowhere else.
+ */
+export type SavedExtractFields = {
+  provenance?: unknown;
+  provider?: unknown;
+  deployment?: unknown;
+  extractWarnings?: unknown;
+};
+
+export function savedExtractState(
+  record: SavedExtractFields & { card: FieldCardData | null },
+): ExtractState {
+  if (!record.card) return { kind: "idle" };
+  const provenance = parseProvenance(record.provenance);
+  if (!provenance || typeof record.provider !== "string") return { kind: "idle" };
+  return {
+    kind: "done",
+    source: "saved",
+    result: {
+      card: record.card,
+      provenance,
+      ...normalizeProvider(record.provider, record.deployment),
+      warnings: parseWarnings(record.extractWarnings),
+    },
+  };
 }
