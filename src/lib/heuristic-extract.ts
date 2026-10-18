@@ -296,7 +296,9 @@ export function logicalLines(t: string): string[] {
   const out: string[] = [];
   for (const l of phys) {
     const prev = out[out.length - 1];
-    if (prev !== undefined && (/:$/.test(prev) || (!/[.;!?]$/.test(prev) && /^[a-z(]/.test(l)))) {
+    // A range or phrase wrapped by the layout ("between 50-" / "120°F") continues on the next line.
+    const wrapped = prev !== undefined && (/(?:[-–]|\b(?:to|between|from|and|of|at|minimum|maximum|min\.|max\.))$/i.test(prev) || /^[-–]\s*\d/.test(l));
+    if (prev !== undefined && (wrapped || /:$/.test(prev) || (!/[.;!?]$/.test(prev) && /^[a-z(]/.test(l)))) {
       out[out.length - 1] = `${prev} ${l}`;
     } else out.push(l);
   }

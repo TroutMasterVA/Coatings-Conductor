@@ -125,3 +125,34 @@ describe("temperature limits come from application conditions, not a substrate/f
     assert.equal(e.substrateTempMinF, 45);
   });
 });
+
+describe("a temperature range wrapped across layout lines still reads both ends", () => {
+  it("Rust-Oleum-style: 'air temperatures between 50-' / '120°F (10-49°C)'", () => {
+    const e = heuristicExtract(
+      "Use the activator at air\ntemperatures between 50-\n120°F (10-49°C) and when the",
+    ).environmentals;
+    assert.deepEqual([e.ambientTempMinF, e.ambientTempMaxF], [50, 120]);
+  });
+
+  it("label on one line, the whole range on the next ('between' / '50-120°F')", () => {
+    const e = heuristicExtract(
+      "Use the activator at air temperatures between\n50-120°F (10-49°C) and when the",
+    ).environmentals;
+    assert.deepEqual([e.ambientTempMinF, e.ambientTempMaxF], [50, 120]);
+  });
+
+  it("generic: 'Surface temperature: 40°F to' / '100°F (4-38°C)'", () => {
+    const e = heuristicExtract("Surface temperature: 40°F to\n100°F (4-38°C)").environmentals;
+    assert.deepEqual([e.substrateTempMinF, e.substrateTempMaxF], [40, 100]);
+  });
+
+  it("joining a wrapped line never turns storage or a non-temperature into a limit", () => {
+    const e = heuristicExtract(
+      "Store indoors at 40°F to\n100°F. Thin with No. 2 Thinner and\n10% maximum.",
+    ).environmentals;
+    assert.deepEqual(
+      [e.ambientTempMinF, e.ambientTempMaxF, e.substrateTempMinF, e.substrateTempMaxF],
+      [null, null, null, null],
+    );
+  });
+});
