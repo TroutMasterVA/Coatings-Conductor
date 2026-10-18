@@ -31,12 +31,17 @@ const GUTTER_BAND = [0.2, 0.8] as const;
 const MIN_SIDE_ALPHA_WORDS = 2;
 /** One level only: nested splits inside a column were almost always tables. */
 const MAX_DEPTH = 1;
+/** Above this many items on a page, skip column detection (cost ≈ items × rows). */
+export const MAX_SPLIT_ITEMS = 3_000;
+/** Hard cap on items read per page; anything beyond is ignored (a sheet page is far below this). */
+export const MAX_PAGE_ITEMS = 20_000;
 
 /** Drop empties and the duplicate copies some PDFs draw at one spot (fake bold). */
 function usable(items: PositionedItem[]): PositionedItem[] {
   const seen = new Set<string>();
   const out: PositionedItem[] = [];
   for (const it of items) {
+    if (out.length >= MAX_PAGE_ITEMS) break;
     if (typeof it.str !== "string" || it.str.trim() === "") continue;
     if (!Number.isFinite(it.x) || !Number.isFinite(it.y)) continue;
     const key = `${it.str}|${Math.round(it.x)}|${Math.round(it.y)}`;
@@ -55,9 +60,19 @@ function fontH(it: PositionedItem): number {
 export function groupRows(items: PositionedItem[]): Row[] {
   const sorted = usable(items).sort((a, b) => b.y - a.y || a.x - b.x);
   const rows: Row[] = [];
+  let maxH = 0;
   for (const it of sorted) {
     const h = fontH(it);
-    const row = rows.find((r) => Math.abs(r.y - it.y) <= ROW_TOLERANCE * Math.min(r.h, h));
+    maxH = Math.max(maxH, h);
+    // Items arrive top to bottom, so rows are created in descending y. Only the trailing rows
+    // within ROW_TOLERANCE × the tallest font can match; scan just those (keeps this ~linear on big
+    // pages) and take the earliest match, same as a full search.
+    let row: Row | undefined;
+    for (let k = rows.length - 1; k >= 0; k -= 1) {
+      const r = rows[k]!;
+      if (r.y - it.y > ROW_TOLERANCE * maxH) break;
+      if (Math.abs(r.y - it.y) <= ROW_TOLERANCE * Math.min(r.h, h)) row = r;
+    }
     if (row) {
       row.items.push(it);
       row.h = Math.max(row.h, h);
@@ -66,23 +81,24 @@ export function groupRows(items: PositionedItem[]): Row[] {
     }
   }
   rows.sort((a, b) => b.y - a.y);
-  // Superscripts / subscripts (smaller text inside a neighbour row's height) join that row.
+  // Superscripts / subscripts: a row of smaller text that sits inside a neighbour row's height
+  // (e.g. the "2" in "ft²", "®", footnote marks) joins that neighbour instead of becoming its own line.
+  // Single pass, top to bottom, building `kept`. For each row, the candidate hosts are the row just
+  // below it (`rows[i + 1]`, checked first) and the last row we kept above it. Merged rows are
+  // never added to `kept`, so nothing is spliced out of the list being walked.
+  const hosts = (n: Row | undefined, r: Row): n is Row =>
+    !!n && r.h < 0.8 * n.h && r.y > n.y - 0.35 * n.h && r.y + r.h < n.y + 1.1 * n.h;
+  const kept: Row[] = [];
   for (let i = 0; i < rows.length; i += 1) {
     const r = rows[i]!;
-    for (const j of [i + 1, i - 1]) {
-      const n = rows[j];
-      if (!n || n === r || r.h >= 0.8 * n.h) continue;
-      const inside = r.y > n.y - 0.35 * n.h && r.y + r.h < n.y + 1.1 * n.h;
-      if (inside) {
-        n.items.push(...r.items);
-        rows.splice(i, 1);
-        i -= 1;
-        break;
-      }
-    }
+    const below = rows[i + 1];
+    const above = kept[kept.length - 1];
+    const host = hosts(below, r) ? below : hosts(above, r) ? above : null;
+    if (host) host.items.push(...r.items);
+    else kept.push(r);
   }
-  for (const r of rows) r.items.sort((a, b) => a.x - b.x);
-  return rows;
+  for (const r of kept) r.items.sort((a, b) => a.x - b.x);
+  return kept;
 }
 
 /** One row's text: items left→right, a space only where the gap warrants one. */
@@ -124,6 +140,9 @@ type Split = { start: number; end: number; x: number; score: number };
 function findSplit(rows: Row[]): Split | null {
   const all = rows.flatMap((r) => r.items);
   if (all.length < 2 * MIN_SPLIT_ROWS) return null;
+  // Size guard: the gutter search costs about candidates × rows. Past this many items we skip
+  // column detection and keep plain top-to-bottom rows, which are still readable.
+  if (all.length > MAX_SPLIT_ITEMS) return null;
   const minX = Math.min(...all.map((i) => i.x));
   const maxX = Math.max(...all.map((i) => i.x + Math.max(0, i.width)));
   const width = maxX - minX;
