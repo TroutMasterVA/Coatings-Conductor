@@ -33,10 +33,20 @@ function rateStore(): RateStore {
   return g.__ccExtractRate__;
 }
 
-function maxFileBytes(): number {
-  const mb = Number(process.env.EXTRACT_MAX_FILE_MB);
-  return (Number.isFinite(mb) && mb > 0 ? mb : EXTRACT_DEFAULT_MAX_FILE_MB) * 1024 * 1024;
+/** Env MAX_UPLOAD_MB (decoded file size; default 10, practice on Vercel sets 3). */
+export function maxUploadMb(): number {
+  const mb = Number(process.env.MAX_UPLOAD_MB);
+  return Number.isFinite(mb) && mb > 0 ? mb : EXTRACT_DEFAULT_MAX_FILE_MB;
 }
+
+function maxFileBytes(): number {
+  return Math.floor(maxUploadMb() * 1024 * 1024);
+}
+
+/** Public upload limit so the UI shows the same number the server enforces. No auth; no secrets. */
+export const getExtractLimits = createServerFn({ method: "GET" }).handler(
+  async (): Promise<{ maxUploadMb: number }> => ({ maxUploadMb: maxUploadMb() }),
+);
 
 export const extractSheet = createServerFn({ method: "POST" })
   .middleware([extractAuth])

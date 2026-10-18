@@ -25,7 +25,6 @@ export async function readPdfText(bytes: Uint8Array, signal?: AbortSignal): Prom
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const task = pdfjs.getDocument({
     data: bytes.slice(),
-    isEvalSupported: false,
     disableFontFace: true,
     useSystemFonts: false,
     verbosity: 0,
@@ -47,7 +46,7 @@ export async function readPdfText(bytes: Uint8Array, signal?: AbortSignal): Prom
           .trim(),
       );
     }
-    await doc.destroy();
+    await task.destroy();
     const capped = cap(pages);
     return { text: capped.join("\n\n"), pages: capped };
   } finally {

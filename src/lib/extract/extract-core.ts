@@ -1,5 +1,3 @@
-import { heuristicExtract } from "../heuristic-extract.ts";
-import { locateProvenance, sourceOf } from "./provenance.ts";
 import { cleanBase64, isImageMime, maxBase64Length, normalizeMime, sniffFileType, DOCX_MIME } from "./file-type.ts";
 import { readDocxText, readPdfText, type ReadText } from "./server-read.ts";
 import type {
@@ -13,6 +11,7 @@ import type {
 } from "./provider.ts";
 
 export const EXTRACT_MAX_TEXT_CHARS = 40_000;
+/** Default for env MAX_UPLOAD_MB (decoded file size). */
 export const EXTRACT_DEFAULT_MAX_FILE_MB = 10;
 export const EXTRACT_RATE_MAX = 10;
 export const EXTRACT_RATE_WINDOW_MS = 60_000;
@@ -108,20 +107,13 @@ function fail(code: ExtractErrorCode, message: string, retryAfterSec?: number): 
   return { ok: false, error: retryAfterSec ? { code, message, retryAfterSec } : { code, message } };
 }
 
-function textLength(t: { text: string; pages?: string[] }): number {
-  return (t.pages?.join(" ") ?? t.text).replace(/\s+/g, " ").trim().length;
-}
-
-/** Blank card for a sheet with no readable text: everything Not stated, nothing invented. */
-function emptyResult(input: ExtractInput, warnings: ExtractWarning[]): ExtractResult {
-  const src = sourceOf(input);
-  const card = heuristicExtract(src.text || " ");
-  return { card, provenance: locateProvenance(card, src), provider: "on-device", warnings };
+function textLength(t: { text?: string; pages?: string[] }): number {
+  return (t.pages?.join(" ") ?? t.text ?? "").replace(/\s+/g, " ").trim().length;
 }
 
 type Checked =
   | { ok: true; input: ExtractInput; bytes?: Uint8Array; clientText: boolean }
-  | { ok: false; code: ExtractErrorCode; message: string };
+  | { ok: false; code: ExtractErrorCode; message: string; maxUploadMb?: number };
 
 /** Shape, size and type checks. Runs before the rate slot and before any decoding beyond the cap. */
 export function checkRequest(raw: ExtractRequest | undefined, maxFileBytes: number): Checked {
@@ -135,13 +127,14 @@ export function checkRequest(raw: ExtractRequest | undefined, maxFileBytes: numb
   }
   const clientText = clientLen > 0;
   const mb = Math.round((maxFileBytes / (1024 * 1024)) * 10) / 10;
+  const tooBig = { ok: false as const, code: "FILE_TOO_LARGE" as const, message: `File is over ${mb} MB, the upload limit on this copy.`, maxUploadMb: mb };
 
   if (typeof r.fileBase64 !== "string" || r.fileBase64 === "") {
     if (!clientText) return { ok: false, code: "EXTRACT_FAILED", message: "Send a file or paste the sheet text." };
     return { ok: true, input: { text, pages: pages?.length ? pages : undefined, fileName }, clientText };
   }
   if (r.fileBase64.length > maxBase64Length(maxFileBytes) + 256) {
-    return { ok: false, code: "FILE_TOO_LARGE", message: `File is over ${mb} MB.` };
+    return tooBig;
   }
   const mimeType = normalizeMime(r.mimeType);
   if (!mimeType) {
@@ -150,7 +143,7 @@ export function checkRequest(raw: ExtractRequest | undefined, maxFileBytes: numb
   const b64 = cleanBase64(r.fileBase64);
   if (!b64) return { ok: false, code: "UNSUPPORTED_FILE_TYPE", message: "The file data could not be read." };
   if (b64.length > maxBase64Length(maxFileBytes) || base64Bytes(b64) > maxFileBytes) {
-    return { ok: false, code: "FILE_TOO_LARGE", message: `File is over ${mb} MB.` };
+    return tooBig;
   }
   const bytes = new Uint8Array(Buffer.from(b64, "base64"));
   const sniffed = sniffFileType(bytes);
@@ -194,7 +187,11 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
   if (!deps.userId) return done(fail("UNAUTHENTICATED", "Sign in to read a sheet."), "none", "UNAUTHENTICATED");
 
   const checked = checkRequest(deps.input, maxFileBytes);
-  if (!checked.ok) return done(fail(checked.code, checked.message), "none", checked.code);
+  if (!checked.ok) {
+    const res = fail(checked.code, checked.message);
+    if (!res.ok && checked.maxUploadMb !== undefined) res.error.maxUploadMb = checked.maxUploadMb;
+    return done(res, "none", checked.code);
+  }
   let input = checked.input;
 
   const slot = takeRateSlot(deps.rate, deps.userId, now());
@@ -254,17 +251,17 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
     return done(fail("EXTRACT_TIMEOUT", "Reading the sheet took too long."), "none", "EXTRACT_TIMEOUT");
   }
 
-  if (imageOnly && textLength(input) === 0) {
-    return done({ ok: true, ...emptyResult(input, warnings) }, "on-device", azure ? "fallback" : "ok");
-  }
-
   try {
     const r = await deps.onDevice.extract(input);
-    const res: ExtractResponse = { ok: true, ...r, warnings: [...warnings, ...r.warnings] };
+    const seen = new Set<string>();
+    const merged = [...warnings, ...r.warnings].filter((w) => (seen.has(w.code) ? false : (seen.add(w.code), true)));
+    const res: ExtractResponse = { ok: true, ...r, warnings: merged };
     return done(res, r.provider, azure ? "fallback" : "ok");
   } catch (err) {
     if (imageOnly) {
-      return done({ ok: true, ...emptyResult(input, warnings) }, "on-device", azure ? "fallback" : "ok");
+      // A scrap of text layer that reads as nothing: blank card (all Not stated), never invented values.
+      const blank = await deps.onDevice.extract({ ...input, text: "", pages: undefined });
+      return done({ ok: true, ...blank, warnings }, blank.provider, azure ? "fallback" : "ok");
     }
     const message = err instanceof Error && err.message ? err.message : "Could not read this sheet.";
     return done(fail("EXTRACT_FAILED", message), "none", "EXTRACT_FAILED");
