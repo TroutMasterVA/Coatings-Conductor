@@ -4,6 +4,8 @@ import { getSql } from "@/lib/db";
 import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
+import { decodeSavedExtract, encodeSavedExtract, parseSavedExtract, writeJobExtract } from "@/lib/job-extract";
+import type { SavedExtract } from "@/lib/extract/provider";
 import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, SavedCard } from "@/lib/types";
 
 export type ProjectSummary = {
@@ -20,6 +22,8 @@ export type ProjectFull = ProjectSummary & {
   calibration: Calibration;
   site: SiteContext;
   card: FieldCardData | null;
+  /** Source quotes + reader for the card (BE-3). Missing on older jobs. */
+  extract?: SavedExtract | null;
   pdsText: string;
   recents: SavedCard[];
   outcomes: FieldOutcome[];
@@ -39,6 +43,7 @@ type ProjectRow = {
   calibration_json: string;
   site_json: string;
   card_json: string | null;
+  extract_json?: string | null;
   pds_text: string;
   recents_json: string;
   outcomes_json: string;
@@ -85,6 +90,7 @@ function toFull(row: ProjectRow): ProjectFull {
       bodies: site.bodies,
     },
     card: parseJson<FieldCardData | null>(row.card_json, null),
+    extract: decodeSavedExtract(row.extract_json),
     pdsText: row.pds_text ?? "",
     recents: parseJson<SavedCard[]>(row.recents_json, []),
     outcomes: parseJson<FieldOutcome[]>(row.outcomes_json, []),
@@ -94,7 +100,7 @@ function toFull(row: ProjectRow): ProjectFull {
 async function listRows(userId: string) {
   const sql = await getSql();
   return sql<ProjectRow>`
-    select id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+    select id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
            recents_json, outcomes_json, last_opened_at, updated_at
     from projects
     where user_id = ${userId}
@@ -144,17 +150,18 @@ export const createProject = createServerFn({ method: "POST" })
     const cal = data.seed?.calibration ?? DEFAULT_CALIBRATION;
     const site = data.seed?.site ?? defaultSite();
     const card = data.seed?.card ?? null;
+    const extract = card ? parseSavedExtract(data.seed?.extract) : null;
     const pdsText = data.seed?.pdsText ?? "";
     const recents = data.seed?.recents ?? [];
     const outcomes = data.seed?.outcomes ?? [];
     await sql`
       insert into projects (
-        id, user_id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+        id, user_id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
         recents_json, outcomes_json, created_at, updated_at, last_opened_at
       ) values (
         ${id}, ${context.userId}, ${data.name}, ${data.zip}, false,
         ${JSON.stringify(cal)}, ${JSON.stringify(site)}, ${card ? JSON.stringify(card) : null},
-        ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
+        ${encodeSavedExtract(extract)}, ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
         ${now}, ${now}, ${now}
       )
     `;
@@ -173,6 +180,7 @@ export const createProject = createServerFn({ method: "POST" })
       calibration: cal,
       site,
       card,
+      extract,
       pdsText,
       recents,
       outcomes,
@@ -189,7 +197,7 @@ export const openProject = createServerFn({ method: "POST" })
       update projects
       set last_opened_at = ${now}
       where id = ${id} and user_id = ${context.userId} and archived = false
-      returning id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+      returning id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
                 recents_json, outcomes_json, last_opened_at, updated_at
     `;
     const row = rows[0];
@@ -211,6 +219,8 @@ export const saveProject = createServerFn({ method: "POST" })
       calibration?: Calibration;
       site?: SiteContext;
       card?: FieldCardData | null;
+      /** Saved next to `card`. `null` clears it; omitted leaves it as is. A new card with no extract clears it. */
+      extract?: SavedExtract | null;
       pdsText?: string;
       recents?: SavedCard[];
       outcomes?: FieldOutcome[];
@@ -219,7 +229,7 @@ export const saveProject = createServerFn({ method: "POST" })
   .handler(async ({ context, data }): Promise<ProjectSummary> => {
     const sql = await getSql();
     const existing = await sql<ProjectRow>`
-      select id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+      select id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
              recents_json, outcomes_json, last_opened_at, updated_at
       from projects where id = ${data.id} and user_id = ${context.userId}
     `;
@@ -246,9 +256,16 @@ export const saveProject = createServerFn({ method: "POST" })
         outcomes_json = ${JSON.stringify(outcomes)},
         updated_at = ${now}
       where id = ${data.id} and user_id = ${context.userId}
-      returning id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+      returning id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
                 recents_json, outcomes_json, last_opened_at, updated_at
     `;
+    // Keep source quotes in step with the card: explicit extract wins; a replaced/cleared card without
+    // one drops the old quotes so they never describe a different card.
+    if (data.extract !== undefined) {
+      await writeJobExtract(sql, context.userId, data.id, card ? parseSavedExtract(data.extract) : null);
+    } else if (data.card !== undefined) {
+      await writeJobExtract(sql, context.userId, data.id, null);
+    }
     return toSummary(updated[0]!);
   });
 
@@ -337,6 +354,7 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
       const cal = p.calibration ?? DEFAULT_CALIBRATION;
       const site = p.site ?? defaultSite();
       const card = p.card ?? null;
+      const extract = card ? parseSavedExtract(p.extract) : null;
       const pdsText = typeof p.pdsText === "string" ? p.pdsText : "";
       const recents = Array.isArray(p.recents) ? p.recents : [];
       const outcomes = Array.isArray(p.outcomes) ? p.outcomes : [];
@@ -344,12 +362,12 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
       const updated = p.updatedAt || now;
       await sql`
         insert into projects (
-          id, user_id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+          id, user_id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
           recents_json, outcomes_json, created_at, updated_at, last_opened_at
         ) values (
           ${id}, ${context.userId}, ${name}, ${zip}, ${Boolean(p.archived)},
           ${JSON.stringify(cal)}, ${JSON.stringify(site)}, ${card ? JSON.stringify(card) : null},
-          ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
+          ${encodeSavedExtract(extract)}, ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
           ${now}, ${updated}, ${lastOpened}
         )
         on conflict (id) do nothing
