@@ -53,9 +53,9 @@ export function normalize(s: string): string {
  */
 export type SourceDoc = { text: string; pages?: string[] };
 
-export function sourceOf(input: { text: string; pages?: string[] }): SourceDoc {
+export function sourceOf(input: { text?: string; pages?: string[] }): SourceDoc {
   const pages = input.pages?.length ? input.pages : undefined;
-  return { text: pages ? pages.join("\n\n") : input.text, pages };
+  return { text: pages ? pages.join("\n\n") : (input.text ?? ""), pages };
 }
 
 /** Sentences/lines with their page number when known. */
@@ -137,12 +137,14 @@ export function findQuote(path: string, value: string | number, source: SourceDo
   const forms = numberForms(path, String(value));
   const key = keywordFor(path);
   const hits = segs.filter((s) => hasNumber(s.text, forms));
-  const best = (key && hits.find((s) => key.test(s.text))) || (key ? null : hits[0]);
+  // Every numeric field needs its own keyword on the same line; a bare number match is not proof.
+  if (!key) return null;
+  const best = hits.find((s) => key.test(s.text));
   return best ? q(best) : null;
 }
 
 function keywordFor(path: string): RegExp | null {
-  if (/ambientTemp/.test(path)) return /ambient|air|temp|°|\bF\b|\bC\b/i;
+  if (/ambientTemp/.test(path)) return /ambient|air/i;
   if (/substrateTemp/.test(path)) return /substrate|surface|steel|temp/i;
   if (/relativeHumidity/.test(path)) return /humid|RH\b/i;
   if (/dewPoint/.test(path)) return /dew/i;
@@ -154,22 +156,88 @@ function clip(s: string, max = 240): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+/**
+ * Is `quote` really in the sheet (whitespace, case and dash style ignored)?
+ * Not used by the on-device path (its quotes are taken from the source); BE-2's Azure gate uses it.
+ */
 /** Is `quote` really in the sheet (whitespace, case and dash style ignored)? */
 export function quoteIsVerbatim(quote: string, source: string): boolean {
   const q = normalize(quote).replace(/…$/, "");
   return q.length >= 3 && normalize(source).includes(q);
 }
 
-/** On-device provenance: look up a line for every stated value; silent fields are not-stated. */
-export function locateProvenance(card: FieldCardData, source: SourceDoc): Provenance {
-  const prov: Provenance = {};
+function hasDigit(v: string | number): boolean {
+  return typeof v === "number" || /\d/.test(v);
+}
+
+/** Inferred hold points are app guidance, not sheet text, so they need no quote. */
+function inferredHoldPoint(card: FieldCardData, path: string): boolean {
+  const m = /^holdPoints\.(\d+)\./.exec(path);
+  return Boolean(m && card.holdPoints?.[Number(m[1])]?.source === "inferred");
+}
+
+/** Blank one leaf in place: numbers become null, strings "". */
+function blankAt(obj: unknown, path: string, value: string | number): void {
+  const parts = path.split(".");
+  let cur = obj as Record<string, unknown>;
+  for (const k of parts.slice(0, -1)) cur = cur[k] as Record<string, unknown>;
+  cur[parts[parts.length - 1]!] = typeof value === "number" ? null : "";
+}
+
+export type Gated = {
+  card: FieldCardData;
+  provenance: Provenance;
+  /** How many values with numbers had no source line and were blanked. */
+  dropped: number;
+  /** Their paths (dot.N form). */
+  droppedPaths: string[];
+  /** Paths kept with quote "" (non-numeric, normalized text such as a method name). */
+  unpinned: string[];
+};
+
+/**
+ * The "no number without a quote" gate, for every provider (on-device here; Azure reuses it): every stated value gets a source
+ * line; a value holding a number that cannot be pinned is blanked to Not stated; non-numeric text
+ * that was normalized (e.g. "NACE No. 2") may keep quote "". Silent fields are not-stated.
+ */
+export function gateNumbers(input: FieldCardData, source: SourceDoc): Gated {
+  const card = structuredClone(input);
+  const provenance: Provenance = {};
+  const droppedPaths: string[] = [];
+  const unpinned: string[] = [];
   for (const leaf of leaves(card)) {
-    if (isStructural(leaf.path) || typeof leaf.value === "boolean") continue;
+    if (isStructural(leaf.path) || typeof leaf.value === "boolean" || inferredHoldPoint(card, leaf.path)) continue;
     if (isEmpty(leaf.value)) {
-      prov[leaf.path] = "not-stated";
+      provenance[leaf.path] = "not-stated";
       continue;
     }
-    prov[leaf.path] = findQuote(leaf.path, leaf.value as string | number, source) ?? { quote: "" };
+    const v = leaf.value as string | number;
+    const hit = findQuote(leaf.path, v, source);
+    if (hit) provenance[leaf.path] = hit;
+    else if (hasDigit(v)) {
+      blankAt(card, leaf.path, v);
+      provenance[leaf.path] = "not-stated";
+      droppedPaths.push(leaf.path);
+    } else {
+      provenance[leaf.path] = { quote: "" };
+      unpinned.push(leaf.path);
+    }
   }
-  return prov;
+  return { card, provenance, dropped: droppedPaths.length, droppedPaths, unpinned };
+}
+
+/** Provenance only (no blanking). Kept for callers that already verified the card. */
+export function locateProvenance(card: FieldCardData, source: SourceDoc): Provenance {
+  return gateNumbers(card, source).provenance;
+}
+
+const TEMP_FIELDS = /^environmentals\.(ambientTempM(in|ax)F|substrateTempM(in|ax)F|dewPointSpreadMinF)$/;
+
+/**
+ * Interim `unverifiedTemps` from the number gate: true if any temperature path was dropped or kept
+ * with an empty quote. To be replaced by `unverified-temps.ts` (accuracy pack) when it lands.
+ */
+export function unverifiedTempsFromGate(provenance: Provenance, droppedPaths: string[]): boolean {
+  if (droppedPaths.some((p) => TEMP_FIELDS.test(p))) return true;
+  return Object.entries(provenance).some(([p, v]) => TEMP_FIELDS.test(p) && v !== "not-stated" && v.quote === "");
 }
