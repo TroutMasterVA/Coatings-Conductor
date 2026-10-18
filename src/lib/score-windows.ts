@@ -7,8 +7,8 @@ import {
   substrateById,
   type Limiter,
   type SiteContext,
-} from "./mitigations";
-import { axes, DEFAULT_CALIBRATION, lerp } from "./learning";
+} from "./mitigations.ts";
+import { axes, DEFAULT_CALIBRATION, lerp } from "./learning.ts";
 import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "./types";
 
 export type RawHour = {
@@ -24,15 +24,20 @@ export type RawHour = {
 };
 
 function zoned(iso: string, timeZone: string) {
-  const naive = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})(?::(\d{2}))?(?!.*(?:Z|[+-]\d{2}:\d{2}))/);
+  const naive = iso.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2})(?::(\d{2}))?(?!.*(?:Z|[+-]\d{2}:\d{2}))/,
+  );
   if (naive) {
     const month = Number(naive[2]);
     const day = Number(naive[3]);
     const hour = Number(naive[4]);
-    const weekday = new Date(`${naive[1]}-${naive[2]}-${naive[3]}T12:00:00Z`).toLocaleDateString("en-US", {
-      weekday: "short",
-      timeZone: "UTC",
-    });
+    const weekday = new Date(`${naive[1]}-${naive[2]}-${naive[3]}T12:00:00Z`).toLocaleDateString(
+      "en-US",
+      {
+        weekday: "short",
+        timeZone: "UTC",
+      },
+    );
     return {
       hour,
       weekday,
@@ -99,7 +104,12 @@ function overLimit(value: number, max: number, axis: number, unitSoft = 8): "har
   return null;
 }
 
-function underLimit(value: number, min: number, axis: number, unitSoft = 8): "hard" | "soft" | null {
+function underLimit(
+  value: number,
+  min: number,
+  axis: number,
+  unitSoft = 8,
+): "hard" | "soft" | null {
   const hardPad = lerp(10, 0, axis);
   const softStart = lerp(unitSoft, 3, axis);
   if (value < min - hardPad) return "hard";
@@ -107,23 +117,62 @@ function underLimit(value: number, min: number, axis: number, unitSoft = 8): "ha
   return null;
 }
 
+/** Why weather scoring is paused when a card's temperature limits have no verbatim quote. */
+export const TEMPS_UNVERIFIED_REASON = "temperature limits not verified on the sheet";
+
+/** Optional scoring inputs. Additive: omitting them scores exactly as before. */
+export type ScoreOptions = {
+  /** `extract.unverifiedTemps`: when true, no hour or day is scored go/caution/no-go. */
+  unverifiedTemps?: boolean;
+};
+
+/** Non-null when scoring must be skipped; the reason is shown instead of windows. */
+export function scoringPause(opts?: ScoreOptions): { reason: string } | null {
+  return opts?.unverifiedTemps ? { reason: TEMPS_UNVERIFIED_REASON } : null;
+}
+
 export function scoreHour(
   raw: RawHour,
   env: Environmentals,
   timeZone = "UTC",
   site?: SiteContext,
+  opts?: ScoreOptions,
 ): HourWindow {
   const z = zoned(raw.startIso, timeZone);
+  const pause = scoringPause(opts);
+  if (pause) {
+    return {
+      startIso: raw.startIso,
+      hour: z.hour,
+      weekday: z.weekday,
+      dateLabel: z.dateLabel,
+      dateKey: z.dateKey,
+      status: "unknown",
+      reasons: [pause.reason],
+      tempF: raw.tempF,
+      rh: raw.rh,
+      dewpointF: raw.dewpointF,
+      spreadF: null,
+      pop: raw.pop,
+      precipIn: raw.precipIn,
+      windMph: raw.windMph,
+      shortForecast: raw.shortForecast,
+    };
+  }
   const reasons: string[] = [];
   let hard = 0;
   let soft = 0;
 
-  const mits = sanitizeMitigations((site?.mitigations ?? []).filter((id) => Boolean(mitigationById(id))));
+  const mits = sanitizeMitigations(
+    (site?.mitigations ?? []).filter((id) => Boolean(mitigationById(id))),
+  );
   const sub = substrateById(site?.substrate ?? "bare_steel");
   const shiftOk = inShift(z.hour, mits);
   const discipline = site?.discipline ?? "coatings";
   const cal = axes(site?.calibration ?? DEFAULT_CALIBRATION);
-  const customActive = (site?.customMitigations ?? []).filter((c) => site?.customMitigationIds?.includes(c.id));
+  const customActive = (site?.customMitigations ?? []).filter((c) =>
+    site?.customMitigationIds?.includes(c.id),
+  );
 
   let air = raw.tempF;
   let rh = raw.rh;
@@ -162,7 +211,9 @@ export function scoreHour(
   else if (mits.includes("heaters") && air != null) air = round1(air + 16);
   else if (lightTent && air != null) air = round1(air + 2 * envelope);
   else if (darkTent && air != null) {
-    air = round1(air + 12 * Math.max(envelope, sky > 0.4 && z.hour >= 8 && z.hour <= 18 ? 0.35 : 0));
+    air = round1(
+      air + 12 * Math.max(envelope, sky > 0.4 && z.hour >= 8 && z.hour <= 18 ? 0.35 : 0),
+    );
   }
 
   if (climate) {
@@ -250,7 +301,9 @@ export function scoreHour(
   if (substrateF != null && subMax != null) {
     const hit = overLimit(substrateF, subMax, cal.thermal);
     if (hit === "hard") {
-      reasons.push(`${sub.label} ${substrateF}°F > max ${subMax}°F (air ${air ?? "—"}° + sun ${round1(Math.max(0, solarGain))}°)`);
+      reasons.push(
+        `${sub.label} ${substrateF}°F > max ${subMax}°F (air ${air ?? "—"}° + sun ${round1(Math.max(0, solarGain))}°)`,
+      );
       hard += 1;
     } else if (hit === "soft") {
       reasons.push(`${sub.label} ${substrateF}°F near max`);
@@ -290,9 +343,15 @@ export function scoreHour(
   if (precipBlocked) {
     const nogoPop = lerp(68, 32, cal.precip);
     const softPop = lerp(42, 15, cal.precip);
-    if ((raw.pop != null && raw.pop >= nogoPop) || (raw.precipIn != null && raw.precipIn > 0.02) || wetForecast(raw.shortForecast)) {
+    if (
+      (raw.pop != null && raw.pop >= nogoPop) ||
+      (raw.precipIn != null && raw.precipIn > 0.02) ||
+      wetForecast(raw.shortForecast)
+    ) {
       reasons.push(
-        raw.pop != null ? `Precip ${raw.pop}% · ${raw.shortForecast || "wet"}` : raw.shortForecast || "Precipitation risk",
+        raw.pop != null
+          ? `Precip ${raw.pop}% · ${raw.shortForecast || "wet"}`
+          : raw.shortForecast || "Precipitation risk",
       );
       hard += 1;
     } else if (raw.pop != null && raw.pop >= softPop) {
@@ -303,7 +362,10 @@ export function scoreHour(
     if (frozenPrecip(raw.shortForecast)) {
       reasons.push("Rain tarp does not cover snow/sleet — hold");
       hard += 1;
-    } else if (/\b(thunder|severe)\b/i.test(raw.shortForecast) || ((wind ?? 0) >= 28 && wetForecast(raw.shortForecast))) {
+    } else if (
+      /\b(thunder|severe)\b/i.test(raw.shortForecast) ||
+      ((wind ?? 0) >= 28 && wetForecast(raw.shortForecast))
+    ) {
       reasons.push("Rain tarp — stake and pitch; wind-driven rain can still wet the face");
       soft += 1;
     }
@@ -332,7 +394,9 @@ export function scoreHour(
 
   if (!shiftOk) {
     reasons.unshift(
-      mits.includes("night_shift") ? "Outside night shift (19:00–06:00)" : "Outside dawn window (05:00–10:00)",
+      mits.includes("night_shift")
+        ? "Outside night shift (19:00–06:00)"
+        : "Outside dawn window (05:00–10:00)",
     );
     hard += 1;
   }
@@ -347,7 +411,9 @@ export function scoreHour(
   }
 
   if (status === "go" && reasons.length === 0) {
-    const extra = mits.length ? ` after ${mits.map((id) => mitigationById(id)?.label ?? id).join(", ")}` : "";
+    const extra = mits.length
+      ? ` after ${mits.map((id) => mitigationById(id)?.label ?? id).join(", ")}`
+      : "";
     reasons.push(`Inside PDS window${extra}`);
   }
 
@@ -376,7 +442,8 @@ export function scoreHour(
 function bestRange(hours: HourWindow[], wrapNight = false): string | null {
   if (hours.length === 0) return null;
   const preferGo = hours.some((h) => h.status === "go");
-  const ok = (h: HourWindow) => (preferGo ? h.status === "go" : h.status === "go" || h.status === "caution");
+  const ok = (h: HourWindow) =>
+    preferGo ? h.status === "go" : h.status === "go" || h.status === "caution";
 
   let bestStart = -1;
   let bestLen = 0;
@@ -425,7 +492,9 @@ export function bundleDays(
   meta: Omit<ForecastBundle, "days" | "headline">,
   env: Environmentals,
   site?: SiteContext,
+  opts?: ScoreOptions,
 ): ForecastBundle {
+  const pause = scoringPause(opts);
   const byDate = new Map<string, HourWindow[]>();
   for (const h of hours) {
     const key = h.dateKey || h.startIso.slice(0, 10);
@@ -477,7 +546,9 @@ export function bundleDays(
 
   const scored = hasNumericWindow(env);
   const best = [...days].filter((d) => d.status === "go").sort((a, b) => b.goHours - a.goHours)[0];
-  const alt = [...days].filter((d) => d.bestRange).sort((a, b) => b.goHours + b.cautionHours - (a.goHours + a.cautionHours))[0];
+  const alt = [...days]
+    .filter((d) => d.bestRange)
+    .sort((a, b) => b.goHours + b.cautionHours - (a.goHours + a.cautionHours))[0];
   const mitLabel = (site?.mitigations ?? [])
     .map((id) => mitigationById(id)?.label)
     .filter(Boolean)
@@ -495,6 +566,19 @@ export function bundleDays(
       : "No in-window hours in this forecast. Hold the product or add a mitigation.";
   }
 
+  if (pause) {
+    for (const d of days) {
+      d.status = "unknown";
+      d.goHours = 0;
+      d.cautionHours = 0;
+      d.nogoHours = 0;
+      d.bestRange = null;
+      d.limiting = [pause.reason];
+    }
+    // No headline wording here: the UI (#32) owns the paused message and reads `paused`.
+    return { ...meta, days, headline: "", paused: pause };
+  }
+
   return { ...meta, days, headline };
 }
 
@@ -502,10 +586,14 @@ export function rescoreForecast(
   forecast: ForecastBundle,
   env: Environmentals,
   site: SiteContext,
+  opts?: ScoreOptions,
 ): ForecastBundle {
   const raw = forecast.rawHours ?? [];
-  if (!raw.length) return forecast;
-  const hours = raw.map((h) => scoreHour(h, env, forecast.timezone, site));
+  if (!raw.length) {
+    const pause = scoringPause(opts);
+    return pause ? { ...forecast, headline: "", paused: pause } : forecast;
+  }
+  const hours = raw.map((h) => scoreHour(h, env, forecast.timezone, site, opts));
   return bundleDays(
     hours,
     {
@@ -521,15 +609,29 @@ export function rescoreForecast(
     },
     env,
     site,
+    opts,
   );
 }
 
-export function goHourCount(forecast: ForecastBundle, env: Environmentals, site: SiteContext) {
+export function goHourCount(
+  forecast: ForecastBundle,
+  env: Environmentals,
+  site: SiteContext,
+  opts?: ScoreOptions,
+) {
   const raw = forecast.rawHours ?? [];
-  return raw.map((h) => scoreHour(h, env, forecast.timezone, site)).filter((h) => h.status === "go").length;
+  return raw
+    .map((h) => scoreHour(h, env, forecast.timezone, site, opts))
+    .filter((h) => h.status === "go").length;
 }
 
-export function unlockedGoHours(forecast: ForecastBundle, env: Environmentals, site: SiteContext) {
+export function unlockedGoHours(
+  forecast: ForecastBundle,
+  env: Environmentals,
+  site: SiteContext,
+  opts?: ScoreOptions,
+) {
+  if (scoringPause(opts)) return 0;
   const raw = forecast.rawHours ?? [];
   const none: SiteContext = { ...site, mitigations: [] };
   let n = 0;
@@ -541,7 +643,13 @@ export function unlockedGoHours(forecast: ForecastBundle, env: Environmentals, s
   return n;
 }
 
-export function detectLimiters(forecast: ForecastBundle, env: Environmentals, site: SiteContext): Limiter[] {
+export function detectLimiters(
+  forecast: ForecastBundle,
+  env: Environmentals,
+  site: SiteContext,
+  opts?: ScoreOptions,
+): Limiter[] {
+  if (scoringPause(opts)) return [];
   const raw = forecast.rawHours ?? [];
   const none: SiteContext = { ...site, mitigations: [] };
   const counts: Record<Limiter, number> = {
@@ -557,7 +665,8 @@ export function detectLimiters(forecast: ForecastBundle, env: Environmentals, si
     const scored = scoreHour(h, env, forecast.timezone, none);
     if (scored.status !== "nogo" && scored.status !== "caution") continue;
     const text = scored.reasons.join(" ");
-    if (/sun |solar/.test(text) || ((scored.solarGainF ?? 0) > 10 && /above max/.test(text))) counts.solar += 1;
+    if (/sun |solar/.test(text) || ((scored.solarGainF ?? 0) > 10 && /above max/.test(text)))
+      counts.solar += 1;
     if (/above max/.test(text)) counts.heat += 1;
     if (/below min/.test(text)) counts.cold += 1;
     if (/\bRH\b/.test(text)) counts.rh += 1;
