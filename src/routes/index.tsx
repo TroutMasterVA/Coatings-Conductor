@@ -695,10 +695,10 @@ function workspaceApi(signedIn: boolean) {
       return wrap(signedIn ? saveProject({ data }) : Promise.resolve(guestSaveProject(data)));
     },
     archive(id: string, archived: boolean) {
-      return wrap(signedIn ? archiveProject({ data: { id, archived } }) : Promise.resolve(guestArchiveProject(id, archived)));
+      return wrap<void | { ok: true }>(signedIn ? archiveProject({ data: { id, archived } }) : Promise.resolve(guestArchiveProject(id, archived)));
     },
     remove(id: string) {
-      return wrap(signedIn ? deleteProject({ data: id }) : Promise.resolve(guestDeleteProject(id)));
+      return wrap<void | { ok: true }>(signedIn ? deleteProject({ data: id }) : Promise.resolve(guestDeleteProject(id)));
     },
     saveCustom(data: CustomMitigationInput) {
       return wrap(signedIn ? saveCustomMitigation({ data }) : Promise.resolve(guestSaveCustom(data)));
