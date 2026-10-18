@@ -17,7 +17,6 @@ import {
   toSavedExtract,
   extractForSave,
   fileTooLargeMessage,
-  extractFlags,
   mimeTypeFor,
   normalizeProvider,
   savedExtractState,
@@ -34,6 +33,7 @@ import {
   type ExtractSheetResponse,
   type ExtractState,
 } from "./extract-client.ts";
+import { flagsForResult, flagsForSaved } from "./extract-flags.ts";
 import { buildCardFromPds } from "./on-device-extract.ts";
 import { parseSavedExtract } from "./job-extract.ts";
 import { onDeviceProvider } from "./extract/on-device-provider.ts";
@@ -431,8 +431,8 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
     assert.equal(saved.draft, true);
     assert.equal(saved.unverifiedTemps, false);
     assert.ok(!Number.isNaN(Date.parse(saved.extractedAt)));
-    assert.deepEqual(extractFlags(s), { draft: true, unverifiedTemps: false });
-    assert.deepEqual(extractFlags(done(await upload(pdf, ok()).p)), {
+    assert.deepEqual(flagsForResult(s.result), { draft: true, unverifiedTemps: false });
+    assert.deepEqual(flagsForResult(done(await upload(pdf, ok()).p).result), {
       draft: false,
       unverifiedTemps: false,
     });
@@ -447,7 +447,7 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
       unverifiedTemps: true,
     };
     const d = done(savedExtractState({ card, extract }));
-    assert.deepEqual(extractFlags(d), { draft: true, unverifiedTemps: true });
+    assert.deepEqual(flagsForSaved({ extract: d.saved }), { draft: true, unverifiedTemps: true });
     assert.equal(d.saved!.extractedAt, "2026-10-18T18:00:00Z");
     assert.equal(toSavedExtract(d), undefined);
     const old = done(
@@ -456,7 +456,8 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
         extract: { ...extract, draft: undefined, unverifiedTemps: undefined },
       }),
     );
-    assert.deepEqual(extractFlags(old), { draft: false, unverifiedTemps: false });
+    // #32 rule: a non-Azure saved extract is always a draft; missing temps flag = false.
+    assert.deepEqual(flagsForSaved({ extract: old.saved }), { draft: true, unverifiedTemps: false });
   });
   it("FILE_TOO_LARGE from the server shows its message verbatim", async () => {
     const msg = "This file is 6.1 MB. The limit on this deploy is 4 MB.";

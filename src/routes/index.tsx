@@ -23,6 +23,13 @@ import {
   type ExtractState,
   type SavedExtract,
 } from "@/lib/extract-client";
+import {
+  flagsForResult,
+  flagsForSaved,
+  NO_FLAGS,
+  windowHeadline,
+  type ExtractFlags,
+} from "@/lib/extract-flags";
 import { callExtractSheet, loadUploadLimitBytes } from "@/lib/extract-server";
 import { loadForecast } from "@/lib/forecast";
 import {
@@ -150,6 +157,8 @@ function App({ user }: { user: AppUser | null }) {
   /** Last uploaded file and its pdf.js text; Build re-sends it while the textarea still matches. */
   const uploadRef = useRef<{ file: File; text: string; pages?: string[] } | null>(null);
   const extractGen = useRef(0);
+  /** Draft / unverified-temps flags of the current read (saved job `extract`, or the extract response). */
+  const [flags, setFlags] = useState<ExtractFlags>(NO_FLAGS);
   const [wxLoading, setWxLoading] = useState(false);
   const [wxError, setWxError] = useState<string | null>(null);
   const [recents, setRecents] = useState<SavedCard[]>([]);
@@ -217,6 +226,7 @@ function App({ user }: { user: AppUser | null }) {
     uploadRef.current = null;
     extractGen.current += 1;
     clearedSent.current = cardReplaced.current;
+    setFlags(full.card ? flagsForSaved(full) : NO_FLAGS);
     setMode("job");
     // Update the existing row in place — do not prepend (that reordered + duplicated under race).
     setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), toSummary(full)));
@@ -395,8 +405,10 @@ function App({ user }: { user: AppUser | null }) {
     );
   }
 
-  function applyCard(next: FieldCardData) {
+  /** Built-in samples pass NO_FLAGS; everything else passes flags from the read or the saved record. */
+  function applyCard(next: FieldCardData, nextFlags: ExtractFlags) {
     setCard(next);
+    setFlags(nextFlags);
     setSite((prev) => siteFromCard(next, prev));
   }
 
@@ -426,7 +438,7 @@ function App({ user }: { user: AppUser | null }) {
       setExtractState(state);
       if (state.kind === "done") {
         const next = state.result.card;
-        applyCard(next);
+        applyCard(next, flagsForResult(state.result));
         remember(next, zip);
         toast.success("Review every field.");
         if (zip.length === 5) void handleForecast(next, zip);
@@ -482,7 +494,7 @@ function App({ user }: { user: AppUser | null }) {
     if (!card) return;
     setDownloading(true);
     try {
-      await downloadFieldCard(card, scored, scoringSite, zip);
+      await downloadFieldCard(card, scored, scoringSite, zip, flags);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "PDF failed");
     } finally {
@@ -703,7 +715,7 @@ function App({ user }: { user: AppUser | null }) {
                 uploadRef.current = null;
                 cardReplaced.current += 1;
                 setText(raw);
-                applyCard(next);
+                applyCard(next, NO_FLAGS);
                 remember(next, zip);
                 if (zip.length === 5) void handleForecast(next, zip);
               }}
@@ -714,7 +726,7 @@ function App({ user }: { user: AppUser | null }) {
                 setExtracting(false);
                 cardReplaced.current += 1;
                 setExtractState({ kind: "idle" });
-                applyCard(next);
+                applyCard(next, flagsForSaved(null));
               }}
             />
           </div>
@@ -725,8 +737,9 @@ function App({ user }: { user: AppUser | null }) {
               <FieldCardView
                 card={card}
                 zip={zip}
-                headline={scored?.headline}
+                headline={windowHeadline(scored?.headline, flags)}
                 mitigations={selectedMitigationLabels(scoringSite)}
+                draft={flags.draft}
               />
             ) : (
               <EmptyCardSkeleton />
@@ -753,6 +766,7 @@ function App({ user }: { user: AppUser | null }) {
               }
               site={scoringSite}
               onSite={setSite}
+              paused={flags.unverifiedTemps}
             />
             <LearningPanel
               calibration={calibration}
