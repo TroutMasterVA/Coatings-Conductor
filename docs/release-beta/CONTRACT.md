@@ -61,8 +61,7 @@ type ExtractResponse =
       provider: "azure" | "on-device";
       deployment?: string;          // Azure deployment name, display only
       warnings: { code: ExtractWarningCode; message: string }[];
-      draft?: true;                 // set on every on-device result
-      unverifiedTemps?: boolean;    // true when any temperature value on the card has no verbatim quote
+      extract: SavedExtract;        // exactly what the UI saves next to `card` (see below)
     }
   | {
       ok: false;
@@ -74,8 +73,6 @@ type ExtractResponse =
       };
     };
 ```
-
-Missing `draft` / `unverifiedTemps` = false.
 
 **Error codes:** `UNAUTHENTICATED` (no session), `RATE_LIMITED` (10/min per user, with `retryAfterSec`), `EXTRACT_TIMEOUT` (60 s overall), `EXTRACT_FAILED` (nothing readable / reader error), `FILE_TOO_LARGE` (file over `MAX_UPLOAD_MB`, with `maxUploadMb`; or client `text` over 40,000 chars), `UNSUPPORTED_FILE_TYPE`.
 
@@ -104,21 +101,23 @@ type Provenance = Record<string, { page?: number; quote: string } | "not-stated"
 
 ### Saved with the job
 
-The job record gets an `extract` object next to `card`, copied from the ok response:
+The ok response carries `extract`; the UI saves it unchanged next to `card` on the job:
 
 ```ts
-extract?: {
+type SavedExtract = {
   provider: "azure" | "on-device";
   deployment?: string;
   provenance: Provenance;
   warnings: { code: string; message: string }[];
-  extractedAt: string;          // ISO 8601
-  draft?: true;
-  unverifiedTemps?: boolean;
+  extractedAt: string;          // ISO 8601, set by the server
+  draft: boolean;               // true for on-device results, false for Azure
+  unverifiedTemps: boolean;     // true when any temperature value on the card has no verbatim quote
 };
+// job record: { ..., card, extract?: SavedExtract }
 ```
 
-Older jobs have no `extract` (treat as missing). Stored under the same per-user isolation as the card (every query scoped by `user_id`).
+- `unverifiedTemps` covers `environmentals.ambientTempMinF/MaxF`, `substrateTempMinF/MaxF`, `dewPointSpreadMinF`. Interim rule (until the accuracy pack's `src/lib/extract/unverified-temps.ts` lands): true if any of those was dropped by the number gate or kept with an empty quote.
+- Older jobs have no `extract` (treat as missing; flags false). The top-level `provider` / `deployment` / `provenance` / `warnings` on the response mirror `extract` and stay for FE compatibility. Stored under the same per-user isolation as the card (every query scoped by `user_id`).
 
 ### Provider interface
 

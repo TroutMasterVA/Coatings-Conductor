@@ -230,3 +230,14 @@ export function gateNumbers(input: FieldCardData, source: SourceDoc): Gated {
 export function locateProvenance(card: FieldCardData, source: SourceDoc): Provenance {
   return gateNumbers(card, source).provenance;
 }
+
+const TEMP_FIELDS = /^environmentals\.(ambientTempM(in|ax)F|substrateTempM(in|ax)F|dewPointSpreadMinF)$/;
+
+/**
+ * Interim `unverifiedTemps` from the number gate: true if any temperature path was dropped or kept
+ * with an empty quote. To be replaced by `unverified-temps.ts` (accuracy pack) when it lands.
+ */
+export function unverifiedTempsFromGate(provenance: Provenance, droppedPaths: string[]): boolean {
+  if (droppedPaths.some((p) => TEMP_FIELDS.test(p))) return true;
+  return Object.entries(provenance).some(([p, v]) => TEMP_FIELDS.test(p) && v !== "not-stated" && v.quote === "");
+}

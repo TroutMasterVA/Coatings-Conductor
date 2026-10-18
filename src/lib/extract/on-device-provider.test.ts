@@ -23,6 +23,11 @@ describe("on-device extract provider", () => {
     const r = await onDeviceProvider.extract({ text: SHEET });
     assert.equal(r.provider, "on-device");
     assert.ok(Array.isArray(r.warnings));
+    assert.equal(r.extract.provider, "on-device");
+    assert.equal(r.extract.draft, true);
+    assert.equal(typeof r.extract.unverifiedTemps, "boolean");
+    assert.deepEqual(r.extract.provenance, r.provenance);
+    assert.ok(!Number.isNaN(Date.parse(r.extract.extractedAt)));
     for (const w of r.warnings) assert.match(w.code, /^[A-Z_]+$/);
     const dew = r.provenance["environmentals.dewPointSpreadMinF"];
     assert.ok(dew && dew !== "not-stated");
@@ -73,6 +78,7 @@ describe("on-device extract provider", () => {
     } else {
       assert.equal(amb, "not-stated");
       assert.ok(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"));
+      assert.equal(r.extract.unverifiedTemps, true);
     }
   });
 

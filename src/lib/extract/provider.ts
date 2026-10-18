@@ -72,13 +72,11 @@ export type ExtractResult = {
   /** Azure deployment name, for display only. */
   deployment?: string;
   warnings: ExtractWarning[];
-  /** Set on on-device results: the card is a draft to check against the sheet. */
-  draft?: true;
-  /** True when a temperature value's unit could not be verified (implemented by the accuracy pack). */
-  unverifiedTemps?: boolean;
+  /** Exactly the object the UI saves next to `card` on the job. */
+  extract: SavedExtract;
 };
 
-/** Saved next to `card` in the job record. Older jobs have no `extract` (treat as missing). */
+/** Saved next to `card` in the job record. Older jobs have no `extract` (treat as missing; flags false). */
 export type SavedExtract = {
   provider: ProviderLabel;
   deployment?: string;
@@ -86,8 +84,10 @@ export type SavedExtract = {
   warnings: ExtractWarning[];
   /** ISO 8601. */
   extractedAt: string;
-  draft?: true;
-  unverifiedTemps?: boolean;
+  /** true for on-device results (a draft to check against the sheet), false for Azure. */
+  draft: boolean;
+  /** true when any temperature field (ambient/substrate min/max, dew-point spread) was dropped or is unpinned. */
+  unverifiedTemps: boolean;
 };
 
 export interface ExtractProvider {
