@@ -34,7 +34,7 @@ async function okAzure(): Promise<ExtractResult> {
     provider: "azure",
     deployment: "gpt-4o",
     warnings: [],
-    extract: { ...r.extract, provider: "azure", deployment: "gpt-4o", warnings: [], draft: false },
+    draft: false,
   };
 }
 
@@ -121,8 +121,8 @@ describe("runExtract (BE-3 contract)", () => {
     if (r.ok) {
       assert.equal(r.provider, "azure");
       assert.equal(r.deployment, "gpt-4o");
-      assert.equal(r.extract.draft, false);
-      assert.equal(r.extract.provider, "azure");
+      assert.equal(r.draft, false);
+      assert.equal("extract" in r, false);
     }
   });
 
@@ -133,8 +133,8 @@ describe("runExtract (BE-3 contract)", () => {
       assert.equal(r.provider, "on-device");
       assert.equal(r.deployment, undefined);
       assert.ok(r.warnings.some((w) => w.code === "AZURE_FALLBACK"));
-      assert.deepEqual(r.extract.warnings, r.warnings);
-      assert.equal(r.extract.draft, true);
+      assert.ok(Array.isArray(r.warnings));
+      assert.equal(r.draft, true);
     }
   });
 
@@ -222,7 +222,7 @@ describe("runExtract (BE-3 contract)", () => {
 
   it("text-only (paste) input still works", async () => {
     const r = await runExtract(base({ input: { text: SHEET } }));
-    assert.ok(r.ok && r.extract.draft === true && typeof r.extract.unverifiedTemps === "boolean");
+    assert.ok(r.ok && r.draft === true && typeof r.unverifiedTemps === "boolean");
   });
 
   it("EXTRACT_FAILED for unreadable text", async () => {
@@ -261,5 +261,30 @@ describe("takeRateSlot", () => {
     for (let i = 0; i < 10; i++) assert.ok(takeRateSlot(s, "u", 0).ok);
     assert.equal(takeRateSlot(s, "u", 59_999).ok, false);
     assert.equal(takeRateSlot(s, "u", 60_000).ok, true);
+  });
+});
+
+describe("one number gate for every provider", () => {
+  it("drops an invented number from a mocked Azure result and never returns `source`", async () => {
+    const az = await okAzure();
+    const invented = {
+      ...az,
+      card: { ...az.card, environmentals: { ...az.card.environmentals, windMaxMph: 99 } },
+      source: { text: SHEET },
+    };
+    const r = await runExtract(base({ azure: fakeAzure(async () => invented) }));
+    assert.ok(r.ok);
+    if (r.ok) {
+      assert.equal(r.provider, "azure");
+      assert.equal(r.card.environmentals.windMaxMph, null);
+      assert.equal(r.provenance["environmentals.windMaxMph"], "not-stated");
+      assert.ok(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"));
+      assert.equal("source" in r, false);
+    }
+  });
+
+  it("keeps a quoted Azure number", async () => {
+    const r = await runExtract(base({ azure: fakeAzure(async () => ({ ...(await okAzure()), source: { text: SHEET } })) }));
+    assert.ok(r.ok && r.card.environmentals.dewPointSpreadMinF === 5);
   });
 });

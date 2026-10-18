@@ -1,5 +1,6 @@
 import { cleanBase64, isImageMime, maxBase64Length, normalizeMime, sniffFileType, DOCX_MIME } from "./file-type.ts";
 import { readDocxText, readPdfText, type ReadText } from "./server-read.ts";
+import { gateNumbers, sourceOf, unverifiedTempsFromGate, type SourceDoc } from "./provenance.ts";
 import type {
   ExtractErrorCode,
   ExtractInput,
@@ -103,11 +104,43 @@ function withDeadline<T>(p: Promise<T>, ms: number, ctl: AbortController): Promi
   });
 }
 
-/** Keep `extract.warnings` identical to the top-level list the UI shows. */
+/**
+ * One number gate for every provider: a remote result is re-checked here against the source it read
+ * (`source`, e.g. Document Intelligence content) or, failing that, the request text. A number with no
+ * verbatim line becomes Not stated with VALUES_DROPPED_UNQUOTED. `source` never leaves the server.
+ */
+export function gateRemote(raw: ExtractResult, input: ExtractInput): ExtractResult {
+  const { source, ...r } = raw;
+  const src: SourceDoc = source && source.text ? source : sourceOf(input);
+  const g = gateNumbers(r.card, src);
+  const extra: ExtractWarning[] = g.dropped
+    ? [{
+        code: "VALUES_DROPPED_UNQUOTED",
+        message: `${g.dropped} value(s) with numbers could not be tied to a line on the sheet and were set to Not stated.`,
+      }]
+    : [];
+  return withWarnings(
+    {
+      ...r,
+      card: g.card,
+      // Keep the provider's own quote (exact line + page) wherever the gate kept the value.
+      provenance: Object.fromEntries(
+        Object.entries(g.provenance).map(([k, p]) => {
+          const own = r.provenance[k];
+          return [k, p !== "not-stated" && own && own !== "not-stated" ? own : p];
+        }),
+      ),
+      unverifiedTemps: unverifiedTempsFromGate(g.provenance, g.droppedPaths),
+    },
+    [...r.warnings, ...extra],
+  );
+}
+
+/** De-duplicate warnings by code. */
 function withWarnings(r: ExtractResult, warnings: ExtractWarning[]): ExtractResult {
   const seen = new Set<string>();
   const list = warnings.filter((w) => (seen.has(w.code) ? false : (seen.add(w.code), true)));
-  return { ...r, warnings: list, extract: { ...r.extract, warnings: list } };
+  return { ...r, warnings: list };
 }
 
 function fail(code: ExtractErrorCode, message: string, retryAfterSec?: number): ExtractResponse {
@@ -217,7 +250,8 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
     const ctl = new AbortController();
     const budget = timeoutMs - FALLBACK_RESERVE_MS - (now() - started);
     try {
-      const r = await withDeadline(azure.extract(input, ctl.signal), budget, ctl);
+      const raw = await withDeadline(azure.extract(input, ctl.signal), budget, ctl);
+      const r = gateRemote(raw, input);
       return done({ ok: true, ...r }, r.provider, "ok");
     } catch (err) {
       const why = err instanceof Timeout ? "Azure timed out" : "Azure could not read this sheet";

@@ -4,7 +4,7 @@ import { getSql } from "@/lib/db";
 import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
-import { decodeSavedExtract, encodeSavedExtract, parseSavedExtract, writeJobExtract } from "@/lib/job-extract";
+import { applyExtractOnSave, decodeSavedExtract, encodeSavedExtract, parseSavedExtract } from "@/lib/job-extract";
 import type { SavedExtract } from "@/lib/extract/provider";
 import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, SavedCard } from "@/lib/types";
 
@@ -259,13 +259,8 @@ export const saveProject = createServerFn({ method: "POST" })
       returning id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
                 recents_json, outcomes_json, last_opened_at, updated_at
     `;
-    // Keep source quotes in step with the card: explicit extract wins; a replaced/cleared card without
-    // one drops the old quotes so they never describe a different card.
-    if (data.extract !== undefined) {
-      await writeJobExtract(sql, context.userId, data.id, card ? parseSavedExtract(data.extract) : null);
-    } else if (data.card !== undefined) {
-      await writeJobExtract(sql, context.userId, data.id, null);
-    }
+    // Missing `extract` keeps the stored quotes (autosave after a field edit); null clears; object replaces.
+    await applyExtractOnSave(sql, context.userId, data.id, data.extract);
     return toSummary(updated[0]!);
   });
 

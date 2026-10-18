@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import type { Sql } from "./db.ts";
 import type { SavedExtract } from "./extract/provider.ts";
-import { decodeSavedExtract, parseSavedExtract, readJobExtract, writeJobExtract } from "./job-extract.ts";
+import { applyExtractOnSave, decodeSavedExtract, parseSavedExtract, readJobExtract, writeJobExtract } from "./job-extract.ts";
 
 const EXTRACT: SavedExtract = {
   provider: "on-device",
@@ -64,5 +64,44 @@ describe("saved extract on the job (BE-3 persistence)", () => {
     const { draft: _d, unverifiedTemps: _u, ...rest } = EXTRACT;
     const p = parseSavedExtract(rest);
     assert.ok(p && p.draft === false && p.unverifiedTemps === false);
+  });
+});
+
+describe("save rule for extract (autosave keeps quotes)", () => {
+  it("a field edit then autosave without extract keeps the stored quotes", async () => {
+    const sql = await db();
+    await writeJobExtract(sql, "alice", "job-a", EXTRACT);
+    await sql`update projects set card_json = ${'{"product":"edited"}'} where id = ${"job-a"} and user_id = ${"alice"}`;
+    assert.equal(await applyExtractOnSave(sql, "alice", "job-a", undefined), "kept");
+    assert.deepEqual(await readJobExtract(sql, "alice", "job-a"), EXTRACT);
+  });
+
+  it("explicit null clears", async () => {
+    const sql = await db();
+    await writeJobExtract(sql, "alice", "job-a", EXTRACT);
+    assert.equal(await applyExtractOnSave(sql, "alice", "job-a", null), "cleared");
+    assert.equal(await readJobExtract(sql, "alice", "job-a"), null);
+  });
+
+  it("a new extract replaces", async () => {
+    const sql = await db();
+    await writeJobExtract(sql, "alice", "job-a", EXTRACT);
+    const next = { ...EXTRACT, provider: "azure" as const, deployment: "gpt-4o", draft: false };
+    assert.equal(await applyExtractOnSave(sql, "alice", "job-a", next), "replaced");
+    assert.equal((await readJobExtract(sql, "alice", "job-a"))?.provider, "azure");
+  });
+
+  it("malformed extract is rejected and the stored one survives", async () => {
+    const sql = await db();
+    await writeJobExtract(sql, "alice", "job-a", EXTRACT);
+    await assert.rejects(() => applyExtractOnSave(sql, "alice", "job-a", { provider: "x" }), /malformed/);
+    assert.deepEqual(await readJobExtract(sql, "alice", "job-a"), EXTRACT);
+  });
+
+  it("another user's save cannot clear it", async () => {
+    const sql = await db();
+    await writeJobExtract(sql, "alice", "job-a", EXTRACT);
+    await applyExtractOnSave(sql, "bob", "job-a", null);
+    assert.deepEqual(await readJobExtract(sql, "alice", "job-a"), EXTRACT);
   });
 });

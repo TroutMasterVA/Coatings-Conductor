@@ -118,6 +118,7 @@ type SavedExtract = {
 ```
 
 - `unverifiedTemps` covers `environmentals.ambientTempMinF/MaxF`, `substrateTempMinF/MaxF`, `dewPointSpreadMinF`. Interim rule (until the accuracy pack's `src/lib/extract/unverified-temps.ts` lands): true if any of those was dropped by the number gate or kept with an empty quote.
+- Storage: `projects.extract_json` (nullable text JSON, like `card_json`; migration `0003_job_extract.sql`). Save with `saveProject({ data: { id, card, extract: toSavedExtract(result) } })` (also accepted on `createProject` seed and guest import). `openProject` returns `extract` (or `null`). The server validates the object (`parseSavedExtract`, ≤ 1 MB), and replacing or clearing `card` without an `extract` clears the old one so quotes never describe a different card. Reads and writes are scoped by `user_id`.
 - Older jobs have no `extract` (treat as missing; flags false). Stored under the same per-user isolation as the card (every query scoped by `user_id`).
 
 ### Provider interface
@@ -218,3 +219,19 @@ Plus negative mocks: invented number not in text → Not stated; injection text 
 - **4:50 PM** — all tickets in PR; scoring harness side-by-side across the fixture set (Azure-mocked vs on-device), Carbomastic 615 row included.
 - **5:05–5:35 PM** — QA + AppSec final pass.
 - **5:30 PM** — status to PO; draft PR + merge/tag/keys/hosting checklist for Isaiah.
+
+## Edit stamp (hand edits) — Lead ruling 2026-10-18 3:34 PM ET
+
+When a saved card's field value differs from the stored card, the **server** (never the browser) sets that field's provenance entry to:
+
+```ts
+type EditedProvenance = {
+  edited: { by: string; at: string }; // by = session user's display name, else email; at = server time, ISO-8601
+  sheetQuote?: { page?: number; quote: string }; // the prior sheet quote, kept as history only
+};
+```
+
+- Untouched fields keep `{ page?, quote }` or `'not-stated'`.
+- Any `edited` value sent by the client is ignored and overwritten by the server.
+- The UI shows "Edited by {by}, {at}" and must not present `sheetQuote` as backing the new value.
+- Saving without `extract` keeps the stored extract (and its edit stamps); `extract: null` clears it; a new object replaces it.

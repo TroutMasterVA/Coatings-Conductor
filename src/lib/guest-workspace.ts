@@ -163,7 +163,7 @@ export function guestSaveProject(input: {
     calibration: input.calibration ?? found.calibration,
     site: input.site ?? found.site,
     card: input.card !== undefined ? input.card : found.card,
-    extract: input.extract !== undefined ? input.extract : input.card !== undefined ? null : found.extract,
+    extract: input.extract !== undefined ? input.extract : found.extract,
     pdsText: input.pdsText ?? found.pdsText,
     recents: input.recents ?? found.recents,
     outcomes: input.outcomes ?? found.outcomes,
