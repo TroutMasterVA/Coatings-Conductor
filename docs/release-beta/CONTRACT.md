@@ -129,3 +129,19 @@ Plus negative mocks: invented number not in text → Not stated; injection text 
 - **4:50 PM** — all tickets in PR; scoring harness side-by-side across the fixture set (Azure-mocked vs on-device), Carbomastic 615 row included.
 - **5:05–5:35 PM** — QA + AppSec final pass.
 - **5:30 PM** — status to PO; draft PR + merge/tag/keys/hosting checklist for Isaiah.
+
+## Edit stamp (hand edits) — Lead ruling 2026-10-18 3:34 PM ET
+
+When a saved card's field value differs from the stored card, the **server** (never the browser) sets that field's provenance entry to:
+
+```ts
+type EditedProvenance = {
+  edited: { by: string; at: string }; // by = session user's display name, else email; at = server time, ISO-8601
+  sheetQuote?: { page?: number; quote: string }; // the prior sheet quote, kept as history only
+};
+```
+
+- Untouched fields keep `{ page?, quote }` or `'not-stated'`.
+- Any `edited` value sent by the client is ignored and overwritten by the server.
+- The UI shows "Edited by {by}, {at}" and must not present `sheetQuote` as backing the new value.
+- Saving without `extract` keeps the stored extract (and its edit stamps); `extract: null` clears it; a new object replaces it.
