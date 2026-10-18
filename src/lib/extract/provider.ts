@@ -72,8 +72,10 @@ export type ExtractResult = {
   /** Azure deployment name, for display only. */
   deployment?: string;
   warnings: ExtractWarning[];
-  /** Exactly the object the UI saves next to `card` on the job. */
-  extract: SavedExtract;
+  /** true on on-device results (a draft to check against the sheet). Missing = false. */
+  draft?: boolean;
+  /** true when any temperature field (ambient/substrate min/max, dew-point spread) has no verbatim quote. Missing = false. */
+  unverifiedTemps?: boolean;
 };
 
 /** Saved next to `card` in the job record. Older jobs have no `extract` (treat as missing; flags false). */
@@ -84,11 +86,22 @@ export type SavedExtract = {
   warnings: ExtractWarning[];
   /** ISO 8601. */
   extractedAt: string;
-  /** true for on-device results (a draft to check against the sheet), false for Azure. */
-  draft: boolean;
-  /** true when any temperature field (ambient/substrate min/max, dew-point spread) was dropped or is unpinned. */
-  unverifiedTemps: boolean;
+  draft?: boolean;
+  unverifiedTemps?: boolean;
 };
+
+/** Builds the object the UI saves next to `card` from the flat extract response. */
+export function toSavedExtract(r: ExtractResult, extractedAt: string = new Date().toISOString()): SavedExtract {
+  return {
+    provider: r.provider,
+    ...(r.deployment ? { deployment: r.deployment } : {}),
+    provenance: r.provenance,
+    warnings: r.warnings,
+    extractedAt,
+    draft: r.draft === true,
+    unverifiedTemps: r.unverifiedTemps === true,
+  };
+}
 
 export interface ExtractProvider {
   readonly id: "on-device" | "azure";
