@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
-import { closeJob, statusFields, throwWriteRefused, writeOpenProject, type JobStatus } from "@/lib/job-close";
+import { closeJob, deleteOpenProject, statusFields, throwWriteRefused, writeOpenProject, type JobStatus } from "@/lib/job-close";
 import { listProjectRows, openProjectRow, readProjectRow, toRowSummary, type ProjectRow } from "@/lib/project-rows";
 import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
@@ -22,7 +22,7 @@ export type ProjectSummary = {
   closedBy?: string | null;
 };
 
-export { JOB_CLOSED_MESSAGE } from "@/lib/job-close";
+export { JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE } from "@/lib/job-close";
 
 export type ProjectFull = ProjectSummary & {
   calibration: Calibration;
@@ -265,10 +265,8 @@ export const deleteProject = createServerFn({ method: "POST" })
   .validator((id: string) => id)
   .handler(async ({ context, data: id }) => {
     const sql = await getSql();
-    const rows = await sql<{ id: string }>`
-      delete from projects where id = ${id} and user_id = ${context.userId} returning id
-    `;
-    if (!rows[0]) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    // Closed jobs can't be deleted (JOB_CLOSED_DELETE_MESSAGE); the status check is in the DELETE itself.
+    await deleteOpenProject(sql, context.userId, id);
     await sql`
       update user_prefs set last_project_id = null
       where user_id = ${context.userId} and last_project_id = ${id}

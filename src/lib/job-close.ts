@@ -11,6 +11,9 @@ export type JobStatus = "open" | "closed";
 /** Thrown by saveProject (and any field edit) on a closed job. */
 export const JOB_CLOSED_MESSAGE = "This job is closed and can't be changed.";
 
+/** Thrown by deleteProject on a closed job (PO ruling: a closed job is a record; archive stays allowed). */
+export const JOB_CLOSED_DELETE_MESSAGE = "This job is closed and can't be deleted.";
+
 /** Error code for envelope-style replies (extractSheet attach). */
 export const JOB_CLOSED_CODE = "JOB_CLOSED" as const;
 
@@ -171,4 +174,20 @@ export async function writeOpenProject<R>(
   `;
   if (!rows[0]) return throwWriteRefused(sql, userId, id);
   return rows[0];
+}
+
+/**
+ * The deleteProject write. Owner AND `status = 'open'` are in the one DELETE, so a
+ * close that lands first makes it match nothing. Ownership is decided first: a
+ * non-owner or missing job gets NOT_YOUR_JOB_MESSAGE, never a hint that it exists.
+ */
+export async function deleteOpenProject(sql: Sql, userId: string, id: string): Promise<void> {
+  const rows = await sql<{ id: string }>`
+    delete from projects where id = ${id} and user_id = ${userId} and status = 'open' returning id
+  `;
+  if (rows[0]) return;
+  const status = await readJobStatus(sql, userId, id);
+  if (!status) throw new Error(NOT_YOUR_JOB_MESSAGE);
+  if (status.status === "closed") throw new Error(JOB_CLOSED_DELETE_MESSAGE);
+  throw new Error(NOT_YOUR_JOB_MESSAGE);
 }

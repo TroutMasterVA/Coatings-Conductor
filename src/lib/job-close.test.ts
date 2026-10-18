@@ -7,6 +7,8 @@ import { NOT_YOUR_JOB_MESSAGE } from "./guest-import.ts";
 import {
   closeJob,
   closedByLabel,
+  deleteOpenProject,
+  JOB_CLOSED_DELETE_MESSAGE,
   isJobClosed,
   JOB_CLOSED_MESSAGE,
   statusFields,
@@ -259,5 +261,45 @@ describe("job closeout (CONTRACT.md Job closeout, 5b2d320)", () => {
         closedBy: null,
       },
     );
+  });
+
+  it("deleting a closed job throws JOB_CLOSED_DELETE_MESSAGE and the row still exists", async () => {
+    const sql = await db();
+    await closeJob(sql, "alice", "job-a", AT);
+    const before = await readProjectRow(sql, "alice", "job-a");
+    await assert.rejects(deleteOpenProject(sql, "alice", "job-a"), {
+      message: JOB_CLOSED_DELETE_MESSAGE,
+    });
+    assert.deepEqual(await readProjectRow(sql, "alice", "job-a"), before);
+  });
+
+  it("a non-owner deleting a closed job gets NOT_YOUR_JOB_MESSAGE (no hint it exists)", async () => {
+    const sql = await db();
+    await closeJob(sql, "alice", "job-a", AT);
+    await assert.rejects(deleteOpenProject(sql, "bob", "job-a"), { message: NOT_YOUR_JOB_MESSAGE });
+    await assert.rejects(deleteOpenProject(sql, "bob", "no-such-job"), {
+      message: NOT_YOUR_JOB_MESSAGE,
+    });
+    assert.ok(await readProjectRow(sql, "alice", "job-a"));
+  });
+
+  it("deleting an open job still works", async () => {
+    const sql = await db();
+    await deleteOpenProject(sql, "alice", "job-a");
+    assert.equal(await readProjectRow(sql, "alice", "job-a"), null);
+  });
+
+  it("archiving a closed job still works (same UPDATE archiveProject runs)", async () => {
+    const sql = await db();
+    await closeJob(sql, "alice", "job-a", AT);
+    const rows = await sql<{ id: string }>`
+      update projects set archived = ${true}, updated_at = ${AT.toISOString()}
+      where id = ${"job-a"} and user_id = ${"alice"}
+      returning id
+    `;
+    assert.equal(rows[0]?.id, "job-a");
+    const row = await readProjectRow(sql, "alice", "job-a");
+    assert.equal(row?.archived, true);
+    assert.equal(statusFields(row!).status, "closed");
   });
 });

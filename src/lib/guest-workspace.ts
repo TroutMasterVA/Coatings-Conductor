@@ -1,5 +1,5 @@
 import { guestMigrateResult, NOT_YOUR_JOB_MESSAGE } from "@/lib/guest-import";
-import { JOB_CLOSED_MESSAGE, statusFields, type CloseResult } from "@/lib/job-close";
+import { JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE, statusFields, type CloseResult } from "@/lib/job-close";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import {
   defaultSite,
@@ -203,6 +203,8 @@ export function guestArchiveProject(id: string, archived: boolean) {
 
 export function guestDeleteProject(id: string) {
   const s = read();
+  // Mirrors the server: a closed job is a record and can't be deleted (archive stays allowed).
+  if (s.projects.find((p) => p.id === id)?.status === "closed") throw new Error(JOB_CLOSED_DELETE_MESSAGE);
   s.projects = s.projects.filter((p) => p.id !== id);
   if (s.lastProjectId === id) s.lastProjectId = null;
   write(s);
