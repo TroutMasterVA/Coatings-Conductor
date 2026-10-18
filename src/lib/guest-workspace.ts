@@ -116,6 +116,7 @@ export function guestCreateProject(name: string, zip: string, seed?: Partial<Pro
     calibration: seed?.calibration ?? DEFAULT_CALIBRATION,
     site: seed?.site ?? defaultSite(),
     card: seed?.card ?? null,
+    extract: seed?.card ? (seed.extract ?? null) : null,
     pdsText: seed?.pdsText ?? "",
     recents: seed?.recents ?? [],
     outcomes: seed?.outcomes ?? [],
@@ -146,6 +147,7 @@ export function guestSaveProject(input: {
   calibration?: Calibration;
   site?: SiteContext;
   card?: FieldCardData | null;
+  extract?: ProjectFull["extract"];
   pdsText?: string;
   recents?: SavedCard[];
   outcomes?: FieldOutcome[];
@@ -161,6 +163,7 @@ export function guestSaveProject(input: {
     calibration: input.calibration ?? found.calibration,
     site: input.site ?? found.site,
     card: input.card !== undefined ? input.card : found.card,
+    extract: input.extract !== undefined ? input.extract : input.card !== undefined ? null : found.extract,
     pdsText: input.pdsText ?? found.pdsText,
     recents: input.recents ?? found.recents,
     outcomes: input.outcomes ?? found.outcomes,
