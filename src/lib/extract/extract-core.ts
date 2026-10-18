@@ -123,7 +123,13 @@ export function gateRemote(raw: ExtractResult, input: ExtractInput): ExtractResu
     {
       ...r,
       card: g.card,
-      provenance: { ...g.provenance },
+      // Keep the provider's own quote (exact line + page) wherever the gate kept the value.
+      provenance: Object.fromEntries(
+        Object.entries(g.provenance).map(([k, p]) => {
+          const own = r.provenance[k];
+          return [k, p !== "not-stated" && own && own !== "not-stated" ? own : p];
+        }),
+      ),
       unverifiedTemps: unverifiedTempsFromGate(g.provenance, g.droppedPaths),
     },
     [...r.warnings, ...extra],
