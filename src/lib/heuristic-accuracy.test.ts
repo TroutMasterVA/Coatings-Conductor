@@ -200,17 +200,28 @@ describe("°C/°F ranges convert each end by its own unit (#29)", () => {
     assert.equal(env("Air temperature: -10°C/14°F minimum").ambientTempMinF, 14);
   });
   it("°F with a °C pair in brackets: 'above 50°F [10°C]'", () => {
-    assert.equal(env("Surface temperature must be above 50°F [10°C] during application.").substrateTempMinF, 50);
+    assert.equal(
+      env("Surface temperature must be above 50°F [10°C] during application.").substrateTempMinF,
+      50,
+    );
   });
   it("degree glyph variants (˚, º, '° F') are read", () => {
     assert.equal(env("Surface temperature less than 120ºF (49ºC).").substrateTempMaxF, 120);
     assert.equal(env("Air temperature minimum 40 ° F (4 ° C).").ambientTempMinF, 40);
   });
   it("postfix qualifiers: 'Air: 35°F (1.7°C) minimum, 120°F (49°C) maximum'", () => {
-    assert.deepEqual(air("Temperature: Air: 35°F (1.7°C) minimum, 120°F (49°C) maximum"), [35, 120]);
+    assert.deepEqual(
+      air("Temperature: Air: 35°F (1.7°C) minimum, 120°F (49°C) maximum"),
+      [35, 120],
+    );
   });
   it("prefix qualifiers: 'SURFACE TEMPERATURE Minimum 35°F (2°C) Maximum 140°F (60°C)'", () => {
-    assert.deepEqual(sub("SURFACE TEMPERATURE Minimum 35°F (2°C) Maximum 140°F (60°C) Maximum for Brush & Roller 120°F (49°C)"), [35, 140]);
+    assert.deepEqual(
+      sub(
+        "SURFACE TEMPERATURE Minimum 35°F (2°C) Maximum 140°F (60°C) Maximum for Brush & Roller 120°F (49°C)",
+      ),
+      [35, 140],
+    );
   });
   it("label list after the values: 'minimum 50°F / 10°C maximum 110°F / 43°C air, surface and material'", () => {
     const t = "Temperature: minimum 50°F / 10°C maximum 110°F / 43°C air, surface and material";
@@ -218,7 +229,12 @@ describe("°C/°F ranges convert each end by its own unit (#29)", () => {
     assert.deepEqual(sub(t), [50, 110]);
   });
   it("wrapped PDF lines are re-joined: '…at air' / 'temperatures between 50-120°F'", () => {
-    assert.deepEqual(air("Use the Standard Activator at air\ntemperatures between 50-120°F (10-49°C) and when the"), [50, 120]);
+    assert.deepEqual(
+      air(
+        "Use the Standard Activator at air\ntemperatures between 50-120°F (10-49°C) and when the",
+      ),
+      [50, 120],
+    );
   });
   it("unit-column table: '°F °C air and surface temp 20 to 120 -7 to 49'", () => {
     const t = "Environmental conditions °F °C air and surface temp 20 to 120 -7 to 49";
@@ -232,26 +248,39 @@ describe("a temperature needs a °F/°C unit AND a gate label", () => {
     assert.equal(temperatureGates("Surface temperature minimum 50").length, 0);
   });
   it("unit but no air/surface label → not a gate", () => {
-    const e = env("Use only where application and curing can proceed at temperatures above: -10°C/14°F.");
+    const e = env(
+      "Use only where application and curing can proceed at temperatures above: -10°C/14°F.",
+    );
     assert.equal(e.ambientTempMinF, null);
     assert.equal(e.substrateTempMinF, null);
   });
   it("material / paint temperature is not air or surface", () => {
-    const e = env("Material: 40°F (4.5°C) minimum. Paint temperature must be 40°F (4.5°C) minimum.");
+    const e = env(
+      "Material: 40°F (4.5°C) minimum. Paint temperature must be 40°F (4.5°C) minimum.",
+    );
     assert.equal(e.ambientTempMinF, null);
     assert.equal(e.substrateTempMinF, null);
   });
   it("a bare temperature with no min/max is not a limit (drying/storage tables)", () => {
-    const e = env("Drying time Surface temperature 68°F [20°C] Touch dry hours 6. Storage Ambient temperature 77°F [25°C]");
+    const e = env(
+      "Drying time Surface temperature 68°F [20°C] Touch dry hours 6. Storage Ambient temperature 77°F [25°C]",
+    );
     assert.equal(e.substrateTempMinF, null);
     assert.equal(e.ambientTempMinF, null);
   });
   it("a space-only label row is a table header, not a gate", () => {
-    const e = env("Application Conditions Condition Material Surface Ambient Humidity Normal 40°-95°F (4°-35°C) 40°-110°F (4°-43°C)");
-    assert.deepEqual([e.ambientTempMinF, e.substrateTempMinF, e.substrateTempMaxF], [null, null, null]);
+    const e = env(
+      "Application Conditions Condition Material Surface Ambient Humidity Normal 40°-95°F (4°-35°C) 40°-110°F (4°-43°C)",
+    );
+    assert.deepEqual(
+      [e.ambientTempMinF, e.substrateTempMinF, e.substrateTempMaxF],
+      [null, null, null],
+    );
   });
   it("'if the surface temperature is 35°F to 60°F' is a condition, not the limit", () => {
-    const e = env("Accelerator must be used if the surface temperature is 35°F to 60°F (2°C to 16°C).");
+    const e = env(
+      "Accelerator must be used if the surface temperature is 35°F to 60°F (2°C to 16°C).",
+    );
     assert.equal(e.substrateTempMaxF, null);
   });
   it("storage limits are not application limits", () => {
@@ -268,15 +297,26 @@ describe("a temperature needs a °F/°C unit AND a gate label", () => {
 });
 
 describe("dew-point margin is a difference: never +32", () => {
-  it("5°F stays 5", () => assert.equal(dewPointSpreadFromText("at least 5°F above the dew point"), 5));
+  it("5°F stays 5", () =>
+    assert.equal(dewPointSpreadFromText("at least 5°F above the dew point"), 5));
   it("3°C alone → 5°F", () => assert.equal(dewPointSpreadFromText("3°C above the dew point"), 5));
   it("'3°C (5°F) above dew point' → 5", () =>
-    assert.equal(dewPointSpreadFromText("must always be a minimum of 3°C (5°F) above dew point"), 5));
+    assert.equal(
+      dewPointSpreadFromText("must always be a minimum of 3°C (5°F) above dew point"),
+      5,
+    ));
   it("'5°F [3°C] above the dew point' (brackets) → 5", () =>
-    assert.equal(dewPointSpreadFromText("a temperature that is at least 5°F [3°C] above the dew point"), 5));
+    assert.equal(
+      dewPointSpreadFromText("a temperature that is at least 5°F [3°C] above the dew point"),
+      5,
+    ));
   it("'5˚F (3˚C) above dew point' (ring glyph) → 5", () =>
-    assert.equal(dewPointSpreadFromText("Surface temperatures must be at least 5˚F (3˚C) above dew point"), 5));
-  it("a bare dew mention is silent", () => assert.equal(dewPointSpreadFromText("Apply above the dew point."), null));
+    assert.equal(
+      dewPointSpreadFromText("Surface temperatures must be at least 5˚F (3˚C) above dew point"),
+      5,
+    ));
+  it("a bare dew mention is silent", () =>
+    assert.equal(dewPointSpreadFromText("Apply above the dew point."), null));
   it("no unit → silent", () => assert.equal(dewPointSpreadFromText("5 above the dew point"), null));
   it("the margin never becomes an air or surface gate", () => {
     const e = env("Surface temperature must be at least 5°F (3°C) above the dew point.");
@@ -286,33 +326,69 @@ describe("dew-point margin is a difference: never +32", () => {
 });
 
 describe("mix ratio only from a sane pattern next to a mix label", () => {
-  it("'Mix Ratio: 1:1 by volume'", () => assert.equal(mixRatioFromText("Mix Ratio: 1:1 by volume Typical Thickness: 5"), "1:1 by volume"));
+  it("'Mix Ratio: 1:1 by volume'", () =>
+    assert.equal(
+      mixRatioFromText("Mix Ratio: 1:1 by volume Typical Thickness: 5"),
+      "1:1 by volume",
+    ));
   it("'Mixing ratio 4 parts resin to 1 part cure (by volume)'", () =>
-    assert.match(mixRatioFromText("Mixing ratio 4 parts resin to 1 part cure (by volume) Curing mechanism"), /^4 parts resin to 1 part cure/));
-  it("'Combine at a 1:1 ratio by volume'", () => assert.match(mixRatioFromText("Combine at a 1:1 ratio by volume in a container"), /^1:1/));
+    assert.match(
+      mixRatioFromText("Mixing ratio 4 parts resin to 1 part cure (by volume) Curing mechanism"),
+      /^4 parts resin to 1 part cure/,
+    ));
+  it("'Combine at a 1:1 ratio by volume'", () =>
+    assert.match(mixRatioFromText("Combine at a 1:1 ratio by volume in a container"), /^1:1/));
   it("label on its own line, value two lines down", () =>
-    assert.equal(mixRatioFromText("Mixing ratio\nBase 35539 : Curing agent 95530\n(3 : 1 by volume)"), "3 : 1 by volume"));
+    assert.equal(
+      mixRatioFromText("Mixing ratio\nBase 35539 : Curing agent 95530\n(3 : 1 by volume)"),
+      "3 : 1 by volume",
+    ));
   it("n:n:n is accepted", () => assert.equal(mixRatioFromText("Mix ratio: 2:1:1"), "2:1:1"));
-  it("a pump ratio is not a mix ratio", () => assert.equal(mixRatioFromText("Airless Spray Pump Ratio: 30:1 (min.)"), ""));
-  it("a ratio with no mix label is ignored", () => assert.equal(mixRatioFromText("Coverage 11: 1000 mil ft2 and 3:1 elsewhere"), ""));
-  it("big numbers are not a ratio", () => assert.equal(mixRatioFromText("Mix ratio 35539 : 95530"), ""));
+  it("a pump ratio is not a mix ratio", () =>
+    assert.equal(mixRatioFromText("Airless Spray Pump Ratio: 30:1 (min.)"), ""));
+  it("a ratio with no mix label is ignored", () =>
+    assert.equal(mixRatioFromText("Coverage 11: 1000 mil ft2 and 3:1 elsewhere"), ""));
+  it("big numbers are not a ratio", () =>
+    assert.equal(mixRatioFromText("Mix ratio 35539 : 95530"), ""));
 });
 
 describe("humidity and one-line values", () => {
   it("RH max from its labelled phrase", () => {
     assert.equal(relativeHumidityMaxFromText("Relative humidity: 85% maximum"), 85);
-    assert.equal(relativeHumidityMaxFromText("Relative humidity must be below 85% during curing."), 85);
+    assert.equal(
+      relativeHumidityMaxFromText("Relative humidity must be below 85% during curing."),
+      85,
+    );
   });
   it("a stated RH minimum is not the max", () =>
-    assert.equal(relativeHumidityMaxFromText("AMBIENT HUMIDITY Minimum 20% Maximum 90% CLEANUP"), 90));
+    assert.equal(
+      relativeHumidityMaxFromText("AMBIENT HUMIDITY Minimum 20% Maximum 90% CLEANUP"),
+      90,
+    ));
   it("a test condition or cure note is not a limit", () => {
-    assert.equal(relativeHumidityMaxFromText("Dry to handle in 45 minutes at 60°F and 50% relative humidity."), null);
-    assert.equal(relativeHumidityMaxFromText("determined under controlled temperatures and relative humidity below 85 %"), null);
-    assert.equal(relativeHumidityMaxFromText("Humidity levels below 50% will require longer cure times."), null);
-    assert.equal(relativeHumidityMaxFromText("100 °F (38 °C) 50% RH 50% RH 50% RH Touch: 4-5 hours"), null);
+    assert.equal(
+      relativeHumidityMaxFromText("Dry to handle in 45 minutes at 60°F and 50% relative humidity."),
+      null,
+    );
+    assert.equal(
+      relativeHumidityMaxFromText(
+        "determined under controlled temperatures and relative humidity below 85 %",
+      ),
+      null,
+    );
+    assert.equal(
+      relativeHumidityMaxFromText("Humidity levels below 50% will require longer cure times."),
+      null,
+    );
+    assert.equal(
+      relativeHumidityMaxFromText("100 °F (38 °C) 50% RH 50% RH 50% RH Touch: 4-5 hours"),
+      null,
+    );
   });
   it("labelled values stop at their own line", () => {
-    const card = heuristicExtract("Pot life: 4 hours at 77°F\nThinner: Reducer #111\nCoverage: 400 sq ft/gal");
+    const card = heuristicExtract(
+      "Pot life: 4 hours at 77°F\nThinner: Reducer #111\nCoverage: 400 sq ft/gal",
+    );
     assert.equal(card.shelfLife.mixedPotLife, "4 hours at 77°F");
     assert.equal(card.mixing.thinning, "Reducer #111");
   });
