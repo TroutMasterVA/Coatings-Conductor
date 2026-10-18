@@ -188,6 +188,13 @@ export function isPdf(file: { name: string; type?: string }): boolean {
   return mimeTypeFor(file) === PDF_MIME;
 }
 
+/** Same text as the server's FILE_TOO_LARGE (extract-core `checkRequest`), so browser and server copy match. */
+export function fileTooLargeMessage(maxBytes?: number): string {
+  const bytes = Math.min(maxBytes ?? MAX_UPLOAD_BYTES, MAX_UPLOAD_BYTES);
+  const mb = Math.round((bytes / (1024 * 1024)) * 10) / 10;
+  return `File is over ${mb} MB, the upload limit on this copy.`;
+}
+
 /** Client pre-check: size and obvious extension. Returns the code to show, or null when OK to send. */
 export function precheckFile(
   file: { name: string; type?: string; size: number },
@@ -457,6 +464,7 @@ export async function extractUpload(input: {
   maxUploadBytes?: number;
 }): Promise<ExtractState> {
   const pre = precheckFile(input.file, input.maxUploadBytes);
+  if (pre === "FILE_TOO_LARGE") return errorState(pre, undefined, fileTooLargeMessage(input.maxUploadBytes));
   if (pre) return errorState(pre);
   const pdf = isPdf(input.file);
   if (!input.signedIn) {
@@ -647,13 +655,12 @@ function withoutEditStamps(p: ClientProvenance): Provenance {
 }
 
 /**
- * The `extract` to send with a save (CONTRACT.md keep / clear / replace):
- * - fresh read (upload/paste) → the object to store (replace); never carries `edited`;
- * - reopened from the job record → `undefined` (omit = server keeps what it stored, stamps included);
- * - nothing read → `null` (clear).
+ * The object a fresh read would store (replace); never carries `edited`.
+ * `undefined` for anything that is not a fresh read: idle, reading, failed, or reopened from the record.
+ * Use `extractForSave` to build the save payload.
  */
-export function toSavedExtract(state: ExtractState): SavedExtract | null | undefined {
-  if (state.kind !== "done") return null;
+export function toSavedExtract(state: ExtractState): SavedExtract | undefined {
+  if (state.kind !== "done") return undefined;
   if (state.source === "saved") return undefined;
   const r = state.result;
   // #24's helper builds the saved object; client-only state (session edits) never goes in.
@@ -663,6 +670,24 @@ export function toSavedExtract(state: ExtractState): SavedExtract | null | undef
     { ...r, provider: r.provider, provenance: withoutEditStamps(r.provenance) },
     typeof at === "string" && !Number.isNaN(Date.parse(at)) ? at : undefined,
   );
+}
+
+/**
+ * The `extract` field for a save (CONTRACT.md keep / clear / replace). Omit (`undefined`) unless:
+ * - a fresh successful read not yet stored → the object (replace), stamps stripped;
+ * - the card was explicitly replaced without a read (sample, recent) → `null` (clear).
+ * Idle, still reading, failed, unparseable saved extract, or a reopened job → `undefined`, so the
+ * server keeps the stored quotes and Edited-by stamps.
+ */
+export function extractForSave(
+  state: ExtractState,
+  opts: { alreadyStored?: boolean; cardReplaced?: boolean } = {},
+): SavedExtract | null | undefined {
+  if (state.kind === "done") {
+    if (state.source === "saved" || opts.alreadyStored) return undefined;
+    return toSavedExtract(state);
+  }
+  return opts.cardReplaced ? null : undefined;
 }
 
 /** Draft / unverified-temps flags for display. Missing = false. */
