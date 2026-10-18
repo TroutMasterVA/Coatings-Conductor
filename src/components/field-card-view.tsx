@@ -317,7 +317,7 @@ export function FieldCardView({
 
           {draft ? (
             <p
-              role="alert"
+              role="status"
               data-testid="draft-banner"
               className="mt-3 rounded-md bg-nogo-soft px-3 py-2 text-sm font-semibold text-nogo"
             >

@@ -12,8 +12,14 @@ import { WeatherPanel } from "@/components/weather-panel";
 import { isUnauthorized, returnToLogin } from "@/lib/auth/expired";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
-import { buildCardFromPds } from "@/lib/on-device-extract";
-import { NO_FLAGS, readExtractFlags, windowHeadline, type ExtractFlags } from "@/lib/extract-flags";
+import { onDeviceProvider } from "@/lib/extract/on-device-provider";
+import {
+  flagsForResult,
+  flagsForSaved,
+  NO_FLAGS,
+  windowHeadline,
+  type ExtractFlags,
+} from "@/lib/extract-flags";
 import { loadForecast } from "@/lib/forecast";
 import {
   DEFAULT_CALIBRATION,
@@ -168,7 +174,7 @@ function App({ user }: { user: AppUser | null }) {
     setOutcomes(full.outcomes);
     setForecast(null);
     setWxError(null);
-    setFlags(readExtractFlags(full));
+    setFlags(full.card ? flagsForSaved(full) : NO_FLAGS);
     setMode("job");
     // Update the existing row in place — do not prepend (that reordered + duplicated under race).
     setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), toSummary(full)));
@@ -317,18 +323,20 @@ function App({ user }: { user: AppUser | null }) {
     setRecents((prev) => [entry, ...prev.filter((r) => r.card.product.name !== next.product.name)].slice(0, 8));
   }
 
-  /** `extract` = the server/provider extract result, when there is one; absent → flags off. */
-  function applyCard(next: FieldCardData, extract?: unknown) {
+  /** Built-in samples pass NO_FLAGS; everything else passes flags from the read or the saved record. */
+  function applyCard(next: FieldCardData, nextFlags: ExtractFlags) {
     setCard(next);
-    setFlags(readExtractFlags(extract));
+    setFlags(nextFlags);
     setSite((prev) => siteFromCard(next, prev));
   }
 
-  function handleExtract() {
+  async function handleExtract() {
     setExtracting(true);
     try {
-      const next = buildCardFromPds(text);
-      applyCard(next);
+      // #24's on-device provider: same number gate + draft/unverifiedTemps flags as the server.
+      const result = await onDeviceProvider.extract({ text });
+      const next = result.card;
+      applyCard(next, flagsForResult(result));
       remember(next, zip);
       toast.success("Review every field.");
       if (zip.length === 5) void handleForecast(next, zip);
@@ -571,13 +579,13 @@ function App({ user }: { user: AppUser | null }) {
               onExtract={() => void handleExtract()}
               onSample={(next, raw) => {
                 setText(raw);
-                applyCard(next);
+                applyCard(next, NO_FLAGS);
                 remember(next, zip);
                 if (zip.length === 5) void handleForecast(next, zip);
               }}
               loading={extracting}
               recents={recents}
-              onOpenRecent={(next) => applyCard(next)}
+              onOpenRecent={(next) => applyCard(next, flagsForSaved(null))}
             />
           </div>
 

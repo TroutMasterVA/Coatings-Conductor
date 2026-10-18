@@ -1,10 +1,14 @@
 /**
  * Draft / unverified-temperature flags from an extract (FE-3).
  *
- * Contract (docs/release-beta/CONTRACT.md on #24/#26): the ok response carries
- * `extract: SavedExtract` with `draft` and `unverifiedTemps`; the job record saves it as
- * `extract` next to `card`. LEAD also allowed top-level `draft` / `unverifiedTemps` on the
- * response. Missing = false. This is the one place the UI reads them.
+ * Contract (docs/release-beta/CONTRACT.md on #24 @ 0903985): the extract response is flat, with
+ * top-level `draft?` / `unverifiedTemps?` (missing = false). The job record saves
+ * `extract: toSavedExtract(result)` next to `card`, so a reopened job reads
+ * `extract.draft` / `extract.unverifiedTemps`. There is no nested `extract` on the response.
+ *
+ * LEAD rule: anything not verified by Azure shows as a draft. On-device results, recent cards,
+ * and reopened jobs with no extract (or a non-Azure one) are drafts. Built-in samples stay flag-free.
+ * This is the one place the UI reads them.
  */
 export const DRAFT_BANNER = "Draft — verify every number";
 export const WINDOWS_PAUSED =
@@ -24,6 +28,29 @@ export function readExtractFlags(source: unknown): ExtractFlags {
   const saved = obj(top.extract);
   const pick = (key: "draft" | "unverifiedTemps") => saved?.[key] === true || top[key] === true;
   return { draft: pick("draft"), unverifiedTemps: pick("unverifiedTemps") };
+}
+
+/** Fresh extract result (flat). Not from Azure → always a draft. */
+export function flagsForResult(result: unknown): ExtractFlags {
+  const r = obj(result);
+  if (!r) return { draft: true, unverifiedTemps: true };
+  return {
+    draft: r.provider !== "azure" || r.draft === true,
+    unverifiedTemps: r.unverifiedTemps === true,
+  };
+}
+
+/**
+ * Reopened job or recent card. No saved extract → draft + unverified (nothing verified it).
+ * Saved non-Azure extract → draft, temps as saved.
+ */
+export function flagsForSaved(record: unknown): ExtractFlags {
+  const x = obj(obj(record)?.extract);
+  if (!x) return { draft: true, unverifiedTemps: true };
+  return {
+    draft: x.provider !== "azure" || x.draft === true,
+    unverifiedTemps: x.unverifiedTemps === true,
+  };
 }
 
 /** Headline for the printed card / PDF stand line. Paused replaces the window call. */

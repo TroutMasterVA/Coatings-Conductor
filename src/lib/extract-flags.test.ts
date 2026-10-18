@@ -2,6 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   DRAFT_BANNER,
+  flagsForResult,
+  flagsForSaved,
   NO_FLAGS,
   readExtractFlags,
   showWindows,
@@ -72,5 +74,40 @@ describe("draft / unverified-temps flags", () => {
     assert.deepEqual(f, NO_FLAGS);
     assert.equal(showWindows(true, f), true);
     assert.equal(showWindows(false, f), false);
+  });
+  it("LEAD: anything not verified by Azure is a draft", () => {
+    assert.deepEqual(flagsForResult({ provider: "on-device", unverifiedTemps: true }), {
+      draft: true,
+      unverifiedTemps: true,
+    });
+    assert.deepEqual(flagsForResult({ provider: "on-device" }), {
+      draft: true,
+      unverifiedTemps: false,
+    });
+    assert.deepEqual(flagsForResult({ provider: "azure" }), NO_FLAGS);
+    assert.deepEqual(flagsForResult({ provider: "azure", draft: true }), {
+      draft: true,
+      unverifiedTemps: false,
+    });
+    assert.deepEqual(flagsForResult(null), { draft: true, unverifiedTemps: true });
+  });
+  it("reopen / recents: no extract → draft + unverified; non-Azure → draft; Azure → as saved", () => {
+    assert.deepEqual(flagsForSaved({ card: {} }), { draft: true, unverifiedTemps: true });
+    assert.deepEqual(flagsForSaved(null), { draft: true, unverifiedTemps: true });
+    assert.deepEqual(
+      flagsForSaved({ extract: { provider: "on-device", unverifiedTemps: false } }),
+      {
+        draft: true,
+        unverifiedTemps: false,
+      },
+    );
+    assert.deepEqual(
+      flagsForSaved({ extract: { provider: "azure", draft: false, unverifiedTemps: false } }),
+      NO_FLAGS,
+    );
+    assert.deepEqual(flagsForSaved({ extract: { provider: "azure", unverifiedTemps: true } }), {
+      draft: false,
+      unverifiedTemps: true,
+    });
   });
 });

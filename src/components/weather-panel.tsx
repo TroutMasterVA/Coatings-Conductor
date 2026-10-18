@@ -537,6 +537,9 @@ export function WeatherPanel({
           className="rounded-xl bg-caution-soft px-4 py-6 text-center text-sm font-semibold text-ink"
         >
           {WINDOWS_PAUSED}
+          <span className="mt-1 block text-xs font-normal text-muted">
+            Limits typed in by hand don't unpause the windows yet.
+          </span>
         </div>
       ) : forecast ? (
         <div className="rise-in space-y-4">
