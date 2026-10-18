@@ -103,6 +103,13 @@ function withDeadline<T>(p: Promise<T>, ms: number, ctl: AbortController): Promi
   });
 }
 
+/** Keep `extract.warnings` identical to the top-level list the UI shows. */
+function withWarnings(r: ExtractResult, warnings: ExtractWarning[]): ExtractResult {
+  const seen = new Set<string>();
+  const list = warnings.filter((w) => (seen.has(w.code) ? false : (seen.add(w.code), true)));
+  return { ...r, warnings: list, extract: { ...r.extract, warnings: list } };
+}
+
 function fail(code: ExtractErrorCode, message: string, retryAfterSec?: number): ExtractResponse {
   return { ok: false, error: retryAfterSec ? { code, message, retryAfterSec } : { code, message } };
 }
@@ -253,15 +260,13 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
 
   try {
     const r = await deps.onDevice.extract(input);
-    const seen = new Set<string>();
-    const merged = [...warnings, ...r.warnings].filter((w) => (seen.has(w.code) ? false : (seen.add(w.code), true)));
-    const res: ExtractResponse = { ok: true, ...r, warnings: merged };
+    const res: ExtractResponse = { ok: true, ...withWarnings(r, [...warnings, ...r.warnings]) };
     return done(res, r.provider, azure ? "fallback" : "ok");
   } catch (err) {
     if (imageOnly) {
       // A scrap of text layer that reads as nothing: blank card (all Not stated), never invented values.
       const blank = await deps.onDevice.extract({ ...input, text: "", pages: undefined });
-      return done({ ok: true, ...blank, warnings }, blank.provider, azure ? "fallback" : "ok");
+      return done({ ok: true, ...withWarnings(blank, [...warnings, ...blank.warnings]) }, blank.provider, azure ? "fallback" : "ok");
     }
     const message = err instanceof Error && err.message ? err.message : "Could not read this sheet.";
     return done(fail("EXTRACT_FAILED", message), "none", "EXTRACT_FAILED");
