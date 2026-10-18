@@ -281,13 +281,14 @@ describe("azure provider on mocked fixtures", () => {
     const { p } = provider(m);
     // File only: no request text, no pages.
     const r = await p.extract({ fileBase64: f.fileBase64, mimeType: "application/pdf" });
-    assert.equal(typeof r.source, "string");
-    assert.ok(r.source.trim().length > 0);
-    assert.match(r.source, /Ratio: 4:1 Part A to Part B by volume/);
-    assert.match(r.source, /Surface: 20°F \(-7°C\)/, "labeled table rows are in the source");
+    assert.equal(typeof r.source.text, "string");
+    assert.ok(r.source.text.trim().length > 0);
+    assert.match(r.source.text, /Ratio: 4:1 Part A to Part B by volume/);
+    assert.match(r.source.text, /Surface: 20°F \(-7°C\)/, "labeled table rows are in the source");
+    assert.ok(Array.isArray(r.source.pages) && r.source.pages.length > 0, "per-page text is kept");
     // Every kept quote is in the returned source, so #26's second check can verify it.
     for (const [path, prov] of Object.entries(r.provenance)) {
-      if (prov !== "not-stated") assert.ok(quoteIsVerbatim(prov.quote, r.source), path);
+      if (prov !== "not-stated") assert.ok(quoteIsVerbatim(prov.quote, r.source.text), path);
     }
     // Not part of what gets saved.
     assert.equal("source" in toSavedExtract(r), false);

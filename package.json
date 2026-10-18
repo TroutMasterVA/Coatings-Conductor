@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
     "practice:rollback": "node scripts/practice-rollback.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/no-grok-broker.test.ts src/lib/auth/login-lockout.test.ts src/lib/auth/preview-hosts.test.ts src/lib/silent-sheet.test.ts src/lib/layman-bullets.test.ts src/lib/prep-by-substrate.test.ts src/lib/extract/on-device-provider.test.ts src/lib/extract/azure/azure-provider.test.ts src/lib/extract/azure/page-images.test.ts src/lib/guest-import.test.ts src/lib/forecast-cap.test.ts src/lib/project-list.test.ts",
+    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/no-grok-broker.test.ts src/lib/auth/login-lockout.test.ts src/lib/auth/preview-hosts.test.ts src/lib/silent-sheet.test.ts src/lib/layman-bullets.test.ts src/lib/prep-by-substrate.test.ts src/lib/extract/on-device-provider.test.ts src/lib/extract/extract-core.test.ts src/lib/job-extract.test.ts src/lib/job-extract-stamp.test.ts src/lib/extract/server-read.test.ts src/lib/pdf-lines.test.ts src/lib/extract/azure/azure-provider.test.ts src/lib/extract/azure/page-images.test.ts src/lib/guest-import.test.ts src/lib/forecast-cap.test.ts src/lib/project-list.test.ts",
     "azure:check": "node --experimental-strip-types scripts/azure-check.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
@@ -61,6 +61,7 @@
     "jspdf": "^4.2.1",
     "kysely": "^0.28.5",
     "lucide-react": "^0.510.0",
+    "mammoth": "^1.13.0",
     "pdfjs-dist": "^6.2.108",
     "pg": "^8.16.3",
     "react": "^19.2.0",

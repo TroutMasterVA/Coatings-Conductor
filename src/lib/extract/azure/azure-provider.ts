@@ -33,12 +33,13 @@ export type AzureExtractResult = ExtractResult & {
   draft: false;
   unverifiedTemps: boolean;
   /**
-   * INTERNAL, SERVER-ONLY. The Document Intelligence layout text (`sourceFromLayout(layout).text`:
-   * per page, lines then labeled table rows) that every quote was checked against. #26's
-   * `runExtract` uses it for its second number check, including file-only uploads with no request
-   * `text`. The server MUST strip it before responding: it is never sent to the browser and never saved.
+   * INTERNAL, SERVER-ONLY. The Document Intelligence layout (`sourceFromLayout(layout)`: `text` is
+   * per page, lines then labeled table rows; `pages` is one entry per page) that every quote was
+   * checked against. Same `{ text, pages? }` shape as #26's `ExtractResult.source`; `runExtract`
+   * uses it for its second number check, including file-only uploads with no request `text`. The
+   * server MUST strip it before responding: it is never sent to the browser and never saved.
    */
-  source: string;
+  source: SourceDoc;
 };
 
 export type AzureLog = (e: {
@@ -242,7 +243,7 @@ export function createAzureProvider(deps: AzureDeps = {}) {
         draft: false,
         unverifiedTemps,
         // Internal only: stripped by the server before the response (see AzureExtractResult.source).
-        source: source.text,
+        source: { text: source.text, pages: source.pages },
       };
     } catch (err) {
       const e = toAzureError(err, stage);
