@@ -1,3 +1,4 @@
+import { formatTempRange } from "./temp-range.ts";
 import type { FieldCardData } from "./types.ts";
 
 /**
@@ -40,10 +41,10 @@ export function buildLaymanBullets(card: FieldCardData): string[] {
   const env = card.environmentals;
   const gates: string[] = [];
   if (env.ambientTempMinF != null || env.ambientTempMaxF != null) {
-    gates.push(`air ${env.ambientTempMinF ?? "—"}–${env.ambientTempMaxF ?? "—"}°F`);
+    gates.push(`air ${formatTempRange(env.ambientTempMinF, env.ambientTempMaxF)}`);
   }
   if (env.substrateTempMinF != null || env.substrateTempMaxF != null) {
-    gates.push(`substrate ${env.substrateTempMinF ?? "—"}–${env.substrateTempMaxF ?? "—"}°F`);
+    gates.push(`substrate ${formatTempRange(env.substrateTempMinF, env.substrateTempMaxF)}`);
   }
   if (env.dewPointSpreadMinF != null) {
     gates.push(`dew spread ≥ ${env.dewPointSpreadMinF}°F`);
