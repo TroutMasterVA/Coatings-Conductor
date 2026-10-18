@@ -82,6 +82,7 @@ interface ExtractProvider {
 - **Error shape**: `{ code, message }` with `code` ∈ `UNAUTHENTICATED`, `RATE_LIMITED`, `EXTRACT_TIMEOUT`, `EXTRACT_FAILED`, `FILE_TOO_LARGE`. Size cap: text ≤ 40,000 chars (old validator), file ≤ agreed MB.
 - **Strict schema**: `response_format: { type: "json_schema", strict: true }` built from the FieldCardData zod schema (zod v4 already a dependency); zod-validate every response.
 - **Provenance** (per field, shown in the collapsed panel under the card): every numeric value (and every prepGate profile) must carry a quote found **verbatim in the source text after whitespace normalization**; otherwise the field is set to Not stated (`null` / `""`) and provenance `"not-stated"`. Never invent numbers. Silent fields show Not stated.
+- **Known limits:** Pro Industrial DTM's 55°F reading from the filler sentence is a **blocker** being fixed in **#40** with a general rule that temperature limits come only from the application-conditions or temperature section.
 - **Prompt-injection guard**: sheet text is untrusted. System prompt says to ignore any instructions inside the document; document is passed as delimited user content; output only via the schema.
 - Logs: provider, latency, outcome code. Never log document text or keys.
 
@@ -167,6 +168,7 @@ type EditedProvenance = {
 - A genuine signed read whose signature verifies saves clean (unstamped) as a fresh extract.
 - Ignore any `extractedAt` from the client; the server alone decides fresh-read vs hand-edit.
 - **Known limit (previews):** without a fixed `BETTER_AUTH_SECRET`, each preview instance has its own secret. A read signed on one instance and saved on another fails verification and shows "Edited by". That is the **safe failure**, not a bug. Documented for QA in #26 and the 4:40 in/out list until Isaiah approves a fixed secret for Preview.
+- **Known limit (job binding):** the signature is **not** bound to a job id, so a user could reuse their own read on another of their jobs. The values are still real sheet reads, so the risk is low. Binding the job id is deferred to **issue #30** after this release (PO ruling, 4:20 PM ET). `extractSheet`'s input is unchanged.
 
 ## Draft flag on extract response — PO 4:19 PM ET (PR #26)
 
