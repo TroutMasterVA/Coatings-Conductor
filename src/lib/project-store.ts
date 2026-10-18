@@ -1,11 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
-import { closeJob, deleteOpenProject, statusFields, throwWriteRefused, writeOpenProject, type JobStatus } from "@/lib/job-close";
+import { closeJob, deleteOpenProject, statusFields, throwWriteRefused, type JobStatus } from "@/lib/job-close";
 import { listProjectRows, openProjectRow, readProjectRow, toRowSummary, type ProjectRow } from "@/lib/project-rows";
 import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
+import { decodeSavedExtract, saveJobCard, encodeSavedExtract, parseSavedExtract } from "@/lib/job-extract";
+import type { SavedExtract } from "@/lib/extract/provider";
 import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, SavedCard } from "@/lib/types";
 
 export type ProjectSummary = {
@@ -28,6 +30,8 @@ export type ProjectFull = ProjectSummary & {
   calibration: Calibration;
   site: SiteContext;
   card: FieldCardData | null;
+  /** Source quotes + reader for the card (BE-3). Missing on older jobs. */
+  extract?: SavedExtract | null;
   pdsText: string;
   recents: SavedCard[];
   outcomes: FieldOutcome[];
@@ -70,6 +74,7 @@ function toFull(row: ProjectRow): ProjectFull {
       bodies: site.bodies,
     },
     card: parseJson<FieldCardData | null>(row.card_json, null),
+    extract: decodeSavedExtract(row.extract_json),
     pdsText: row.pds_text ?? "",
     recents: parseJson<SavedCard[]>(row.recents_json, []),
     outcomes: parseJson<FieldOutcome[]>(row.outcomes_json, []),
@@ -122,17 +127,18 @@ export const createProject = createServerFn({ method: "POST" })
     const cal = data.seed?.calibration ?? DEFAULT_CALIBRATION;
     const site = data.seed?.site ?? defaultSite();
     const card = data.seed?.card ?? null;
+    const extract = card ? parseSavedExtract(data.seed?.extract) : null;
     const pdsText = data.seed?.pdsText ?? "";
     const recents = data.seed?.recents ?? [];
     const outcomes = data.seed?.outcomes ?? [];
     await sql`
       insert into projects (
-        id, user_id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+        id, user_id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
         recents_json, outcomes_json, created_at, updated_at, last_opened_at
       ) values (
         ${id}, ${context.userId}, ${data.name}, ${data.zip}, false,
         ${JSON.stringify(cal)}, ${JSON.stringify(site)}, ${card ? JSON.stringify(card) : null},
-        ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
+        ${encodeSavedExtract(extract)}, ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
         ${now}, ${now}, ${now}
       )
     `;
@@ -154,6 +160,7 @@ export const createProject = createServerFn({ method: "POST" })
       calibration: cal,
       site,
       card,
+      extract,
       pdsText,
       recents,
       outcomes,
@@ -185,6 +192,8 @@ export const saveProject = createServerFn({ method: "POST" })
       calibration?: Calibration;
       site?: SiteContext;
       card?: FieldCardData | null;
+      /** Saved next to `card`. Missing keeps the stored extract (and its edit stamps); `null` clears it; an object replaces it. */
+      extract?: SavedExtract | null;
       pdsText?: string;
       recents?: SavedCard[];
       outcomes?: FieldOutcome[];
@@ -200,27 +209,25 @@ export const saveProject = createServerFn({ method: "POST" })
     const zip = data.zip != null ? data.zip.replace(/\D/g, "").slice(0, 5) : row.zip;
     const cal = data.calibration ?? parseJson(row.calibration_json, DEFAULT_CALIBRATION);
     const site = data.site ?? parseJson(row.site_json, defaultSite());
-    const card = data.card !== undefined ? data.card : parseJson<FieldCardData | null>(row.card_json, null);
     const pdsText = data.pdsText ?? row.pds_text;
     const recents = data.recents ?? parseJson<SavedCard[]>(row.recents_json, []);
     const outcomes = data.outcomes ?? parseJson<FieldOutcome[]>(row.outcomes_json, []);
     const now = new Date().toISOString();
-    const updated = await writeOpenProject<ProjectRow>(
-      sql,
-      context.userId,
-      data.id,
-      {
-        name,
-        zip,
-        calibrationJson: JSON.stringify(cal),
-        siteJson: JSON.stringify(site),
-        cardJson: card ? JSON.stringify(card) : null,
-        pdsText,
-        recentsJson: JSON.stringify(recents),
-        outcomesJson: JSON.stringify(outcomes),
-      },
-      now,
-    );
+    // Card + extract + the rest in ONE statement, checked `status = 'open'` (closed job -> JOB_CLOSED_MESSAGE).
+    // Missing `extract` keeps the stored quotes; null clears; an object replaces. Fields that differ
+    // from the stored card get a server edit stamp (CONTRACT.md "Edit stamp"); a client `edited` is ignored.
+    const saved = await saveJobCard(sql, context.userId, data.id, { card: data.card, extract: data.extract }, now, undefined, {
+      name,
+      zip,
+      calibrationJson: JSON.stringify(cal),
+      siteJson: JSON.stringify(site),
+      pdsText,
+      recentsJson: JSON.stringify(recents),
+      outcomesJson: JSON.stringify(outcomes),
+    });
+    if (!saved) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    const updated = await readProjectRow(sql, context.userId, data.id);
+    if (!updated) throw new Error(NOT_YOUR_JOB_MESSAGE);
     return toSummary(updated);
   });
 
@@ -323,6 +330,7 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
       const cal = p.calibration ?? DEFAULT_CALIBRATION;
       const site = p.site ?? defaultSite();
       const card = p.card ?? null;
+      const extract = card ? parseSavedExtract(p.extract) : null;
       const pdsText = typeof p.pdsText === "string" ? p.pdsText : "";
       const recents = Array.isArray(p.recents) ? p.recents : [];
       const outcomes = Array.isArray(p.outcomes) ? p.outcomes : [];
@@ -332,13 +340,13 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
       const closed = statusFields({ status: p.status, closed_at: p.closedAt ?? null, closed_by: p.closedBy ?? null });
       await sql`
         insert into projects (
-          id, user_id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+          id, user_id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
           recents_json, outcomes_json, created_at, updated_at, last_opened_at,
           status, closed_at, closed_by
         ) values (
           ${id}, ${context.userId}, ${name}, ${zip}, ${Boolean(p.archived)},
           ${JSON.stringify(cal)}, ${JSON.stringify(site)}, ${card ? JSON.stringify(card) : null},
-          ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
+          ${encodeSavedExtract(extract)}, ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
           ${now}, ${updated}, ${lastOpened},
           ${closed.status}, ${closed.closedAt}, ${closed.closedBy}
         )

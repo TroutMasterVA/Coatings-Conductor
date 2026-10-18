@@ -12,18 +12,26 @@ import {
   isJobClosed,
   JOB_CLOSED_MESSAGE,
   statusFields,
-  writeOpenProject,
-  type ProjectWriteValues,
 } from "./job-close.ts";
 import {
-  listProjectRows,
-  openProjectRow,
-  readProjectRow,
-  toRowSummary,
-  type ProjectRow,
-} from "./project-rows.ts";
+  applyExtractOnSave,
+  readJobExtract,
+  saveJobCard,
+  writeJobExtract,
+  type JobSaveFields,
+} from "./job-extract.ts";
+import { runExtract } from "./extract/extract-core.ts";
+import { onDeviceProvider } from "./extract/on-device-provider.ts";
+import type { SavedExtract } from "./extract/provider.ts";
+import type { FieldCardData } from "./types.ts";
+import { listProjectRows, openProjectRow, readProjectRow, toRowSummary } from "./project-rows.ts";
 
-const MIGRATIONS = ["0001_auth.sql", "0002_projects.sql", "0004_job_status.sql"];
+const MIGRATIONS = [
+  "0001_auth.sql",
+  "0002_projects.sql",
+  "0003_job_extract.sql",
+  "0004_job_status.sql",
+];
 
 async function db(): Promise<Sql> {
   const pg = new PGlite();
@@ -54,18 +62,34 @@ async function db(): Promise<Sql> {
   return sql;
 }
 
-function valuesFrom(row: ProjectRow, patch: Partial<ProjectWriteValues> = {}): ProjectWriteValues {
-  return {
-    name: row.name,
-    zip: row.zip,
-    calibrationJson: row.calibration_json,
-    siteJson: row.site_json,
-    cardJson: row.card_json,
-    pdsText: row.pds_text,
-    recentsJson: row.recents_json,
-    outcomesJson: row.outcomes_json,
-    ...patch,
-  };
+const EXTRACT: SavedExtract = {
+  provider: "on-device",
+  provenance: { "environmentals.windMaxMph": "not-stated" },
+  warnings: [],
+  extractedAt: "2026-10-18T19:20:00.000Z",
+  draft: true,
+  unverifiedTemps: false,
+};
+
+const FIELDS: JobSaveFields = {
+  name: "Renamed",
+  zip: "22030",
+  calibrationJson: "{}",
+  siteJson: "{}",
+  pdsText: "edited",
+  recentsJson: "[]",
+  outcomesJson: "[]",
+};
+
+/** The saveProject write path: card + extract + fields in one checked statement. */
+function save(
+  sql: Sql,
+  user: string,
+  id: string,
+  input: { card?: FieldCardData | null; extract?: unknown } = {},
+  fields: JobSaveFields | undefined = FIELDS,
+) {
+  return saveJobCard(sql, user, id, input, AT.toISOString(), "test-secret", fields);
 }
 
 const AT = new Date("2026-10-18T20:15:00.000Z");
@@ -116,72 +140,100 @@ describe("job closeout (CONTRACT.md Job closeout, 5b2d320)", () => {
     const sql = await db();
     await closeJob(sql, "alice", "job-a", AT);
     const before = await readProjectRow(sql, "alice", "job-a");
-    await assert.rejects(
-      writeOpenProject(
-        sql,
-        "alice",
-        "job-a",
-        valuesFrom(before!, { name: "Renamed", pdsText: "edited" }),
-        new Date().toISOString(),
-      ),
-      { message: JOB_CLOSED_MESSAGE },
-    );
+    await assert.rejects(save(sql, "alice", "job-a"), { message: JOB_CLOSED_MESSAGE });
     assert.deepEqual(await readProjectRow(sql, "alice", "job-a"), before);
   });
 
-  it("a card edit / autosave carrying a card on a closed job is refused too", async () => {
+  it("saveJobCard (card edit / autosave) on a closed job is refused and the card is unchanged", async () => {
     const sql = await db();
     await closeJob(sql, "alice", "job-a", AT);
-    const before = await readProjectRow(sql, "alice", "job-a");
-    const card = JSON.stringify({ productName: "Edited by hand" });
-    await assert.rejects(
-      writeOpenProject(
-        sql,
-        "alice",
-        "job-a",
-        valuesFrom(before!, { cardJson: card }),
-        AT.toISOString(),
-      ),
-      {
-        message: JOB_CLOSED_MESSAGE,
-      },
-    );
+    const card = { productName: "Edited by hand" } as unknown as FieldCardData;
+    await assert.rejects(save(sql, "alice", "job-a", { card }, undefined), {
+      message: JOB_CLOSED_MESSAGE,
+    });
     assert.equal((await readProjectRow(sql, "alice", "job-a"))?.card_json, null);
   });
 
-  it("a close that lands after the save read still blocks the write (status is in the WHERE)", async () => {
+  it("extract-on-save on a closed job is refused and the row is unchanged", async () => {
     const sql = await db();
-    const staleRead = await readProjectRow(sql, "alice", "job-a"); // save read it while open
-    await closeJob(sql, "alice", "job-a", AT); // close wins the race
-    await assert.rejects(
-      writeOpenProject(
-        sql,
-        "alice",
-        "job-a",
-        valuesFrom(staleRead!, { name: "Late" }),
-        AT.toISOString(),
-      ),
-      {
-        message: JOB_CLOSED_MESSAGE,
-      },
-    );
-    assert.equal((await readProjectRow(sql, "alice", "job-a"))?.name, "Tank 1");
+    await closeJob(sql, "alice", "job-a", AT);
+    const before = await readProjectRow(sql, "alice", "job-a");
+    await assert.rejects(save(sql, "alice", "job-a", { extract: EXTRACT }), {
+      message: JOB_CLOSED_MESSAGE,
+    });
+    await assert.rejects(save(sql, "alice", "job-a", { extract: null }), {
+      message: JOB_CLOSED_MESSAGE,
+    });
+    await assert.rejects(writeJobExtract(sql, "alice", "job-a", EXTRACT), {
+      message: JOB_CLOSED_MESSAGE,
+    });
+    await assert.rejects(applyExtractOnSave(sql, "alice", "job-a", EXTRACT), {
+      message: JOB_CLOSED_MESSAGE,
+    });
+    assert.deepEqual(await readProjectRow(sql, "alice", "job-a"), before);
+    assert.equal(await readJobExtract(sql, "alice", "job-a"), null);
   });
 
-  it("save on an open job still works; a non-owner save gets NOT_YOUR_JOB_MESSAGE", async () => {
+  it("a close that lands after the save's read still blocks the write (status is in the UPDATE)", async () => {
+    const base = await db();
+    let closed = false;
+    // Close the job right after saveJobCard reads the row, before its UPDATE runs.
+    const racing = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      const rows = await base(strings, ...values);
+      if (!closed && strings.join("?").includes("select card_json, extract_json, status")) {
+        closed = true;
+        await closeJob(base, "alice", "job-a", AT);
+      }
+      return rows;
+    }) as Sql;
+    racing.query = base.query;
+    await assert.rejects(save(racing, "alice", "job-a", { extract: EXTRACT }), {
+      message: JOB_CLOSED_MESSAGE,
+    });
+    const row = await readProjectRow(base, "alice", "job-a");
+    assert.equal(row?.name, "Tank 1");
+    assert.equal(row?.extract_json, null);
+    assert.equal(statusFields(row!).status, "closed");
+  });
+
+  it("save on an open job still works in one statement; a non-owner save changes nothing", async () => {
     const sql = await db();
+    const plan = await save(sql, "alice", "job-a", { extract: EXTRACT });
+    assert.equal(plan?.action, "replaced");
     const row = await readProjectRow(sql, "alice", "job-a");
-    const saved = await writeOpenProject<ProjectRow>(
-      sql,
-      "alice",
-      "job-a",
-      valuesFrom(row!, { name: "Tank 1 east" }),
-      AT.toISOString(),
-    );
-    assert.equal(saved.name, "Tank 1 east");
-    await assert.rejects(
-      writeOpenProject(sql, "bob", "job-a", valuesFrom(row!), AT.toISOString()),
-      { message: NOT_YOUR_JOB_MESSAGE },
+    assert.equal(row?.name, "Renamed");
+    assert.equal(row?.pds_text, "edited");
+    assert.ok(row?.extract_json);
+    assert.equal(await save(sql, "bob", "job-a"), null);
+    assert.equal(await writeJobExtract(sql, "bob", "job-a", EXTRACT), false);
+    assert.equal((await readProjectRow(sql, "alice", "job-a"))?.name, "Renamed");
+  });
+
+  it("extractSheet (runExtract) on a closed job returns { ok:false, error:{ code:'JOB_CLOSED' } }", async () => {
+    const sql = await db();
+    await closeJob(sql, "alice", "job-a", AT);
+    const deps = (userId: string) => ({
+      userId,
+      input: {
+        jobId: "job-a",
+        text: "Surface: 35°F minimum",
+        fileName: "sheet.pdf",
+        mimeType: "application/pdf",
+      },
+      azure: null,
+      onDevice: onDeviceProvider,
+      rate: new Map(),
+      jobClosed: (id: string) => isJobClosed(sql, userId, id),
+    });
+    const res = await runExtract(deps("alice"));
+    assert.deepEqual(res, {
+      ok: false,
+      error: { code: "JOB_CLOSED", message: JOB_CLOSED_MESSAGE },
+    });
+    const other = await runExtract(deps("bob"));
+    assert.ok(
+      other.ok || other.error.code !== "JOB_CLOSED",
+      "another user's id is not a closed job for them",
     );
   });
 

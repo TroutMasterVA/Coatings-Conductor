@@ -10,6 +10,7 @@ export type ProjectRow = {
   calibration_json: string;
   site_json: string;
   card_json: string | null;
+  extract_json?: string | null;
   pds_text: string;
   recents_json: string;
   outcomes_json: string;
@@ -46,7 +47,7 @@ export function toRowSummary(row: ProjectRow): ProjectRowSummary {
 /** The caller's jobs for the list (includes status/closedAt/closedBy). */
 export async function listProjectRows(sql: Sql, userId: string): Promise<ProjectRow[]> {
   return sql<ProjectRow>`
-    select id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+    select id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
            recents_json, outcomes_json, last_opened_at, updated_at, status, closed_at, closed_by
     from projects
     where user_id = ${userId}
@@ -65,7 +66,7 @@ export async function openProjectRow(
     update projects
     set last_opened_at = ${now}
     where id = ${id} and user_id = ${userId} and archived = false
-    returning id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+    returning id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
               recents_json, outcomes_json, last_opened_at, updated_at, status, closed_at, closed_by
   `;
   return rows[0] ?? null;
@@ -78,7 +79,7 @@ export async function readProjectRow(
   id: string,
 ): Promise<ProjectRow | null> {
   const rows = await sql<ProjectRow>`
-    select id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
+    select id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
            recents_json, outcomes_json, last_opened_at, updated_at, status, closed_at, closed_by
     from projects where id = ${id} and user_id = ${userId}
   `;

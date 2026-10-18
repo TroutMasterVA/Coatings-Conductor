@@ -135,47 +135,6 @@ export async function throwWriteRefused(sql: Sql, userId: string, id: string): P
   throw new Error(NOT_YOUR_JOB_MESSAGE);
 }
 
-export type ProjectWriteValues = {
-  name: string;
-  zip: string;
-  calibrationJson: string;
-  siteJson: string;
-  cardJson: string | null;
-  pdsText: string;
-  recentsJson: string;
-  outcomesJson: string;
-};
-
-/**
- * The saveProject write. Scoped by owner AND `status = 'open'` in one statement,
- * so a close that lands first makes this match nothing and the save is refused.
- */
-export async function writeOpenProject<R>(
-  sql: Sql,
-  userId: string,
-  id: string,
-  v: ProjectWriteValues,
-  now: string,
-): Promise<R> {
-  const rows = await sql<R>`
-    update projects set
-      name = ${v.name},
-      zip = ${v.zip},
-      calibration_json = ${v.calibrationJson},
-      site_json = ${v.siteJson},
-      card_json = ${v.cardJson},
-      pds_text = ${v.pdsText},
-      recents_json = ${v.recentsJson},
-      outcomes_json = ${v.outcomesJson},
-      updated_at = ${now}
-    where id = ${id} and user_id = ${userId} and status = 'open'
-    returning id, name, zip, archived, calibration_json, site_json, card_json, pds_text,
-              recents_json, outcomes_json, last_opened_at, updated_at, status, closed_at, closed_by
-  `;
-  if (!rows[0]) return throwWriteRefused(sql, userId, id);
-  return rows[0];
-}
-
 /**
  * The deleteProject write. Owner AND `status = 'open'` are in the one DELETE, so a
  * close that lands first makes it match nothing. Ownership is decided first: a
