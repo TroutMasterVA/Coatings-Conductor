@@ -1,6 +1,6 @@
 import { cleanBase64, isImageMime, maxBase64Length, normalizeMime, sniffFileType, DOCX_MIME } from "./file-type.ts";
 import { readDocxText, readPdfText, type ReadText } from "./server-read.ts";
-import { gateNumbers, sourceOf, unverifiedTempsFromGate, type SourceDoc } from "./provenance.ts";
+import { gateNumbers, quoteIsVerbatim, sourceOf, unverifiedTempsFromGate, type SourceDoc } from "./provenance.ts";
 import type {
   ExtractErrorCode,
   ExtractInput,
@@ -9,6 +9,7 @@ import type {
   ExtractResponse,
   ExtractResult,
   ExtractWarning,
+  Provenance,
 } from "./provider.ts";
 
 export const EXTRACT_MAX_TEXT_CHARS = 40_000;
@@ -113,24 +114,28 @@ export function gateRemote(raw: ExtractResult, input: ExtractInput): ExtractResu
   const { source, ...r } = raw;
   const src: SourceDoc = source && source.text ? source : sourceOf(input);
   const g = gateNumbers(r.card, src);
-  const extra: ExtractWarning[] = g.dropped
+  const haystack = [src.text, ...(src.pages ?? [])].join("\n\n");
+  // The provider's own quote (exact line + page) is kept only when it is verbatim on the sheet;
+  // otherwise the gate's own verified line is used. A remote quote is never trusted as-is.
+  const provenance: Provenance = {};
+  for (const [k, p] of Object.entries(g.provenance)) {
+    const own = r.provenance[k];
+    const ownOk = p !== "not-stated" && !!own && own !== "not-stated" && own.quote.trim() !== "" && quoteIsVerbatim(own.quote, haystack);
+    provenance[k] = ownOk ? own : p;
+  }
+  const dropped = g.droppedPaths.length;
+  const extra: ExtractWarning[] = dropped
     ? [{
         code: "VALUES_DROPPED_UNQUOTED",
-        message: `${g.dropped} value(s) with numbers could not be tied to a line on the sheet and were set to Not stated.`,
+        message: `${dropped} value(s) with numbers could not be tied to a line on the sheet and were set to Not stated.`,
       }]
     : [];
   return withWarnings(
     {
       ...r,
       card: g.card,
-      // Keep the provider's own quote (exact line + page) wherever the gate kept the value.
-      provenance: Object.fromEntries(
-        Object.entries(g.provenance).map(([k, p]) => {
-          const own = r.provenance[k];
-          return [k, p !== "not-stated" && own && own !== "not-stated" ? own : p];
-        }),
-      ),
-      unverifiedTemps: unverifiedTempsFromGate(g.provenance, g.droppedPaths),
+      provenance,
+      unverifiedTemps: unverifiedTempsFromGate(provenance, g.droppedPaths),
     },
     [...r.warnings, ...extra],
   );

@@ -287,4 +287,45 @@ describe("one number gate for every provider", () => {
     const r = await runExtract(base({ azure: fakeAzure(async () => ({ ...(await okAzure()), source: { text: SHEET } })) }));
     assert.ok(r.ok && r.card.environmentals.dewPointSpreadMinF === 5);
   });
+
+  it("an Azure number on the sheet with an invented quote keeps the value, with the gate's real line", async () => {
+    const az = await okAzure();
+    const fake = { page: 1, quote: "Dew point spread: 5°F minimum per spec 12-B" };
+    // 5°F IS on the sheet ("at least 5°F above the dew point"), but Azure claims a line that isn't.
+    const forged = {
+      ...az,
+      provenance: { ...az.provenance, "environmentals.dewPointSpreadMinF": fake },
+      source: { text: SHEET },
+    };
+    const r = await runExtract(base({ azure: fakeAzure(async () => forged) }));
+    assert.ok(r.ok);
+    if (r.ok) {
+      assert.equal(r.card.environmentals.dewPointSpreadMinF, 5);
+      const p = r.provenance["environmentals.dewPointSpreadMinF"];
+      assert.ok(p && p !== "not-stated");
+      assert.notEqual(p.quote, fake.quote);
+      assert.match(p.quote, /at least 5°F above the dew point/);
+      assert.ok(!JSON.stringify(r).includes("spec 12-B"));
+    }
+  });
+
+  it("keeps Azure's own quote (with its page) when it is verbatim on the sheet", async () => {
+    const az = await okAzure();
+    const own = { page: 1, quote: "Surface must be at least 5°F above the dew point." };
+    const r = await runExtract(
+      base({
+        azure: fakeAzure(async () => ({
+          ...az,
+          provenance: { ...az.provenance, "environmentals.dewPointSpreadMinF": own },
+          source: { text: SHEET },
+        })),
+      }),
+    );
+    assert.ok(r.ok);
+    if (r.ok) {
+      assert.equal(r.card.environmentals.dewPointSpreadMinF, 5);
+      assert.deepEqual(r.provenance["environmentals.dewPointSpreadMinF"], own);
+      assert.equal(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"), false);
+    }
+  });
 });
