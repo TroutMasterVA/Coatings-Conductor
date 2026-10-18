@@ -14,6 +14,9 @@ export const JOB_CLOSED_MESSAGE = "This job is closed and can't be changed.";
 /** Thrown by deleteProject on a closed job (PO ruling: a closed job is a record; archive stays allowed). */
 export const JOB_CLOSED_DELETE_MESSAGE = "This job is closed and can't be deleted.";
 
+/** "Closed by" for a job closed in the guest (device-only) workspace. */
+export const GUEST_CLOSED_BY = "This device";
+
 /** Error code for envelope-style replies (extractSheet attach). */
 export const JOB_CLOSED_CODE = "JOB_CLOSED" as const;
 
@@ -32,7 +35,8 @@ export type JobStatusRow = {
 function iso(value: string | Date | null | undefined): string | null {
   if (value == null) return null;
   const d = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(d.getTime()) ? String(value) : d.toISOString();
+  // Invalid dates (e.g. hand-edited guest data) become null up front instead of failing a later insert.
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 /** Row -> API fields. Anything but 'closed' reads as open (pre-0004 rows, guest data). */
