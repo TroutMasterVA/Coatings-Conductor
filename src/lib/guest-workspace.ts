@@ -1,4 +1,5 @@
-import { guestMigrateResult } from "@/lib/guest-import";
+import { guestMigrateResult, NOT_YOUR_JOB_MESSAGE } from "@/lib/guest-import";
+import { JOB_CLOSED_MESSAGE, statusFields, type CloseResult } from "@/lib/job-close";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import {
   defaultSite,
@@ -55,6 +56,7 @@ function summaryOf(p: ProjectFull): ProjectSummary {
     lastOpenedAt: p.lastOpenedAt,
     updatedAt: p.updatedAt,
     hasCard: Boolean(p.card),
+    ...statusFields({ status: p.status, closed_at: p.closedAt ?? null, closed_by: p.closedBy ?? null }),
   };
 }
 
@@ -113,6 +115,9 @@ export function guestCreateProject(name: string, zip: string, seed?: Partial<Pro
     lastOpenedAt: now,
     updatedAt: now,
     hasCard: Boolean(seed?.card),
+    status: "open",
+    closedAt: null,
+    closedBy: null,
     calibration: seed?.calibration ?? DEFAULT_CALIBRATION,
     site: seed?.site ?? defaultSite(),
     card: seed?.card ?? null,
@@ -153,6 +158,8 @@ export function guestSaveProject(input: {
   const s = read();
   const found = s.projects.find((p) => p.id === input.id);
   if (!found) throw new Error("Project not found.");
+  // Mirrors the server: a closed job is read-only.
+  if (found.status === "closed") throw new Error(JOB_CLOSED_MESSAGE);
   const now = new Date().toISOString();
   const next: ProjectFull = {
     ...found,
@@ -170,6 +177,21 @@ export function guestSaveProject(input: {
   s.projects = s.projects.map((p) => (p.id === input.id ? next : p));
   write(s);
   return summaryOf(next);
+}
+
+/** Guest mirror of closeProject: idempotent, no reopen. No account, so "closed by" is this device. */
+export function guestCloseProject(id: string): CloseResult {
+  const s = read();
+  const found = s.projects.find((p) => p.id === id);
+  if (!found) throw new Error(NOT_YOUR_JOB_MESSAGE);
+  if (found.status === "closed" && found.closedAt) {
+    return { ok: true, status: "closed", closedAt: found.closedAt, closedBy: found.closedBy ?? "This device" };
+  }
+  const now = new Date().toISOString();
+  const next: ProjectFull = { ...found, status: "closed", closedAt: now, closedBy: "This device", updatedAt: now };
+  s.projects = s.projects.map((p) => (p.id === id ? next : p));
+  write(s);
+  return { ok: true, status: "closed", closedAt: now, closedBy: "This device" };
 }
 
 export function guestArchiveProject(id: string, archived: boolean) {
