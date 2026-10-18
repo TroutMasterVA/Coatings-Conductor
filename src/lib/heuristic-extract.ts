@@ -1,3 +1,4 @@
+import { potLifeFromText, recoatFromText } from "./sheet-durations.ts";
 import { filmThicknessFromText, maskStandards, productTitleFromText } from "./sheet-title-film.ts";
 import type { Environmentals, FieldCardData, HoldPoint } from "./types";
 import {
@@ -276,6 +277,10 @@ function clauses(t: string): string[] {
     .filter(Boolean);
 }
 
+/** A substrate/filler/surface-prep step ("… at least 55°F before filling"), not an application limit. */
+const PREP_INSTRUCTION =
+  /\b(?:before|prior\s+to|when)\s+(?:filling|priming|sealing|patching|caulking|grouting|blasting|topping|block\s+filling)\b|\b(?:block|masonry)\s+fill(?:er|ing)?\b|\bfillers?\b|\bpatching\s+compound\b/i;
+
 export type TempGate = { target: Target; kind: Qual | "range"; lo: number; hi: number | null; quote: string };
 
 /**
@@ -288,6 +293,8 @@ export function temperatureGates(raw: string): TempGate[] {
   for (const c of clauses(t)) {
     const temps = tempsInClause(c);
     if (!temps.length) continue;
+    // Limits come from application conditions, never from a substrate, filler or prep instruction.
+    if (PREP_INSTRUCTION.test(c)) continue;
     const groups = labelGroups(c);
     // Which side owns each qualifier gap: decided left to right.
     let prevConsumedPost = false;
@@ -476,12 +483,12 @@ export function heuristicExtract(text: string): FieldCardData {
 
   const mixRatio = mixRatioFromText(t);
 
-  const potLife = firstMatch(t, [/pot\s*life[:\s]+([^\n]+)/i, /working\s+time[:\s]+([^\n]+)/i]);
+  // Durations only (CONTRACT.md duration rule); prose -> Not stated.
+  const potLife = potLifeFromText(t);
   const shelf = firstMatch(t, [/shelf\s*life[:\s]+([^\n]+)/i]);
   const voc = firstMatch(t, [/voc[:\s]+([^\n]+)/i]);
   const dft = filmThicknessFromText(t);
-  const recoatMin = firstMatch(t, [/recoat(?:ing)?\s+(?:min(?:imum)?|window)[:\s]+([^\n]+)/i, /minimum\s+recoat[:\s]+([^\n]+)/i]);
-  const recoatMax = firstMatch(t, [/maximum\s+recoat[:\s]+([^\n]+)/i, /recoat(?:ing)?\s+max(?:imum)?[:\s]+([^\n]+)/i]);
+  const { min: recoatMin, max: recoatMax } = recoatFromText(t);
   const coverage = firstMatch(t, [/coverage[:\s]+([^\n]+)/i, /theoretical\s+coverage[:\s]+([^\n]+)/i]);
   const induction = firstMatch(t, [/induction[:\s]+([^\n]+)/i, /sweat-?in[:\s]+([^\n]+)/i]);
   const thinning = thinnerFromText(t);
