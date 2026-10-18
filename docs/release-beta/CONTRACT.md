@@ -118,6 +118,7 @@ type SavedExtract = {
 ```
 
 - `unverifiedTemps` covers `environmentals.ambientTempMinF/MaxF`, `substrateTempMinF/MaxF`, `dewPointSpreadMinF`. Interim rule (until the accuracy pack's `src/lib/extract/unverified-temps.ts` lands): true if any of those was dropped by the number gate or kept with an empty quote.
+- Storage: `projects.extract_json` (nullable text JSON, like `card_json`; migration `0003_job_extract.sql`). Save with `saveProject({ data: { id, card, extract: toSavedExtract(result) } })` (also accepted on `createProject` seed and guest import). `openProject` returns `extract` (or `null`). The server validates the object (`parseSavedExtract`, ≤ 1 MB, including server edit stamps). Save rule: `extract` missing keeps the stored extract (and its edit stamps), `extract: null` clears it, an object replaces it. A client that loads a different sheet sends that read's `extract` (or `null`) with the new card. Reads and writes are scoped by `user_id`.
 - Older jobs have no `extract` (treat as missing; flags false). Stored under the same per-user isolation as the card (every query scoped by `user_id`).
 
 ### Provider interface
@@ -171,6 +172,7 @@ interface ExtractProvider {
 - **Error shape**: see *Extract contract* above (`{ code, message, retryAfterSec?, maxUploadMb? }`). Size cap: client text ≤ 40,000 chars, file ≤ `MAX_UPLOAD_MB`.
 - **Strict schema**: `response_format: { type: "json_schema", strict: true }` built from the FieldCardData zod schema (zod v4 already a dependency); zod-validate every response.
 - **Provenance** (per field, shown in the collapsed panel under the card): every numeric value (and every prepGate profile) must carry a quote found **verbatim in the source text after whitespace normalization**; otherwise the field is set to Not stated (`null` / `""`) and provenance `"not-stated"`. Never invent numbers. Silent fields show Not stated.
+- **Known limits:** Pro Industrial DTM's 55°F reading from the filler sentence is a **blocker** being fixed in **#40** with a general rule that temperature limits come only from the application-conditions or temperature section.
 - **Prompt-injection guard**: sheet text is untrusted. System prompt says to ignore any instructions inside the document; document is passed as delimited user content; output only via the schema.
 - Logs: provider, latency, outcome code. Never log document text or keys.
 
@@ -218,3 +220,70 @@ Plus negative mocks: invented number not in text → Not stated; injection text 
 - **4:50 PM** — all tickets in PR; scoring harness side-by-side across the fixture set (Azure-mocked vs on-device), Carbomastic 615 row included.
 - **5:05–5:35 PM** — QA + AppSec final pass.
 - **5:30 PM** — status to PO; draft PR + merge/tag/keys/hosting checklist for Isaiah.
+
+## Edit stamp (hand edits) — Lead ruling 2026-10-18 3:34 PM ET
+
+When a saved card's field value differs from the stored card, the **server** (never the browser) sets that field's provenance entry to:
+
+```ts
+type EditedProvenance = {
+  edited: { by: string; at: string }; // by = session user's display name, else email; at = server time, ISO-8601
+  sheetQuote?: { page?: number; quote: string }; // the prior sheet quote, kept as history only
+};
+```
+
+- Untouched fields keep `{ page?, quote }` or `'not-stated'`.
+- Any `edited` value sent by the client is ignored and overwritten by the server.
+- The UI shows "Edited by {by}, {at}" and must not present `sheetQuote` as backing the new value.
+- Saving without `extract` keeps the stored extract (and its edit stamps); `extract: null` clears it; a new object replaces it.
+
+## Job closeout (smallest version) — Lead ruling 2026-10-18 3:57 PM ET; PO archive/delete 4:06 PM ET
+
+- Migration `0004_job_status.sql`: `projects.status text not null default 'open'` (`'open' | 'closed'`), `closed_at timestamptz null`, `closed_by text null`.
+- `closeProject({ id })`: `createServerFn` behind `authMiddleware`, same style as `archiveProject`. Owner-only: a non-owner gets the existing `NOT_YOUR_JOB_MESSAGE` throw (same as isolation). Idempotent. Returns `{ ok: true, status: 'closed', closedAt, closedBy }`.
+- `openProject` and the job list include `status`, `closedAt`, `closedBy`.
+- Closed job: `saveProject` (and any field edit) throws `new Error(JOB_CLOSED_MESSAGE)` (exported constant, like `NOT_YOUR_JOB_MESSAGE`; text "This job is closed and can't be changed."). `extractSheet` attaching to a closed job returns the existing read-error shape `{ ok: false, error: { code: 'JOB_CLOSED', message: JOB_CLOSED_MESSAGE } }` (message "This job is closed and can't be changed."), like the other read errors. The server enforces this; hiding UI is not enough.
+- **Optional `jobId` input on `extractSheet` (Lead ruling 4:30 PM ET, PR #37):** `extractSheet` accepts an optional `jobId`. It is used **only for the closed-job check, not for signing**; the signed read and its HMAC are unchanged (see "Known limit (job binding)" below).
+  - If `jobId` is given **and** that job is owned by the caller **and** it is closed, return `{ ok: false, error: { code: 'JOB_CLOSED', message: JOB_CLOSED_MESSAGE } }` **before** the sheet is read and **before** any rate-limit cost.
+  - If `jobId` is missing, unknown, or not the caller's, behave **exactly** as if no `jobId` was given: no error, and no hint that the job exists (same result, same message, same rate-limit cost).
+  - Saves on closed jobs are refused regardless of whether `jobId` was sent (`JOB_CLOSED_MESSAGE` throw on save). The client may leave `jobId` out this release.
+- A closed job is a record: opening, reading, and printing/saving the PDF stay allowed. Only edits and new reads stop. Autosave is off.
+- **Archive vs delete (PO 4:06 PM ET):** a closed job **can be archived** (archive only hides it from the list; the record is kept) but **cannot be deleted**. The server enforces this inside the delete itself: deleting a closed job throws `new Error(JOB_CLOSED_DELETE_MESSAGE)` (exported constant; text "This job is closed and can't be deleted."). The UI hides Delete on closed jobs, but the server check is the one that counts. Guest (local) workspace follows the same rule.
+- No reopen in this release.
+- Guest (local) workspace mirrors the same status and refusal client-side.
+- UI: "Close job" button, confirm "Close this job? It becomes read-only." (Close job / Cancel); "Closed" badge with date on the job and in the list; inputs disabled; print/PDF still available; `JOB_CLOSED` shows the server message; Delete hidden on closed jobs.
+- Tests: owner-only, idempotent close, save refused after close; deleting a closed job is refused and archiving still works.
+
+## Signed extract read (edit-stamp proof) — Lead + PO 2026-10-18 ~4:05 PM ET
+
+- `extractSheet`'s result carries a **server-only** read id and an HMAC signature built with the existing `BETTER_AUTH_SECRET` (**no new key**) and covering the user and card values.
+- The client sends the read id and signature back untouched and **never builds** them; they are **not stored**.
+- Saves **without a valid signature** are compared with what's stored, and every changed field is stamped `{edited:{by,at}, sheetQuote?}`.
+- A genuine signed read whose signature verifies saves clean (unstamped) as a fresh extract.
+- Ignore any `extractedAt` from the client; the server alone decides fresh-read vs hand-edit.
+- **Known limit (previews):** without a fixed `BETTER_AUTH_SECRET`, each preview instance has its own secret. A read signed on one instance and saved on another fails verification and shows "Edited by". That is the **safe failure**, not a bug. Documented for QA in #26 and the 4:40 in/out list until Isaiah approves a fixed secret for Preview.
+- **Known limit (job binding):** the signature is **not** bound to a job id, so a user could reuse their own read on another of their jobs. The values are still real sheet reads, so the risk is low. Binding the job id is deferred to **issue #30** after this release (PO ruling, 4:20 PM ET). The signed read is unchanged; the only input change is the optional `jobId` used for the closed-job check above.
+
+## Draft flag on extract response — PO 4:19 PM ET (PR #26)
+
+Owned by the extract endpoint in PR #26, for **every** provider (Azure and on-device).
+
+- The **server** sets `draft: true` when any of these hold:
+  - any shown field lacks its own **verbatim** sheet quote that backs its value;
+  - any field fell back to the gate's sheet line;
+  - the card's confidence is low.
+- **On-device reads are always draft.**
+- A card drops the Draft banner only when **every** shown value has a backing verbatim quote.
+- The **client never sets or clears** `draft`.
+- Tests cover each case (missing quote → draft; gate-line fallback → draft; low confidence → draft; on-device → always draft; all values quote-backed → not draft).
+
+## Duration fields (recoat / pot life) — PO 4:19 PM ET (PR #40)
+
+- **Recoat max**, **recoat min**, and **pot life** must show a **duration** taken from the sheet (e.g. `"1 year"`, `"8 h"`), read from the **table cell or row**.
+- If the reader finds **only prose**, the field is **Not stated**.
+- Lives in **PR #40**, not #36 (#36 stays cuttable).
+
+## After this release — surface-prep / thinner misreads (issue #30) — PO 4:19 PM ET
+
+- Surface-prep and thinner misreads are **out of this release**; they go to **issue #30** after this release.
+- **Condition:** every such card must always render as a **draft** with the **"check against the sheet"** warning, never as a confirmed reading. If any shows as confirmed, that is a blocker for this release.
