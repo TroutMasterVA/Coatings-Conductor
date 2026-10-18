@@ -13,6 +13,7 @@ import { isUnauthorized, returnToLogin } from "@/lib/auth/expired";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
 import { buildCardFromPds } from "@/lib/on-device-extract";
+import { NO_FLAGS, readExtractFlags, windowHeadline, type ExtractFlags } from "@/lib/extract-flags";
 import { loadForecast } from "@/lib/forecast";
 import {
   DEFAULT_CALIBRATION,
@@ -116,6 +117,8 @@ function App({ user }: { user: AppUser | null }) {
   const [card, setCard] = useState<FieldCardData | null>(null);
   const [forecast, setForecast] = useState<ForecastBundle | null>(null);
   const [extracting, setExtracting] = useState(false);
+  /** Draft / unverified-temps flags of the current read (saved job `extract`, or the extract response). */
+  const [flags, setFlags] = useState<ExtractFlags>(NO_FLAGS);
   const [wxLoading, setWxLoading] = useState(false);
   const [wxError, setWxError] = useState<string | null>(null);
   const [recents, setRecents] = useState<SavedCard[]>([]);
@@ -165,6 +168,7 @@ function App({ user }: { user: AppUser | null }) {
     setOutcomes(full.outcomes);
     setForecast(null);
     setWxError(null);
+    setFlags(readExtractFlags(full));
     setMode("job");
     // Update the existing row in place — do not prepend (that reordered + duplicated under race).
     setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), toSummary(full)));
@@ -313,8 +317,10 @@ function App({ user }: { user: AppUser | null }) {
     setRecents((prev) => [entry, ...prev.filter((r) => r.card.product.name !== next.product.name)].slice(0, 8));
   }
 
-  function applyCard(next: FieldCardData) {
+  /** `extract` = the server/provider extract result, when there is one; absent → flags off. */
+  function applyCard(next: FieldCardData, extract?: unknown) {
     setCard(next);
+    setFlags(readExtractFlags(extract));
     setSite((prev) => siteFromCard(next, prev));
   }
 
@@ -365,7 +371,7 @@ function App({ user }: { user: AppUser | null }) {
     if (!card) return;
     setDownloading(true);
     try {
-      await downloadFieldCard(card, scored, scoringSite, zip);
+      await downloadFieldCard(card, scored, scoringSite, zip, flags);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "PDF failed");
     } finally {
@@ -580,8 +586,9 @@ function App({ user }: { user: AppUser | null }) {
               <FieldCardView
                 card={card}
                 zip={zip}
-                headline={scored?.headline}
+                headline={windowHeadline(scored?.headline, flags)}
                 mitigations={selectedMitigationLabels(scoringSite)}
+                draft={flags.draft}
               />
             ) : (
               <EmptyCardSkeleton />
@@ -607,6 +614,7 @@ function App({ user }: { user: AppUser | null }) {
               }
               site={scoringSite}
               onSite={setSite}
+              paused={flags.unverifiedTemps}
             />
             <LearningPanel
               calibration={calibration}

@@ -3,6 +3,7 @@ import type { FieldCardData, SubstratePrepGate } from "@/lib/types";
 import { STEP_RAIL } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { DRAFT_BANNER } from "@/lib/extract-flags";
 
 function join(items: string[] | undefined) {
   return (items ?? []).filter(Boolean).join(" · ");
@@ -271,11 +272,14 @@ export function FieldCardView({
   zip,
   headline,
   mitigations,
+  draft,
 }: {
   card: FieldCardData;
   zip?: string;
   headline?: string;
   mitigations?: string[];
+  /** On-device read: one banner line, on screen and in print (LEAD exception, FE-3). */
+  draft?: boolean;
 }) {
   const mid = "·";
   const envGates = goGateChips(card);
@@ -310,6 +314,16 @@ export function FieldCardView({
               {mix ? <span className="font-mono text-xs text-ink-muted">{mix}</span> : null}
             </div>
           </header>
+
+          {draft ? (
+            <p
+              role="alert"
+              data-testid="draft-banner"
+              className="mt-3 rounded-md bg-nogo-soft px-3 py-2 text-sm font-semibold text-nogo"
+            >
+              {DRAFT_BANNER}
+            </p>
+          ) : null}
 
           <dl className="print-only mt-3 space-y-1 border-b border-rail/80 pb-3 text-xs text-ink">
             <div>
