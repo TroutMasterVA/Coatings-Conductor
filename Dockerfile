@@ -18,12 +18,21 @@ ENV NITRO_PRESET=node-server \
     NODE_OPTIONS=--max-old-space-size=4096
 
 COPY package.json package-lock.json ./
+# Optional dependencies stay ON: @napi-rs/canvas (server-side PDF page images,
+# BE-2) ships prebuilt native binaries as per-platform optional packages.
+# Build and runtime both use Debian bookworm (glibc), so the binary matches.
 RUN npm ci --no-audit --no-fund
 
 COPY . .
 # DATABASE_URL is deliberately unset here, so `npm run build`'s migrate step
 # skips; migrations run when the container starts (see docker-entrypoint.sh).
 RUN npm run build
+
+# If @napi-rs/canvas is a dependency, prove Nitro traced its native binary into
+# .output/server/node_modules and that it loads (fails the build otherwise).
+RUN if node -e "const p=require('./package.json');process.exit((p.dependencies||{})['@napi-rs/canvas']||(p.optionalDependencies||{})['@napi-rs/canvas']?0:1)"; then \
+      cd .output/server && node -e "import('@napi-rs/canvas').then(m=>{m.createCanvas(1,1);console.log('[docker] @napi-rs/canvas OK')})"; \
+    else echo "[docker] @napi-rs/canvas not a dependency yet; skipping check"; fi
 
 # Tiny, self-contained migrator: scripts/migrate.mjs + migrations/ + pg only.
 RUN mkdir -p /migrate/scripts \

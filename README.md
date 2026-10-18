@@ -86,6 +86,7 @@ Copy [`.env.example`](.env.example) for a commented template.
 | `PORT` | No | Port inside the container. Default `3000`. |
 | `APP_VERSION` | No | Version label in `/api/health`. Set by `--build-arg APP_VERSION`. |
 | `RUN_MIGRATIONS` | No | `false` skips migrations at container start. Default runs them. |
+| `MAX_UPLOAD_MB` | No | Largest sheet upload accepted, in MB. Default `10` (container / PAVE, what employees use). Set `3` on the Vercel practice copy (Vercel caps request bodies at about 4.5 MB). |
 | `AZURE_DOCINTEL_ENDPOINT` | For Azure | Document Intelligence endpoint |
 | `AZURE_DOCINTEL_MODEL` | No | Document Intelligence model. Default `prebuilt-layout`. |
 | `AZURE_OPENAI_ENDPOINT` | For Azure | Azure OpenAI / Foundry endpoint |
@@ -115,6 +116,7 @@ The image has a Docker `HEALTHCHECK` on this path. On Azure, point the probes at
 - Give the container app a **system-assigned managed identity**. That is how it signs in to Azure AI without keys (see the next section).
 - Store `BETTER_AUTH_SECRET` and `DATABASE_URL` as secrets (Container Apps secrets or Key Vault references), not plain settings.
 - The sheet reader's rate limit (10 extracts per user per minute) is kept in memory per container. With more than one replica, each replica counts separately. For the beta, run **one replica**.
+- Uploads are capped by `MAX_UPLOAD_MB` (default 10 MB). If a proxy or gateway sits in front of the container, let it accept request bodies at least that large.
 - Allow outbound HTTPS to your Postgres server, your Azure AI endpoints, and `api.weather.gov` / `api.open-meteo.com` (weather forecasts).
 
 ### Rolling back a bad release
@@ -125,7 +127,7 @@ The image has a Docker `HEALTHCHECK` on this path. On Azure, point the probes at
 
 ### Vercel (practice copy)
 
-Vercel remains the default build (`npm run build`, Nitro `vercel` preset). Import the GitHub repo into a Vercel project, and set `DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` and `VITE_AUTH_ENABLED=true` in the project's environment settings for a lasting copy. Pull-request previews without `DATABASE_URL` use the in-memory database.
+Vercel remains the default build (`npm run build`, Nitro `vercel` preset). Import the GitHub repo into a Vercel project, and set `DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` and `VITE_AUTH_ENABLED=true` in the project's environment settings for a lasting copy. Also set `MAX_UPLOAD_MB=3` there, because Vercel rejects request bodies over about 4.5 MB. Pull-request previews without `DATABASE_URL` use the in-memory database.
 
 ---
 
