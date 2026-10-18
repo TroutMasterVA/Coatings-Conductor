@@ -19,9 +19,14 @@
  *   save    `extract` = #24's `toSavedExtract(result)`; reopen reads `extract.draft/.unverifiedTemps`.
  *   limits  `getExtractLimits()` → { maxUploadMb } for the pre-check, capped at the 10 MB ceiling.
  *
- * PENDING CONTRACT:
- * - Edited-field stamp `{ edited: { by, at }, sheetQuote? }` in provenance (server, #26 later).
- *   Until then a field changed this session reads "Edited in this session — not from the sheet".
+ *   edits   CONTRACT.md "Edit stamp (hand edits)": a hand-edited field's provenance entry is
+ *           `{ edited: { by, at }, sheetQuote?: { page?, quote } }`, set only by the server
+ *           (by = display name, else email; at = server time, ISO-8601). The panel shows
+ *           "Edited by {by}, {at}" and the old sheet quote beneath it, labelled as the original
+ *           (never as backing the new value). Until the server stamps, a field changed this
+ *           session reads "Edited in this session — not from the sheet". The browser never writes
+ *           `edited` into a saved extract: saves send a fresh read once (replace) and otherwise
+ *           omit `extract` so the server keeps what it stored (and its stamps).
  */
 import { parseSavedExtract } from "./job-extract.ts";
 import { toSavedExtract as buildSavedExtract } from "./extract/provider.ts";
@@ -88,11 +93,18 @@ export const EXTRACT_ERROR_CODES: readonly ExtractErrorCode[] = [
 /** Client-only reason: the server function is missing or unreachable. Not a server code. */
 export type ServerIssue = ExtractErrorCode | "SERVER_UNAVAILABLE";
 
-/** Proposed server stamp for a hand-edited field (not in CONTRACT.md yet). */
-export type EditedEntry = { edited: { by: string; at: string }; sheetQuote?: Provenance[string] };
+/** Server stamp for a hand-edited field (CONTRACT.md "Edit stamp (hand edits)"). */
+export type SheetQuote = { page?: number; quote: string };
+export type EditedEntry = { edited: { by: string; at: string }; sheetQuote?: SheetQuote };
 export type ProvenanceEntry = Provenance[string] | EditedEntry;
 export type ClientProvenance = Record<string, ProvenanceEntry>;
 export const SESSION_EDIT_TEXT = "Edited in this session — not from the sheet";
+/** Label for the pre-edit sheet quote kept under a stamp. History only, not the new value's source. */
+export const SHEET_QUOTE_LABEL = "Original sheet quote (before the edit)";
+/** Shown when a stamp's `at` is missing or not a date. */
+export const EDITED_AT_UNKNOWN = "time not recorded";
+/** Shown when a stamp's `by` is missing or blank. */
+export const EDITED_BY_UNKNOWN = "a signed-in user";
 export type ExtractProvider = "azure" | "on-device";
 
 /** BE-1's result with the provider normalized (LEAD: "azure" | "on-device" + display-only deployment). */
@@ -125,7 +137,7 @@ export type DoneState = {
   /** server = server answered; client-fallback = server failed and the browser read the PDF;
    *  on-device = no server call; saved = reopened from the job record. */
   source: "server" | "client-fallback" | "on-device" | "saved";
-  /** Reopened jobs: the saved extract exactly as stored (re-saved unchanged). */
+  /** Reopened jobs: the saved extract as stored (read for flags; never re-sent, the server keeps it). */
   saved?: SavedExtract;
   issue?: ServerIssue;
   retryAfterSec?: number;
@@ -198,21 +210,42 @@ function isQuoteEntry(v: unknown): v is Provenance[string] {
   return typeof e.quote === "string" && (e.page === undefined || typeof e.page === "number");
 }
 
-function isEditedEntry(v: unknown): v is EditedEntry {
-  if (!v || typeof v !== "object") return false;
-  const e = v as { edited?: unknown; sheetQuote?: unknown };
-  const ed = e.edited as { by?: unknown; at?: unknown } | undefined;
-  return (
-    !!ed &&
-    typeof ed === "object" &&
-    typeof ed.by === "string" &&
-    typeof ed.at === "string" &&
-    (e.sheetQuote === undefined || isQuoteEntry(e.sheetQuote))
-  );
+function isSheetQuote(v: unknown): v is SheetQuote {
+  return isQuoteEntry(v) && v !== "not-stated";
 }
 
-function isProvenanceEntry(v: unknown): v is ProvenanceEntry {
-  return isQuoteEntry(v) || isEditedEntry(v);
+/**
+ * A server edit stamp, normalized. `edited` must be an object; a missing/blank `by` or a
+ * missing/non-string `at` is tolerated (rendered as unknown) so one odd stamp never blanks the
+ * panel. A malformed `sheetQuote` is dropped. Null = not an edit stamp.
+ */
+function parseEditedEntry(v: unknown): EditedEntry | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const e = v as { edited?: unknown; sheetQuote?: unknown };
+  const ed = e.edited;
+  if (!ed || typeof ed !== "object" || Array.isArray(ed)) return null;
+  const { by, at } = ed as { by?: unknown; at?: unknown };
+  const out: EditedEntry = {
+    edited: {
+      by: typeof by === "string" ? by : "",
+      at: typeof at === "string" ? at : "",
+    },
+  };
+  if (isSheetQuote(e.sheetQuote)) {
+    const q = e.sheetQuote;
+    out.sheetQuote =
+      typeof q.page === "number" ? { page: q.page, quote: q.quote } : { quote: q.quote };
+  }
+  return out;
+}
+
+export function isEditedEntry(v: unknown): v is EditedEntry {
+  return !!v && typeof v === "object" && "edited" in v;
+}
+
+function parseProvenanceEntry(v: unknown): ProvenanceEntry | null {
+  if (isQuoteEntry(v)) return v;
+  return parseEditedEntry(v);
 }
 
 /** Tolerant: malformed warnings are dropped, missing messages become "". Never throws. */
@@ -249,8 +282,9 @@ export function parseProvenance(raw: unknown): ClientProvenance | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const provenance: ClientProvenance = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (!isProvenanceEntry(v)) return null;
-    provenance[k] = v;
+    const entry = parseProvenanceEntry(v);
+    if (!entry) return null;
+    provenance[k] = entry;
   }
   return provenance;
 }
@@ -512,6 +546,8 @@ export type ProvenanceRow = {
   stated: boolean;
   edited: boolean;
   text: string;
+  /** Server stamp with a kept sheet quote: "p. N — “…”", shown beneath under SHEET_QUOTE_LABEL. */
+  sheetQuote?: string;
 };
 
 function labelFor(path: string): string {
@@ -527,9 +563,11 @@ function labelFor(path: string): string {
     .join(" › ");
 }
 
-function formatEditedAt(at: string): string {
+/** ISO-8601 server time → "Oct 18, 2026, 3:30 PM EDT". Missing or unparseable → EDITED_AT_UNKNOWN. */
+export function formatEditedAt(at: unknown): string {
+  if (typeof at !== "string" || !at.trim()) return EDITED_AT_UNKNOWN;
   const d = new Date(at);
-  if (Number.isNaN(d.getTime())) return at;
+  if (Number.isNaN(d.getTime())) return EDITED_AT_UNKNOWN;
   return d.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
@@ -540,12 +578,19 @@ function formatEditedAt(at: string): string {
   });
 }
 
-export function describeProvenance(entry: ProvenanceEntry): string {
-  if (entry === "not-stated") return "Not stated";
-  if ("edited" in entry) return `Edited by ${entry.edited.by}, ${formatEditedAt(entry.edited.at)}`;
+function describeQuote(entry: SheetQuote): string {
   if (!entry.quote.trim()) return UNPINNED_TEXT;
   const q = `“${entry.quote}”`;
   return typeof entry.page === "number" ? `p. ${entry.page} — ${q}` : q;
+}
+
+export function describeProvenance(entry: ProvenanceEntry): string {
+  if (entry === "not-stated") return "Not stated";
+  if (isEditedEntry(entry)) {
+    const by = entry.edited?.by?.trim() || EDITED_BY_UNKNOWN;
+    return `Edited by ${by}, ${formatEditedAt(entry.edited?.at)}`;
+  }
+  return describeQuote(entry);
 }
 
 /** Sorted rows for the "Where each value came from" panel. */
@@ -560,9 +605,10 @@ export function valueAt(obj: unknown, path: string): unknown {
 }
 
 /**
- * Rows for the "Where each value came from" panel. Server-stamped edits read "Edited by …".
- * Until the server stamps edits, pass `session` (card now vs card as read): a changed field reads
- * SESSION_EDIT_TEXT. Nothing about session edits is written into the saved extract.
+ * Rows for the "Where each value came from" panel. Server-stamped edits read "Edited by …", with
+ * the kept sheet quote (if any) in `sheetQuote`. Pass `session` (card now vs card as read/opened):
+ * a field changed in this session reads SESSION_EDIT_TEXT only — even over an older stamp, which no
+ * longer describes the value on screen. Nothing about session edits goes into the saved extract.
  */
 export function provenanceRows(
   provenance: ClientProvenance,
@@ -572,33 +618,51 @@ export function provenanceRows(
     .sort()
     .map((fieldPath) => {
       const entry = provenance[fieldPath]!;
-      const serverEdited = typeof entry === "object" && "edited" in entry;
+      const serverEdited = isEditedEntry(entry);
       const sessionEdited =
-        !serverEdited &&
         !!session &&
         JSON.stringify(valueAt(session.current, fieldPath) ?? null) !==
           JSON.stringify(valueAt(session.asRead, fieldPath) ?? null);
-      return {
+      const row: ProvenanceRow = {
         fieldPath,
         label: labelFor(fieldPath),
         stated: entry !== "not-stated" || sessionEdited,
         edited: serverEdited || sessionEdited,
         text: sessionEdited ? SESSION_EDIT_TEXT : describeProvenance(entry),
       };
+      if (!sessionEdited && isEditedEntry(entry) && entry.sheetQuote) {
+        row.sheetQuote = describeQuote(entry.sheetQuote);
+      }
+      return row;
     });
 }
 
-/** What to save next to `card`: the extract object exactly as the reader returned it. */
-export function toSavedExtract(state: ExtractState): SavedExtract | null {
+/** Provenance as the browser may save it: never an `edited` stamp (server-only, CONTRACT.md). */
+function withoutEditStamps(p: ClientProvenance): Provenance {
+  const out: Provenance = {};
+  for (const [k, v] of Object.entries(p)) {
+    out[k] = isEditedEntry(v) ? (v.sheetQuote ?? "not-stated") : v;
+  }
+  return out;
+}
+
+/**
+ * The `extract` to send with a save (CONTRACT.md keep / clear / replace):
+ * - fresh read (upload/paste) → the object to store (replace); never carries `edited`;
+ * - reopened from the job record → `undefined` (omit = server keeps what it stored, stamps included);
+ * - nothing read → `null` (clear).
+ */
+export function toSavedExtract(state: ExtractState): SavedExtract | null | undefined {
   if (state.kind !== "done") return null;
-  if (state.saved) return state.saved;
+  if (state.source === "saved") return undefined;
   const r = state.result;
   // #24's helper builds the saved object; client-only state (session edits) never goes in.
-  return buildSavedExtract({
-    ...r,
-    provider: r.provider,
-    provenance: r.provenance as unknown as Provenance,
-  });
+  // Read time = the card's extractedAt, so the saved object is the same on every call.
+  const at = r.card?.extractedAt;
+  return buildSavedExtract(
+    { ...r, provider: r.provider, provenance: withoutEditStamps(r.provenance) },
+    typeof at === "string" && !Number.isNaN(Date.parse(at)) ? at : undefined,
+  );
 }
 
 /** Draft / unverified-temps flags for display. Missing = false. */
@@ -614,19 +678,18 @@ export function savedExtractState(record: {
   extract?: unknown;
 }): ExtractState {
   if (!record.card) return { kind: "idle" };
-  const saved = parseSavedExtract(record.extract);
   const raw = (
     record.extract && typeof record.extract === "object" ? record.extract : null
   ) as Record<string, unknown> | null;
   const provenance = parseProvenance(raw?.provenance);
-  // parseSavedExtract (#24) rejects server-stamped edited entries; tolerate them here.
+  // parseSavedExtract (#24/#26) rejects server-stamped edited entries; tolerate them here.
   if (!raw || !provenance || (raw.provider !== "azure" && raw.provider !== "on-device"))
     return { kind: "idle" };
   const norm = normalizeProvider(raw.provider, raw.deployment);
   const warnings = parseWarnings(raw.warnings);
   const draft = raw.draft === true;
   const unverifiedTemps = raw.unverifiedTemps === true;
-  const savedOut: SavedExtract = saved ?? {
+  const savedOut: SavedExtract = parseSavedExtract(record.extract) ?? {
     ...norm,
     provenance: provenance as unknown as SavedExtract["provenance"],
     warnings,

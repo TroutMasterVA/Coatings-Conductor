@@ -11,6 +11,9 @@ import {
   mapServerResponse,
   MAX_UPLOAD_BYTES,
   SESSION_EDIT_TEXT,
+  SHEET_QUOTE_LABEL,
+  EDITED_AT_UNKNOWN,
+  formatEditedAt,
   toSavedExtract,
   extractFlags,
   mimeTypeFor,
@@ -30,6 +33,7 @@ import {
   type ExtractState,
 } from "./extract-client.ts";
 import { buildCardFromPds } from "./on-device-extract.ts";
+import { parseSavedExtract } from "./job-extract.ts";
 import { onDeviceProvider } from "./extract/on-device-provider.ts";
 import type { ExtractInput } from "./extract/provider.ts";
 import { SAMPLE_PDS_TEXT } from "./samples.ts";
@@ -406,7 +410,9 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
     assert.equal(providerLabel(d), "Azure reader (gpt4o).");
     assert.equal(provenanceRows(d.result.provenance)[0]?.text, "p. 2 — “Carbomastic 615”");
     assert.deepEqual(displayWarnings(d.result), [VALUES_DROPPED_NOTE]);
-    assert.deepEqual(toSavedExtract(d), extract);
+    // Reopened: omit `extract` on save so the server keeps it (CONTRACT keep/clear/replace).
+    assert.equal(toSavedExtract(d), undefined);
+    assert.deepEqual(d.saved, extract);
     assert.deepEqual(savedExtractState({ card }), { kind: "idle" });
     assert.deepEqual(savedExtractState({ card: null, extract }), { kind: "idle" });
     assert.deepEqual(
@@ -428,7 +434,7 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
       unverifiedTemps: false,
     });
   });
-  it("reopen: flags from extract.draft/.unverifiedTemps; saved extract re-saved unchanged", () => {
+  it("reopen: flags from extract.draft/.unverifiedTemps; saved extract kept (not re-sent)", () => {
     const extract = {
       provider: "on-device",
       provenance: { "product.name": { quote: "X" } },
@@ -439,7 +445,8 @@ describe("LEAD rulings: provider, pages, new warnings, reopen", () => {
     };
     const d = done(savedExtractState({ card, extract }));
     assert.deepEqual(extractFlags(d), { draft: true, unverifiedTemps: true });
-    assert.equal(toSavedExtract(d)!.extractedAt, "2026-10-18T18:00:00Z");
+    assert.equal(d.saved!.extractedAt, "2026-10-18T18:00:00Z");
+    assert.equal(toSavedExtract(d), undefined);
     const old = done(
       savedExtractState({
         card,
@@ -491,6 +498,101 @@ describe("hand-edited fields", () => {
       }),
     );
     assert.match(provenanceRows(d.result.provenance)[0]!.text, /^Edited by Isaiah Chester/);
+    // Never re-sent from the browser: the server keeps the stored stamps.
+    assert.equal(toSavedExtract(d), undefined);
+  });
+  it("stamp with sheetQuote: 'Edited by' line, original quote (with page) beneath", () => {
+    const [row] = provenanceRows({
+      "environmentals.ambientTempMinF": {
+        edited: { by: "Isaiah Chester", at: "2026-10-18T19:30:00Z" },
+        sheetQuote: { page: 2, quote: "Minimum 50°F" },
+      },
+    });
+    assert.equal(row!.edited, true);
+    assert.equal(row!.stated, true);
+    assert.match(row!.text, /^Edited by Isaiah Chester, Oct 18, 2026, \d{1,2}:30 [AP]M/);
+    assert.doesNotMatch(row!.text, /Minimum 50/);
+    assert.equal(row!.sheetQuote, "p. 2 — “Minimum 50°F”");
+    assert.equal(SHEET_QUOTE_LABEL, "Original sheet quote (before the edit)");
+  });
+  it("stamp without sheetQuote: 'Edited by' only, no quote line; email fallback renders as given", () => {
+    const [row] = provenanceRows({
+      "product.name": { edited: { by: "isaiah@example.com", at: "2026-10-18T19:30:00.000Z" } },
+    });
+    assert.match(row!.text, /^Edited by isaiah@example\.com, Oct 18, 2026/);
+    assert.equal(row!.sheetQuote, undefined);
+    const [noPage] = provenanceRows({
+      a: { edited: { by: "I", at: "2026-10-18T19:30:00Z" }, sheetQuote: { quote: "Q" } },
+    });
+    assert.equal(noPage!.sheetQuote, "“Q”");
+  });
+  it("invalid or missing `at` (and missing `by`) never crash; the stamp still shows", () => {
+    for (const edited of [
+      { by: "Isaiah Chester", at: "not a date" },
+      { by: "Isaiah Chester" },
+      { by: "Isaiah Chester", at: 12345 },
+      { at: "2026-10-18T19:30:00Z" },
+    ]) {
+      const s = mapServerResponse(ok({ provenance: { "product.name": { edited } } as never }));
+      assert.equal(s.ok, true, JSON.stringify(edited));
+      const rows = provenanceRows(s.ok ? s.result.provenance : {});
+      assert.match(rows[0]!.text, /^Edited by /);
+    }
+    assert.equal(
+      describeProvenance({ edited: { by: "I", at: "nope" } }),
+      `Edited by I, ${EDITED_AT_UNKNOWN}`,
+    );
+    assert.equal(formatEditedAt(undefined), EDITED_AT_UNKNOWN);
+    assert.equal(formatEditedAt(""), EDITED_AT_UNKNOWN);
+    const reopened = done(
+      savedExtractState({
+        card,
+        extract: {
+          provider: "azure",
+          provenance: { "product.name": { edited: { by: "I" } } },
+          warnings: [],
+          extractedAt: "2026-10-18T19:00:00Z",
+        },
+      }),
+    );
+    assert.equal(
+      provenanceRows(reopened.result.provenance)[0]!.text,
+      `Edited by I, ${EDITED_AT_UNKNOWN}`,
+    );
+  });
+  it("a session change over an old stamp shows only the session text (no stale stamp or quote)", () => {
+    const prov = {
+      "product.name": {
+        edited: { by: "Isaiah Chester", at: "2026-10-18T19:30:00Z" },
+        sheetQuote: { page: 1, quote: "Carbomastic 615" },
+      },
+    };
+    const now = { ...card, product: { ...card.product, name: "Typed again" } };
+    const [row] = provenanceRows(prov, { current: now, asRead: card });
+    assert.equal(row!.text, SESSION_EDIT_TEXT);
+    assert.equal(row!.sheetQuote, undefined);
+  });
+  it("browser-side save never includes `edited`, even if a fresh response carried one", async () => {
+    const s = done(
+      await upload(
+        pdf,
+        ok({
+          provenance: {
+            "product.name": {
+              edited: { by: "x", at: "2026-10-18T19:30:00Z" },
+              sheetQuote: { page: 1, quote: "Carbomastic 615" },
+            },
+            "environmentals.windMaxMph": { edited: { by: "x", at: "2026-10-18T19:30:00Z" } },
+          } as never,
+        }),
+      ).p,
+    );
+    const saved = toSavedExtract(s)!;
+    assert.doesNotMatch(JSON.stringify(saved), /edited/);
+    assert.deepEqual(saved.provenance["product.name"], { page: 1, quote: "Carbomastic 615" });
+    assert.equal(saved.provenance["environmentals.windMaxMph"], "not-stated");
+    // What the browser sends must pass the server's own validator (#26 parseSavedExtract).
+    assert.ok(parseSavedExtract(saved));
   });
   it("no stamp yet: a field changed this session reads the session text; unchanged keep the quote", () => {
     const prov = result().provenance;

@@ -174,8 +174,11 @@ function App({ user }: { user: AppUser | null }) {
     text: "",
     recents: [] as SavedCard[],
     outcomes: [] as FieldOutcome[],
-    extract: null as SavedExtract | null,
+    extract: null as SavedExtract | null | undefined,
+    extractResult: null as object | null,
   });
+  /** Fresh reads already stored: later autosaves omit `extract` so server edit stamps are kept. */
+  const storedReads = useRef(new WeakSet<object>());
   jobRef.current = {
     projectId,
     projectName,
@@ -186,7 +189,11 @@ function App({ user }: { user: AppUser | null }) {
     text,
     recents,
     outcomes,
-    extract: toSavedExtract(extractState),
+    extract:
+      extractState.kind === "done" && storedReads.current.has(extractState.result)
+        ? undefined
+        : toSavedExtract(extractState),
+    extractResult: extractState.kind === "done" ? extractState.result : null,
   };
 
   const applyFull = useCallback((full: ProjectFull) => {
@@ -227,6 +234,7 @@ function App({ user }: { user: AppUser | null }) {
         outcomes: snap.outcomes,
         extract: snap.extract,
       });
+      if (snap.extract && snap.extractResult) storedReads.current.add(snap.extractResult);
       if (gen !== saveGen.current) return;
       setProjects((prev) => upsertProjectSummary(prev, summary));
     } catch (err) {

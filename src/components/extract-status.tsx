@@ -7,6 +7,7 @@ import {
   needsAzureReader,
   providerLabel,
   provenanceRows,
+  SHEET_QUOTE_LABEL,
   retryCopy,
   type ExtractState,
   type ServerIssue,
@@ -112,6 +113,11 @@ export function ProvenancePanel({ state, card }: { state: ExtractState; card?: u
                 </dt>
                 <dd className={r.edited ? "text-accent" : r.stated ? "text-fg" : "text-subtle"}>
                   {r.text}
+                  {r.sheetQuote ? (
+                    <span className="mt-0.5 block text-xs text-muted">
+                      {SHEET_QUOTE_LABEL}: {r.sheetQuote}
+                    </span>
+                  ) : null}
                 </dd>
               </div>
             ))}
