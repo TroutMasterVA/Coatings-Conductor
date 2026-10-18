@@ -156,3 +156,17 @@ describe("a temperature range wrapped across layout lines still reads both ends"
     );
   });
 });
+
+describe("a duration is never borrowed from a neighbouring label or sentence", () => {
+  it("pot life next to another label or prose stays Not stated", () => {
+    assert.equal(potLifeFromText("Pot life Induction time 10 min"), "");
+    assert.equal(potLifeFromText("Pot life is short. Cure 7 days"), "");
+  });
+  it("recoat min next to another label stays Not stated", () => {
+    assert.equal(recoatFromText("Recoat minimum: Cure time 7 days").min, "");
+    assert.equal(recoatFromText("Recoat interval min: Handle 8 hours").min, "");
+  });
+  it("kit-size noise between the label and the duration still reads", () => {
+    assert.match(potLifeFromText("Pot Life 8 2 gallons 2-4 hours at 70°F"), /^2-4 hours/);
+  });
+});
