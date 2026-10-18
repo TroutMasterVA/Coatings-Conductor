@@ -151,7 +151,7 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
         </div>
         {(card.surfacePrep.prepGates ?? []).length ? (
           <ul className="space-y-1 text-sm">
-            {card.surfacePrep.prepGates.map((g) => (
+            {(card.surfacePrep.prepGates ?? []).map((g) => (
               <li key={`${g.family}-${g.label}`} className="flex gap-2">
                 <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
                 <span>{formatPrepGate(g)}</span>
