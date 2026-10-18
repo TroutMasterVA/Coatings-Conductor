@@ -1,7 +1,24 @@
 import { heuristicExtract } from "../heuristic-extract.ts";
 import { buildCardFromPds } from "../on-device-extract.ts";
-import { gateNumbers, sourceOf } from "./provenance.ts";
-import type { ExtractInput, ExtractProvider, ExtractResult, ExtractWarning } from "./provider.ts";
+import { gateNumbers, sourceOf, unverifiedTempsFromGate } from "./provenance.ts";
+import type { ExtractInput, ExtractProvider, ExtractResult, ExtractWarning, Provenance } from "./provider.ts";
+
+function result(card: ExtractResult["card"], provenance: Provenance, warnings: ExtractWarning[], droppedPaths: string[]): ExtractResult {
+  return {
+    card,
+    provenance,
+    provider: "on-device",
+    warnings,
+    extract: {
+      provider: "on-device",
+      provenance,
+      warnings,
+      extractedAt: new Date().toISOString(),
+      draft: true,
+      unverifiedTemps: unverifiedTempsFromGate(provenance, droppedPaths),
+    },
+  };
+}
 
 const IMAGE_ONLY: ExtractWarning = {
   code: "IMAGE_ONLY_NEEDS_AZURE",
@@ -19,9 +36,9 @@ export const onDeviceProvider: ExtractProvider = {
       // App placeholders (e.g. default product label, generic PPE line) are not sheet values either.
       const blank = gateNumbers(heuristicExtract(" "), src);
       const provenance = Object.fromEntries(Object.keys(blank.provenance).map((k) => [k, "not-stated" as const]));
-      return { card: blank.card, provenance, provider: "on-device", warnings: [IMAGE_ONLY], draft: true };
+      return result(blank.card, provenance, [IMAGE_ONLY], []);
     }
-    const { card, provenance, dropped, unpinned } = gateNumbers(buildCardFromPds(src.text), src);
+    const { card, provenance, dropped, droppedPaths, unpinned } = gateNumbers(buildCardFromPds(src.text), src);
     const warnings: ExtractWarning[] = [];
     if (dropped) {
       warnings.push({
@@ -35,6 +52,6 @@ export const onDeviceProvider: ExtractProvider = {
         message: `${unpinned.length} value(s) were read on-device but no single source line was found. Check them against the sheet.`,
       });
     }
-    return { card, provenance, provider: "on-device", warnings, draft: true };
+    return result(card, provenance, warnings, droppedPaths);
   },
 };
