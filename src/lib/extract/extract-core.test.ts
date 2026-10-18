@@ -354,6 +354,44 @@ describe("one number gate for every provider", () => {
     assert.ok(r.ok && r.card.environmentals.dewPointSpreadMinF === 5);
   });
 
+  it("a real sheet line that does not back the value is not kept ('DFT: 5-7 mils' for a 5°F dew margin)", async () => {
+    const az = await okAzure();
+    const wrongLine = { quote: "DFT: 5-7 mils" }; // verbatim on the sheet, but it is the film thickness
+    const forged = {
+      ...az,
+      card: { ...az.card, environmentals: { ...az.card.environmentals, dewPointSpreadMinF: 5 } },
+      provenance: { ...az.provenance, "environmentals.dewPointSpreadMinF": wrongLine },
+      source: { text: SHEET },
+    };
+    const r = await runExtract(base({ azure: fakeAzure(async () => forged) }));
+    assert.ok(r.ok);
+    if (r.ok) {
+      const p = r.provenance["environmentals.dewPointSpreadMinF"];
+      assert.ok(p !== "not-stated" && p, "falls back to the gate's dew-point line");
+      assert.notEqual(p.quote, wrongLine.quote);
+      assert.match(p.quote, /dew point/);
+      assert.equal(r.card.environmentals.dewPointSpreadMinF, 5);
+    }
+  });
+
+  it("with no dew line on the sheet, a dew margin quoted from the DFT line becomes Not stated", async () => {
+    const az = await okAzure();
+    const text = SHEET.replace("Surface must be at least 5°F above the dew point.", "");
+    const forged = {
+      ...az,
+      card: { ...az.card, environmentals: { ...az.card.environmentals, dewPointSpreadMinF: 5 } },
+      provenance: { ...az.provenance, "environmentals.dewPointSpreadMinF": { quote: "DFT: 5-7 mils" } },
+      source: { text },
+    };
+    const r = await runExtract(base({ input: { text } as ExtractRequest, azure: fakeAzure(async () => forged) }));
+    assert.ok(r.ok);
+    if (r.ok) {
+      assert.equal(r.card.environmentals.dewPointSpreadMinF, null);
+      assert.equal(r.provenance["environmentals.dewPointSpreadMinF"], "not-stated");
+      assert.ok(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"));
+    }
+  });
+
   it("an Azure number NOT on the sheet with a fake quote is Not stated (no line to fall back to)", async () => {
     const az = await okAzure();
     const forged = {

@@ -5,6 +5,7 @@ import { PGlite } from "@electric-sql/pglite";
 import type { Sql } from "./db.ts";
 import type { SavedExtract } from "./extract/provider.ts";
 import { heuristicExtract } from "./heuristic-extract.ts";
+import { signRead } from "./extract/read-signature.ts";
 import { parseSavedExtract, planExtractSave, readJobExtract, saveJobCard, writeJobExtract } from "./job-extract.ts";
 import type { FieldCardData } from "./types.ts";
 
@@ -56,6 +57,7 @@ async function db(): Promise<Sql> {
 }
 
 const T1 = "2026-10-18T19:45:00.000Z";
+const SECRET = "test-secret-not-a-real-key";
 const T2 = "2026-10-18T19:50:00.000Z";
 
 function edited(card: FieldCardData, f: (c: FieldCardData) => void): FieldCardData {
@@ -94,7 +96,7 @@ describe("server edit stamp on save (CONTRACT.md 'Edit stamp')", () => {
     assert.deepEqual(saved?.provenance["environmentals.windMaxMph"], { edited: { by: "Alice Inspector", at: T1 } });
   });
 
-  it("a client-forged `edited` is replaced (same read) or dropped (new read)", async () => {
+  it("a client-forged `edited` is replaced, and a forged fresh `extractedAt` does not skip the stamp", async () => {
     const sql = await db();
     const forged = {
       ...EXTRACT,
@@ -115,11 +117,15 @@ describe("server edit stamp on save (CONTRACT.md 'Edit stamp')", () => {
       at: T1,
     });
 
-    // A new read (different extractedAt) carrying forged stamps: stamps are dropped, nothing is stamped.
-    await saveJobCard(sql, "alice", "job-a", { card: baseCard(), extract: { ...forged, extractedAt: T2 } }, T2);
+    // A "new read" claimed only by a fresh client extractedAt (no signature), with a hand edit:
+    // the server compares with what is stored and stamps the changed field anyway.
+    const card2 = edited(card, (c) => (c.environmentals.dewPointSpreadMinF = 9));
+    await saveJobCard(sql, "alice", "job-a", { card: card2, extract: { ...EXTRACT, extractedAt: T2 } }, T2, SECRET);
     saved = await readJobExtract(sql, "alice", "job-a");
-    assert.equal(saved?.extractedAt, T2);
-    assert.ok(Object.values(saved!.provenance).every((v) => !(v && typeof v === "object" && "edited" in v)));
+    assert.notEqual(saved?.extractedAt, T2, "the client's extractedAt is not trusted");
+    const dew = saved?.provenance["environmentals.dewPointSpreadMinF"] as { edited: unknown; sheetQuote?: unknown };
+    assert.deepEqual(dew.edited, { by: "Alice Inspector", at: T2 });
+    assert.deepEqual(dew.sheetQuote, EXTRACT.provenance["environmentals.dewPointSpreadMinF"]);
   });
 
   it("a second edit restamps by/at and keeps the original sheet quote", async () => {
@@ -227,5 +233,87 @@ describe("parseSavedExtract accepts the edited shape", () => {
       return v && typeof v === "object" && "edited" in v;
     });
     assert.deepEqual(stamped, ["environmentals.substrateTempMinF"]);
+  });
+});
+
+describe("signed reads (CONTRACT.md 'Signed reads')", () => {
+  const T3 = "2026-10-18T20:05:00.000Z";
+  /** What extractSheet returns for `userId`, as the client saves it (toSavedExtract). */
+  function signedRead(userId: string, card: FieldCardData, secret = SECRET): SavedExtract {
+    const fresh = { ...EXTRACT, extractedAt: T3 };
+    return { ...fresh, serverRead: signRead(secret, userId, { ...fresh, card }) };
+  }
+  const stamped = (e: SavedExtract | null) =>
+    Object.entries(e?.provenance ?? {})
+      .filter(([, v]) => v && typeof v === "object" && "edited" in v)
+      .map(([k]) => k);
+
+  async function jobWithOtherCard(sql: Sql) {
+    // The stored card differs from the new read, so an unproven save would be stamped.
+    const old = edited(baseCard(), (c) => {
+      c.environmentals.substrateTempMinF = 50;
+      c.environmentals.dewPointSpreadMinF = 3;
+    });
+    await saveJobCard(sql, "alice", "job-a", { card: old }, T1, SECRET);
+  }
+
+  it("a genuine signed read saves clean: its quotes, no stamps, serverRead not stored", async () => {
+    const sql = await db();
+    await jobWithOtherCard(sql);
+    const card = baseCard();
+    await saveJobCard(sql, "alice", "job-a", { card, extract: signedRead("alice", card) }, T3, SECRET);
+    const saved = await readJobExtract(sql, "alice", "job-a");
+    assert.deepEqual(stamped(saved), []);
+    assert.equal(saved?.extractedAt, T3);
+    assert.deepEqual(saved?.provenance["environmentals.substrateTempMinF"], EXTRACT.provenance["environmentals.substrateTempMinF"]);
+    assert.equal("serverRead" in (saved ?? {}), false);
+    const rows = await sql<{ extract_json: string }>`select extract_json from projects where id = 'job-a'`;
+    assert.doesNotMatch(rows[0]!.extract_json, /serverRead|"sig"/);
+  });
+
+  it("a signed read with one value tampered: only that field is stamped", async () => {
+    const sql = await db();
+    await jobWithOtherCard(sql);
+    const card = baseCard();
+    const extract = signedRead("alice", card);
+    const tampered = edited(card, (c) => (c.environmentals.substrateTempMinF = 60));
+    await saveJobCard(sql, "alice", "job-a", { card: tampered, extract }, T3, SECRET);
+    const saved = await readJobExtract(sql, "alice", "job-a");
+    assert.deepEqual(stamped(saved), ["environmentals.substrateTempMinF"]);
+    assert.deepEqual(saved?.provenance["environmentals.dewPointSpreadMinF"], EXTRACT.provenance["environmentals.dewPointSpreadMinF"]);
+  });
+
+  it("a signed read with a swapped quote is not trusted for that field", async () => {
+    const sql = await db();
+    await jobWithOtherCard(sql);
+    const card = baseCard();
+    const extract = signedRead("alice", card);
+    extract.provenance = { ...extract.provenance, "environmentals.dewPointSpreadMinF": { quote: "Mix Ratio: 1:1 by volume" } };
+    await saveJobCard(sql, "alice", "job-a", { card, extract }, T3, SECRET);
+    const saved = await readJobExtract(sql, "alice", "job-a");
+    assert.deepEqual(stamped(saved), ["environmentals.dewPointSpreadMinF"]);
+  });
+
+  it("another user's signed read (or a wrong secret) gets every changed field stamped", async () => {
+    for (const extract of [signedRead("bob", baseCard()), signedRead("alice", baseCard(), "other-instance-secret")]) {
+      const sql = await db();
+      await jobWithOtherCard(sql);
+      await saveJobCard(sql, "alice", "job-a", { card: baseCard(), extract }, T3, SECRET);
+      const saved = await readJobExtract(sql, "alice", "job-a");
+      assert.deepEqual(stamped(saved).sort(), ["environmentals.dewPointSpreadMinF", "environmentals.substrateTempMinF"]);
+      assert.notEqual(saved?.extractedAt, T3);
+    }
+  });
+
+  it("a signed read cannot unset unverifiedTemps (flags are signed)", async () => {
+    const sql = await db();
+    await jobWithOtherCard(sql);
+    const card = baseCard();
+    const extract = { ...signedRead("alice", card) };
+    const flipped = { ...extract, unverifiedTemps: !extract.unverifiedTemps };
+    await saveJobCard(sql, "alice", "job-a", { card, extract: flipped }, T3, SECRET);
+    const saved = await readJobExtract(sql, "alice", "job-a");
+    assert.equal(saved?.unverifiedTemps, EXTRACT.unverifiedTemps, "stored flags kept, not the client's");
+    assert.notEqual(saved?.extractedAt, T3);
   });
 });

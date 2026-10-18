@@ -1,5 +1,5 @@
 import { guestMigrateResult } from "@/lib/guest-import";
-import { planExtractSave } from "@/lib/job-extract";
+import { guestTrust, planExtractSave } from "@/lib/job-extract";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import {
   defaultSite,
@@ -167,6 +167,7 @@ export function guestSaveProject(input: {
     card: input.card,
     extract: input.extract,
     editor: { by: GUEST_EDITOR, at: now },
+    trust: guestTrust,
   });
   const next: ProjectFull = {
     ...found,

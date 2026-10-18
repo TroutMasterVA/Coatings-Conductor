@@ -89,9 +89,18 @@ export type ExtractResult = {
   draft?: boolean;
   /** true when any temperature field (ambient/substrate min/max, dew-point spread) has no verbatim quote. Missing = false. */
   unverifiedTemps?: boolean;
+  /** Set by extractSheet (server-only signature). The client copies it into the saved extract untouched. */
+  serverRead?: ServerRead;
   /** Internal only: the text a remote provider read (e.g. Document Intelligence content). The server gates against it and strips it before responding. */
   source?: { text: string; pages?: string[] };
 };
+
+/**
+ * Server-issued proof that a card came from this user's read (CONTRACT.md "Signed reads").
+ * SERVER-ONLY: returned by extractSheet, passed back untouched on save, never built by the client,
+ * and stripped before the extract is stored or returned.
+ */
+export type ServerRead = { id: string; sig: string; fields: Record<string, string> };
 
 /** Saved next to `card` in the job record. Older jobs have no `extract` (treat as missing; flags false). */
 export type SavedExtract = {
@@ -103,6 +112,8 @@ export type SavedExtract = {
   extractedAt: string;
   draft?: boolean;
   unverifiedTemps?: boolean;
+  /** Inbound only (save requests): the signed read this extract came from. Never stored. */
+  serverRead?: ServerRead;
 };
 
 /** Builds the object the UI saves next to `card` from the flat extract response. */
@@ -115,6 +126,7 @@ export function toSavedExtract(r: ExtractResult, extractedAt: string = new Date(
     extractedAt,
     draft: r.draft === true,
     unverifiedTemps: r.unverifiedTemps === true,
+    ...(r.serverRead ? { serverRead: r.serverRead } : {}),
   };
 }
 

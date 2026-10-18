@@ -1,4 +1,5 @@
-import type { EditedProvenance, ProvenanceQuote, SavedExtract, SavedProvenance } from "@/lib/extract/provider";
+import type { EditedProvenance, ProvenanceQuote, SavedExtract, SavedProvenance, ServerRead } from "@/lib/extract/provider";
+import type { ReadTrust } from "./extract/read-signature.ts";
 import type { Sql } from "@/lib/db";
 import type { FieldCardData } from "@/lib/types";
 import { isEmpty, isStructural, leaves, type Leaf } from "./extract/provenance.ts";
@@ -80,7 +81,24 @@ export function parseSavedExtract(raw: unknown): SavedExtract | null {
     unverifiedTemps: r.unverifiedTemps === true,
   };
   if (typeof r.deployment === "string" && r.deployment) out.deployment = r.deployment.slice(0, 128);
+  const sr = parseServerRead(r.serverRead);
+  if (sr) out.serverRead = sr;
   return out;
+}
+
+/** Inbound `serverRead` (signed read). Malformed -> ignored (the save is then treated as unsigned). */
+function parseServerRead(v: unknown): ServerRead | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as { id?: unknown; sig?: unknown; fields?: unknown };
+  if (typeof o.id !== "string" || o.id.length > 64 || typeof o.sig !== "string" || o.sig.length > 128) return null;
+  if (!o.fields || typeof o.fields !== "object" || Array.isArray(o.fields)) return null;
+  const fields: Record<string, string> = {};
+  let n = 0;
+  for (const [k, f] of Object.entries(o.fields as Record<string, unknown>)) {
+    if (++n > 2000) break;
+    if (typeof f === "string" && f.length <= 128) fields[k.slice(0, 200)] = f;
+  }
+  return { id: o.id, sig: o.sig, fields };
 }
 
 /** Who made a hand edit and when, as decided by the server. */
@@ -132,14 +150,35 @@ function withoutClientStamps(extract: SavedExtract): SavedExtract {
 
 export type ExtractSavePlan = { extract: SavedExtract | null; action: "kept" | "cleared" | "replaced" };
 
+/** Decides which fields of an incoming extract are a proven fresh read. Server: {@link verifyRead}. */
+export type TrustRead = (incoming: SavedExtract, card: FieldCardData | null | undefined, stored: SavedExtract | null) => ReadTrust;
+
+const UNTRUSTED: TrustRead = () => ({ meta: false, fields: new Set() });
+
+/**
+ * Guest workspace only (no server, no secret; everything is on this device anyway): a different
+ * `extractedAt` from the stored one counts as a new read. Never used on the server.
+ */
+export const guestTrust: TrustRead = (incoming, card, stored) =>
+  stored && stored.extractedAt === incoming.extractedAt
+    ? { meta: false, fields: new Set() }
+    : { meta: true, fields: new Set(card ? leaves(card).map((l) => l.path) : []) };
+
+function stripServerRead(e: SavedExtract): SavedExtract {
+  const { serverRead: _drop, ...rest } = e;
+  void _drop;
+  return rest;
+}
+
 /**
  * Decide the job's extract on save. Pure.
- * - `extract` missing keeps the stored record; `null` clears it; an object replaces it.
- * - An object from the SAME read (same `extractedAt` as stored) keeps the server's provenance:
- *   whatever the client sent for quotes or `edited` is ignored.
- * - An object from a NEW read replaces it, minus any client-sent `edited` entries; the card
- *   came from that read, so nothing is stamped.
- * - Otherwise, when a card is saved, fields that differ from the stored card are stamped.
+ * - `extract` missing keeps the stored record (changed card fields get stamped); `null` clears it;
+ *   an object replaces it.
+ * - For an object, the server decides what was hand-edited: a field is a fresh read only when
+ *   `trust` proves it (server: a valid signed read for this user, see read-signature.ts). Every
+ *   other field is compared with the stored card: unchanged keeps the stored entry, changed is
+ *   stamped. The client's `extractedAt`, quotes for unproven fields, and any `edited` it sends are
+ *   never trusted. `serverRead` is never stored.
  */
 export function planExtractSave(input: {
   storedCard: FieldCardData | null;
@@ -147,26 +186,43 @@ export function planExtractSave(input: {
   card: FieldCardData | null | undefined;
   extract: unknown;
   editor: Editor;
+  trust?: TrustRead;
 }): ExtractSavePlan {
   const { storedCard, storedExtract, card, extract, editor } = input;
   if (extract === null) return { extract: null, action: "cleared" };
-  let base: SavedExtract | null;
-  let action: ExtractSavePlan["action"];
   if (extract === undefined) {
-    base = storedExtract;
-    action = "kept";
-  } else {
-    const parsed = parseSavedExtract(extract);
-    if (!parsed) throw new Error("Saved source quotes are malformed.");
-    action = "replaced";
-    if (storedExtract && parsed.extractedAt === storedExtract.extractedAt) {
-      base = { ...parsed, provenance: storedExtract.provenance };
-    } else {
-      return { extract: withoutClientStamps(parsed), action };
-    }
+    let base = storedExtract;
+    if (base && card && storedCard) base = stampEdits(storedCard, card, base, editor);
+    return { extract: base, action: "kept" };
   }
-  if (base && card && storedCard) base = stampEdits(storedCard, card, base, editor);
-  return { extract: base, action };
+  const parsed = parseSavedExtract(extract);
+  if (!parsed) throw new Error("Saved source quotes are malformed.");
+  const t = (input.trust ?? UNTRUSTED)(parsed, card ?? storedCard, storedExtract);
+  const clean = withoutClientStamps(stripServerRead(parsed));
+  const next = card ?? storedCard;
+  // The client's extractedAt is ignored: a fresh read (or a first extract) is dated by the server.
+  const meta =
+    t.meta || !storedExtract ? { ...clean, extractedAt: editor.at } : stripServerRead(storedExtract);
+  const before = new Map(storedCard ? leaves(storedCard).map((l) => [l.path, l.value] as const) : []);
+  const prior = storedExtract?.provenance ?? {};
+  const provenance: SavedProvenance = {};
+  for (const l of next ? leaves(next) : []) {
+    const path = l.path;
+    if (t.meta && t.fields.has(path)) {
+      const own = clean.provenance[path];
+      if (own !== undefined) provenance[path] = own;
+      continue;
+    }
+    if (sameValue(before.get(path), l.value)) {
+      if (prior[path] !== undefined) provenance[path] = prior[path]!;
+      continue;
+    }
+    if (isStructural(path)) continue;
+    const p = prior[path];
+    const sheetQuote = isEdited(p) ? p.sheetQuote : p && p !== "not-stated" ? p : undefined;
+    provenance[path] = sheetQuote ? { edited: { ...editor }, sheetQuote } : { edited: { ...editor } };
+  }
+  return { extract: { ...meta, provenance }, action: "replaced" };
 }
 
 /** `by` for an edit stamp: the session user's display name, else email. */
@@ -188,7 +244,11 @@ export async function saveJobCard(
   jobId: string,
   input: { card?: FieldCardData | null; extract?: unknown },
   at: string = new Date().toISOString(),
+  secret?: string,
 ): Promise<ExtractSavePlan | null> {
+  // Server-only modules, loaded lazily so the guest (browser) path never pulls node:crypto.
+  const { verifyRead } = await import("./extract/read-signature.ts");
+  const key = secret ?? (await import("./auth/secret.server.ts")).authSecret();
   const rows = await sql<{ card_json: string | null; extract_json: string | null }>`
     select card_json, extract_json from projects where id = ${jobId} and user_id = ${userId}
   `;
@@ -207,6 +267,7 @@ export async function saveJobCard(
     card: input.card,
     extract: input.extract,
     editor: { by: await editorName(sql, userId), at },
+    trust: (incoming, c) => verifyRead(key, userId, incoming, c),
   });
   const updated = await sql<{ id: string }>`
     update projects set

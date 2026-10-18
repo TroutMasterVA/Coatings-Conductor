@@ -1,6 +1,6 @@
 import { cleanBase64, isImageMime, maxBase64Length, normalizeMime, sniffFileType, DOCX_MIME } from "./file-type.ts";
 import { readDocxText, readPdfText, type ReadText } from "./server-read.ts";
-import { gateNumbers, quoteIsVerbatim, sourceOf, unverifiedTempsFromGate, type SourceDoc } from "./provenance.ts";
+import { gateNumbers, leaves, quoteCoversNumbers, quoteIsVerbatim, sourceOf, unverifiedTempsFromGate, type SourceDoc } from "./provenance.ts";
 import type {
   ExtractErrorCode,
   ExtractInput,
@@ -117,10 +117,20 @@ export function gateRemote(raw: ExtractResult, input: ExtractInput): ExtractResu
   const haystack = [src.text, ...(src.pages ?? [])].join("\n\n");
   // The provider's own quote (exact line + page) is kept only when it is verbatim on the sheet;
   // otherwise the gate's own verified line is used. A remote quote is never trusted as-is.
+  // It must also back the value: every number in the value appears in the quote (quoteCoversNumbers),
+  // so a real line about something else ("DFT: 5-7 mils" for a 5°F dew margin) is never kept.
+  const values = new Map(leaves(g.card).map((l) => [l.path, l.value] as const));
   const provenance: Provenance = {};
   for (const [k, p] of Object.entries(g.provenance)) {
     const own = r.provenance[k];
-    const ownOk = p !== "not-stated" && !!own && own !== "not-stated" && own.quote.trim() !== "" && quoteIsVerbatim(own.quote, haystack);
+    const v = values.get(k);
+    const ownOk =
+      p !== "not-stated" &&
+      !!own &&
+      own !== "not-stated" &&
+      own.quote.trim() !== "" &&
+      quoteIsVerbatim(own.quote, haystack) &&
+      (typeof v !== "string" && typeof v !== "number" ? true : quoteCoversNumbers(k, v, own.quote));
     provenance[k] = ownOk ? own : p;
   }
   const dropped = g.droppedPaths.length;

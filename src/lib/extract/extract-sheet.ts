@@ -64,7 +64,7 @@ export const extractSheet = createServerFn({ method: "POST" })
   })
   .handler(async ({ data, context }): Promise<ExtractResponse> => {
     const { azureFromEnv } = await import("./azure-provider.ts");
-    return runExtract({
+    const res = await runExtract({
       userId: context.userId,
       input: data,
       azure: azureFromEnv(),
@@ -73,4 +73,9 @@ export const extractSheet = createServerFn({ method: "POST" })
       maxFileBytes: maxFileBytes(),
       log: (entry) => console.info(JSON.stringify(entry)),
     });
+    if (!res.ok || !context.userId) return res;
+    // Sign the read for this user so a save can prove which values came from it (server-only).
+    const { authSecret } = await import("../auth/secret.server");
+    const { signRead } = await import("./read-signature.ts");
+    return { ...res, serverRead: signRead(authSecret(), context.userId, res) };
   });
