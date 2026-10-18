@@ -91,7 +91,7 @@ function headerUnitRow(s: string, inheritedTemps: number[] = []): string | null 
   let rest = s.slice(h[0].length);
   const th = tempHeaders(rest);
   rest = rest.slice(th.end);
-  const cells = rest.match(/^(?:\s*\d+(?:\.\d+)?(?:\s+\d\s*⁄\s*\d)?(?![\d.]|\s*[°%\/]))+/);
+  const cells = rest.match(/^(?:\s*\d+(?:\.\d+)?(?:\s+\d\s*⁄\s*\d)?(?![\d.]|\s*[°%/]))+/);
   if (!cells) return null;
   const nums = [...cells[0].matchAll(/\d+(?:\.\d+)?(?:\s+\d\s*⁄\s*\d)?/g)].map((x) =>
     x[0].replace(/\s+/g, " "),
