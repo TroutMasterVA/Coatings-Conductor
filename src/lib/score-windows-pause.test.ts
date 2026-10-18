@@ -6,7 +6,6 @@ import {
   goHourCount,
   rescoreForecast,
   scoreHour,
-  TEMPS_UNVERIFIED_HEADLINE,
   TEMPS_UNVERIFIED_REASON,
   type RawHour,
 } from "./score-windows.ts";
@@ -80,11 +79,8 @@ describe("weather scoring pauses when temperature limits are unverified", () => 
     );
     const b = bundleDays(scored, meta, env, undefined, { unverifiedTemps: true });
     assert.deepEqual(b.paused, { reason: TEMPS_UNVERIFIED_REASON });
-    assert.equal(
-      b.headline,
-      "Weather windows paused: temperature limits not verified on the sheet.",
-    );
-    assert.equal(b.headline, TEMPS_UNVERIFIED_HEADLINE);
+    // Scoring writes no wording of its own when paused; #32 renders the message from `paused`.
+    assert.equal(b.headline, "");
     for (const d of b.days) {
       assert.equal(d.status, "unknown");
       assert.equal(d.goHours, 0);
@@ -114,9 +110,8 @@ describe("weather scoring pauses when temperature limits are unverified", () => 
   it("a forecast with no raw hours still reports the pause", () => {
     const empty: ForecastBundle = { ...meta, rawHours: [], days: [], headline: "x" };
     assert.equal(rescoreForecast(empty, env, site).headline, "x");
-    assert.equal(
-      rescoreForecast(empty, env, site, { unverifiedTemps: true }).headline,
-      TEMPS_UNVERIFIED_HEADLINE,
-    );
+    const p = rescoreForecast(empty, env, site, { unverifiedTemps: true });
+    assert.equal(p.headline, "");
+    assert.deepEqual(p.paused, { reason: TEMPS_UNVERIFIED_REASON });
   });
 });
