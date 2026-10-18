@@ -1,4 +1,5 @@
 import { guestMigrateResult } from "@/lib/guest-import";
+import { assertWritable, closeLocal, jobStatusOf, type JobStatusFields } from "@/lib/job-status";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import {
   defaultSite,
@@ -12,9 +13,11 @@ import type { SiteContext } from "@/lib/mitigations";
 
 const KEY = "fieldcard.projects.v1";
 
+type GuestProject = ProjectFull & JobStatusFields;
+
 type GuestStore = {
   lastProjectId: string | null;
-  projects: ProjectFull[];
+  projects: GuestProject[];
   custom: CustomMitigation[];
 };
 
@@ -46,8 +49,9 @@ function write(store: GuestStore) {
   localStorage.setItem(KEY, JSON.stringify(store));
 }
 
-function summaryOf(p: ProjectFull): ProjectSummary {
+function summaryOf(p: GuestProject): ProjectSummary & JobStatusFields {
   return {
+    ...jobStatusOf(p),
     id: p.id,
     name: p.name,
     zip: p.zip,
@@ -128,7 +132,7 @@ export function guestCreateProject(name: string, zip: string, seed?: Partial<Pro
   return full;
 }
 
-export function guestOpenProject(id: string): ProjectFull {
+export function guestOpenProject(id: string): GuestProject {
   const s = read();
   const found = s.projects.find((p) => p.id === id && !p.archived);
   if (!found) throw new Error("Project not found.");
@@ -151,12 +155,14 @@ export function guestSaveProject(input: {
   pdsText?: string;
   recents?: SavedCard[];
   outcomes?: FieldOutcome[];
-}): ProjectSummary {
+}): ProjectSummary & JobStatusFields {
   const s = read();
   const found = s.projects.find((p) => p.id === input.id);
   if (!found) throw new Error("Project not found.");
+  // Mirrors the server: a closed job refuses every change (CONTRACT "Job closeout").
+  assertWritable(found);
   const now = new Date().toISOString();
-  const next: ProjectFull = {
+  const next: GuestProject = {
     ...found,
     name: input.name?.trim() || found.name,
     zip: input.zip != null ? input.zip.replace(/\D/g, "").slice(0, 5) : found.zip,
@@ -173,6 +179,23 @@ export function guestSaveProject(input: {
   s.projects = s.projects.map((p) => (p.id === input.id ? next : p));
   write(s);
   return summaryOf(next);
+}
+
+/** Local close: same result shape as the server's closeProject. Idempotent. No reopen. */
+export function guestCloseProject(id: string): {
+  ok: true;
+  status: "closed";
+  closedAt: string | null;
+  closedBy: string | null;
+} {
+  const s = read();
+  const found = s.projects.find((p) => p.id === id);
+  if (!found) throw new Error("Project not found.");
+  const next = closeLocal(found, new Date().toISOString());
+  s.projects = s.projects.map((p) => (p.id === id ? next : p));
+  write(s);
+  const view = jobStatusOf(next);
+  return { ok: true, status: "closed", closedAt: view.closedAt, closedBy: view.closedBy };
 }
 
 export function guestArchiveProject(id: string, archived: boolean) {
