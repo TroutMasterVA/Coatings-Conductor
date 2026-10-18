@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
+import { closeJob, deleteOpenProject, statusFields, throwWriteRefused, writeOpenProject, type JobStatus } from "@/lib/job-close";
+import { listProjectRows, openProjectRow, readProjectRow, toRowSummary, type ProjectRow } from "@/lib/project-rows";
 import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
@@ -16,7 +18,13 @@ export type ProjectSummary = {
   lastOpenedAt: string;
   updatedAt: string;
   hasCard: boolean;
+  /** Closeout (CONTRACT.md "Job closeout"). Optional on the type so older guest data still loads. */
+  status?: JobStatus;
+  closedAt?: string | null;
+  closedBy?: string | null;
 };
+
+export { JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE } from "@/lib/job-close";
 
 export type ProjectFull = ProjectSummary & {
   calibration: Calibration;
@@ -35,22 +43,6 @@ export type WorkspacePayload = {
   custom: CustomMitigation[];
 };
 
-type ProjectRow = {
-  id: string;
-  name: string;
-  zip: string;
-  archived: boolean;
-  calibration_json: string;
-  site_json: string;
-  card_json: string | null;
-  extract_json?: string | null;
-  pds_text: string;
-  recents_json: string;
-  outcomes_json: string;
-  last_opened_at: string;
-  updated_at: string;
-};
-
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
   try {
@@ -65,15 +57,7 @@ export function defaultSite(): SiteContext {
 }
 
 function toSummary(row: ProjectRow): ProjectSummary {
-  return {
-    id: row.id,
-    name: row.name,
-    zip: row.zip,
-    archived: Boolean(row.archived),
-    lastOpenedAt: row.last_opened_at,
-    updatedAt: row.updated_at,
-    hasCard: Boolean(row.card_json),
-  };
+  return toRowSummary(row);
 }
 
 function toFull(row: ProjectRow): ProjectFull {
@@ -98,14 +82,7 @@ function toFull(row: ProjectRow): ProjectFull {
 }
 
 async function listRows(userId: string) {
-  const sql = await getSql();
-  return sql<ProjectRow>`
-    select id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
-           recents_json, outcomes_json, last_opened_at, updated_at
-    from projects
-    where user_id = ${userId}
-    order by archived asc, last_opened_at desc
-  `;
+  return listProjectRows(await getSql(), userId);
 }
 
 async function loadCustom(userId: string) {
@@ -177,6 +154,9 @@ export const createProject = createServerFn({ method: "POST" })
       lastOpenedAt: now,
       updatedAt: now,
       hasCard: Boolean(card),
+      status: "open",
+      closedAt: null,
+      closedBy: null,
       calibration: cal,
       site,
       card,
@@ -193,14 +173,7 @@ export const openProject = createServerFn({ method: "POST" })
   .handler(async ({ context, data: id }): Promise<ProjectFull> => {
     const sql = await getSql();
     const now = new Date().toISOString();
-    const rows = await sql<ProjectRow>`
-      update projects
-      set last_opened_at = ${now}
-      where id = ${id} and user_id = ${context.userId} and archived = false
-      returning id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
-                recents_json, outcomes_json, last_opened_at, updated_at
-    `;
-    const row = rows[0];
+    const row = await openProjectRow(sql, context.userId, id, now);
     if (!row) throw new Error(NOT_YOUR_JOB_MESSAGE);
     await sql`
       insert into user_prefs (user_id, last_project_id) values (${context.userId}, ${id})
@@ -228,13 +201,10 @@ export const saveProject = createServerFn({ method: "POST" })
   )
   .handler(async ({ context, data }): Promise<ProjectSummary> => {
     const sql = await getSql();
-    const existing = await sql<ProjectRow>`
-      select id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
-             recents_json, outcomes_json, last_opened_at, updated_at
-      from projects where id = ${data.id} and user_id = ${context.userId}
-    `;
-    const row = existing[0];
+    const row = await readProjectRow(sql, context.userId, data.id);
     if (!row) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    // Closed jobs are read-only. The write below re-checks status in its WHERE clause (race-safe).
+    if (row.status === "closed") return throwWriteRefused(sql, context.userId, data.id);
     const name = data.name?.trim() || row.name;
     const zip = data.zip != null ? data.zip.replace(/\D/g, "").slice(0, 5) : row.zip;
     const cal = data.calibration ?? parseJson(row.calibration_json, DEFAULT_CALIBRATION);
@@ -243,27 +213,29 @@ export const saveProject = createServerFn({ method: "POST" })
     const recents = data.recents ?? parseJson<SavedCard[]>(row.recents_json, []);
     const outcomes = data.outcomes ?? parseJson<FieldOutcome[]>(row.outcomes_json, []);
     const now = new Date().toISOString();
-    // Card + extract in one statement. Missing `extract` keeps the stored quotes; null clears; an
-    // object replaces. Fields that differ from the stored card get a server edit stamp
-    // (CONTRACT.md "Edit stamp"); anything the client sent as `edited` is ignored.
+    const card = data.card !== undefined ? data.card : parseJson<FieldCardData | null>(row.card_json, null);
+    // Integration merge (#26 + #37): keep BOTH the server edit stamp (CONTRACT.md "Edit stamp") and the
+    // closed-job guard. saveJobCard plans the stamps against the stored card and writes card + extract;
+    // writeOpenProject then writes the rest scoped by owner AND status = 'open' (JOB_CLOSED otherwise).
     const saved = await saveJobCard(sql, context.userId, data.id, { card: data.card, extract: data.extract }, now);
     if (!saved) throw new Error(NOT_YOUR_JOB_MESSAGE);
-    const updated = await sql<ProjectRow>`
-      update projects set
-        name = ${name},
-        zip = ${zip},
-        calibration_json = ${JSON.stringify(cal)},
-        site_json = ${JSON.stringify(site)},
-        pds_text = ${pdsText},
-        recents_json = ${JSON.stringify(recents)},
-        outcomes_json = ${JSON.stringify(outcomes)},
-        updated_at = ${now}
-      where id = ${data.id} and user_id = ${context.userId}
-      returning id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
-                recents_json, outcomes_json, last_opened_at, updated_at
-    `;
-    if (!updated[0]) throw new Error(NOT_YOUR_JOB_MESSAGE);
-    return toSummary(updated[0]);
+    const updated = await writeOpenProject<ProjectRow>(
+      sql,
+      context.userId,
+      data.id,
+      {
+        name,
+        zip,
+        calibrationJson: JSON.stringify(cal),
+        siteJson: JSON.stringify(site),
+        cardJson: card ? JSON.stringify(card) : null,
+        pdsText,
+        recentsJson: JSON.stringify(recents),
+        outcomesJson: JSON.stringify(outcomes),
+      },
+      now,
+    );
+    return toSummary(updated);
   });
 
 export const archiveProject = createServerFn({ method: "POST" })
@@ -286,15 +258,29 @@ export const archiveProject = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+/**
+ * Close a job (CONTRACT.md "Job closeout"). Same style as archiveProject: owner-only
+ * (non-owner throws NOT_YOUR_JOB_MESSAGE), idempotent, no reopen in this release.
+ */
+export const closeProject = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { id: string }) => {
+    const id = typeof input?.id === "string" ? input.id : "";
+    if (!id) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    return { id };
+  })
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    return closeJob(sql, context.userId, data.id);
+  });
+
 export const deleteProject = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((id: string) => id)
   .handler(async ({ context, data: id }) => {
     const sql = await getSql();
-    const rows = await sql<{ id: string }>`
-      delete from projects where id = ${id} and user_id = ${context.userId} returning id
-    `;
-    if (!rows[0]) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    // Closed jobs can't be deleted (JOB_CLOSED_DELETE_MESSAGE); the status check is in the DELETE itself.
+    await deleteOpenProject(sql, context.userId, id);
     await sql`
       update user_prefs set last_project_id = null
       where user_id = ${context.userId} and last_project_id = ${id}
@@ -357,15 +343,19 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
       const outcomes = Array.isArray(p.outcomes) ? p.outcomes : [];
       const lastOpened = p.lastOpenedAt || now;
       const updated = p.updatedAt || now;
+      // A job closed on this device stays closed (read-only record) in the account.
+      const closed = statusFields({ status: p.status, closed_at: p.closedAt ?? null, closed_by: p.closedBy ?? null });
       await sql`
         insert into projects (
           id, user_id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
-          recents_json, outcomes_json, created_at, updated_at, last_opened_at
+          recents_json, outcomes_json, created_at, updated_at, last_opened_at,
+          status, closed_at, closed_by
         ) values (
           ${id}, ${context.userId}, ${name}, ${zip}, ${Boolean(p.archived)},
           ${JSON.stringify(cal)}, ${JSON.stringify(site)}, ${card ? JSON.stringify(card) : null},
           ${encodeSavedExtract(extract)}, ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
-          ${now}, ${updated}, ${lastOpened}
+          ${now}, ${updated}, ${lastOpened},
+          ${closed.status}, ${closed.closedAt}, ${closed.closedBy}
         )
         on conflict (id) do nothing
       `;
