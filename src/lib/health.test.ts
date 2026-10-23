@@ -30,9 +30,6 @@ describe("health check", () => {
     assert.deepEqual(res.body, {
       status: "ok",
       db: "ok",
-      dbSource: "postgres",
-      extractProvider: "on-device",
-      version: "1.2.3",
     });
   });
 
@@ -81,12 +78,14 @@ describe("health check", () => {
     );
     assert.equal(extractProviderFromEnv(AZURE_ENV), "azure");
 
-    const res = await checkHealth({ dbSource: "postgres", env: AZURE_ENV, ping: async () => {} });
-    assert.equal(res.body.extractProvider, "azure");
+    const res = await checkHealth({ dbSource: "postgres", env: { ...AZURE_ENV, GITHUB_SHA: "deadbeef1234" }, ping: async () => {} });
+    // SEC: public body is status words only — no commit id, DB type or reader provider.
+    assert.deepEqual(Object.keys(res.body).sort(), ["db", "status"]);
     const text = JSON.stringify(res.body);
     for (const value of Object.values(AZURE_ENV)) {
       assert.ok(!text.includes(value), `health body leaked ${value}`);
     }
+    for (const leak of ["deadbeef", "postgres", "azure", "version"]) assert.ok(!text.includes(leak), leak);
   });
 
   it("derives a short, printable version", () => {
@@ -103,9 +102,6 @@ describe("health check", () => {
       body: {
         status: "degraded",
         db: "down",
-        dbSource: "pglite",
-        extractProvider: "on-device",
-        version: "dev",
       },
     });
     assert.equal(res.status, 503);

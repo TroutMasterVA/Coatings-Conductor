@@ -12,20 +12,15 @@
 export type HealthDbSource = "postgres" | "pglite";
 export type ExtractProviderId = "azure" | "on-device";
 
+/** Public body: fixed status words only (SEC: no commit id, DB type or reader provider). */
 export interface HealthOk {
   status: "ok";
   db: "ok";
-  dbSource: HealthDbSource;
-  extractProvider: ExtractProviderId;
-  version: string;
 }
 
 export interface HealthDegraded {
   status: "degraded";
   db: "down";
-  dbSource: HealthDbSource;
-  extractProvider: ExtractProviderId;
-  version: string;
 }
 
 export type HealthBody = HealthOk | HealthDegraded;
@@ -81,16 +76,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export async function checkHealth(
   deps: HealthDeps,
 ): Promise<{ status: 200 | 503; body: HealthBody }> {
-  const common = {
-    dbSource: deps.dbSource,
-    extractProvider: extractProviderFromEnv(deps.env),
-    version: appVersionFromEnv(deps.env),
-  };
   try {
     await withTimeout(Promise.resolve().then(deps.ping), deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    return { status: 200, body: { status: "ok", db: "ok", ...common } };
+    return { status: 200, body: { status: "ok", db: "ok" } };
   } catch {
-    return { status: 503, body: { status: "degraded", db: "down", ...common } };
+    return { status: 503, body: { status: "degraded", db: "down" } };
   }
 }
 

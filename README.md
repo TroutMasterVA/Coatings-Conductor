@@ -127,10 +127,10 @@ All Azure settings stay on the server. The browser never sees endpoints or keys.
 
 `GET /api/health` needs no sign-in and returns no secrets.
 
-- `200` `{"status":"ok","db":"ok","dbSource":"postgres","extractProvider":"azure","version":"…"}` — the database answered `SELECT 1`.
+- `200` `{"status":"ok","db":"ok"}` — the database answered `SELECT 1`.
 - `503` `{"status":"degraded","db":"down",…}` — the database did not answer within 3 seconds.
 
-`extractProvider` is `azure` when the Azure settings are complete, otherwise `on-device`. `dbSource` is `postgres` or `pglite` (in-memory fallback).
+The body carries only these status words: no commit id, database type or reader provider.
 
 The image has a Docker `HEALTHCHECK` on this path. On Azure, point the probes at it:
 
@@ -204,7 +204,7 @@ AZURE_OPENAI_API_VERSION=2024-10-21
 
 The app signs in with its managed identity first (`DefaultAzureCredential`). Only if that is not possible, set `AZURE_DOCINTEL_KEY` and `AZURE_OPENAI_API_KEY` as **secrets**. Never commit keys.
 
-When all four required values are set, `/api/health` reports `"extractProvider":"azure"`.
+When all four required values are set, the Azure reader is used (the card shows no on-device warning).
 
 ### 4. Test the connection
 
@@ -214,7 +214,7 @@ npm run azure:check
 
 This checks the settings, the managed identity sign-in, Document Intelligence and the model deployment using a tiny bundled sample, and prints pass/fail for each. It never prints keys or endpoints in full. Run it with the same environment as the app (for example from the container app's console).
 
-> `npm run azure:check` is being added by the backend ticket (BE) in this release. If your copy does not have it yet, check `/api/health` for `"extractProvider":"azure"` and upload a sample sheet; the card shows a warning if Azure failed and the on-device reader was used.
+> `npm run azure:check` is being added by the backend ticket (BE) in this release. If your copy does not have it yet, upload a sample sheet; the card shows a warning if Azure failed and the on-device reader was used.
 
 ### If Azure is not connected or fails
 
