@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { heuristicExtract } from "../heuristic-extract.ts";
 import { onDeviceProvider } from "./on-device-provider.ts";
+import { buildCardFromPds } from "../on-device-extract.ts";
+import { gateNumbers, sourceOf, unverifiedTempsFromGate } from "./provenance.ts";
 
 const SHEET = `
 Product data sheet
@@ -84,6 +86,18 @@ describe("on-device extract provider", () => {
       assert.ok(r.warnings.some((w) => w.code === "VALUES_DROPPED_UNQUOTED"));
       assert.equal(r.unverifiedTemps, true);
     }
+  });
+
+  it("drops a read temperature with no backing line to Not stated and flags temps unverified", () => {
+    const text = "Product data sheet\nField Epoxy 100\nMix ratio: 1:1 by volume\nApplication conditions\nMinimum 50 Maximum 120";
+    const misread = buildCardFromPds(text);
+    misread.environmentals.ambientTempMinF = 55; // a number that is not on the sheet
+    const g = gateNumbers(misread, sourceOf({ text }));
+    assert.equal(g.card.environmentals.ambientTempMinF, null);
+    assert.equal(g.provenance["environmentals.ambientTempMinF"], "not-stated");
+    assert.ok(g.droppedPaths.includes("environmentals.ambientTempMinF"));
+    assert.ok(g.dropped >= 1);
+    assert.equal(unverifiedTempsFromGate(g.provenance, g.droppedPaths), true);
   });
 
   it("does not flag ON_DEVICE_UNPINNED just for inferred hold points", async () => {

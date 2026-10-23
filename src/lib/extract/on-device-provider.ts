@@ -1,16 +1,22 @@
-import { heuristicExtract } from "../heuristic-extract.ts";
+import { bareTemperatureLines, heuristicExtract } from "../heuristic-extract.ts";
 import { buildCardFromPds } from "../on-device-extract.ts";
 import { gateNumbers, sourceOf, unverifiedTempsFromGate } from "./provenance.ts";
 import type { ExtractInput, ExtractProvider, ExtractResult, ExtractWarning, Provenance } from "./provider.ts";
 
-function result(card: ExtractResult["card"], provenance: Provenance, warnings: ExtractWarning[], droppedPaths: string[]): ExtractResult {
+function result(
+  card: ExtractResult["card"],
+  provenance: Provenance,
+  warnings: ExtractWarning[],
+  droppedPaths: string[],
+  bareTemps = false,
+): ExtractResult {
   return {
     card,
     provenance,
     provider: "on-device",
     warnings,
     draft: true,
-    unverifiedTemps: unverifiedTempsFromGate(provenance, droppedPaths),
+    unverifiedTemps: bareTemps || unverifiedTempsFromGate(provenance, droppedPaths),
   };
 }
 
@@ -34,10 +40,13 @@ export const onDeviceProvider: ExtractProvider = {
     }
     const { card, provenance, dropped, droppedPaths, unpinned } = gateNumbers(buildCardFromPds(src.text), src);
     const warnings: ExtractWarning[] = [];
-    if (dropped) {
+    // Bare numbers on a temperature / application-conditions line (no °F/°C) are never used as
+    // temperatures; the fields stay Not stated, the user is told, and temperatures are unverified.
+    const bare = bareTemperatureLines(src.text).length;
+    if (dropped + bare) {
       warnings.push({
         code: "VALUES_DROPPED_UNQUOTED",
-        message: `${dropped} value(s) with numbers could not be tied to a line on the sheet and were set to Not stated.`,
+        message: `${dropped + bare} value(s) with numbers could not be tied to a line on the sheet and were set to Not stated.`,
       });
     }
     if (unpinned.length) {
@@ -46,6 +55,6 @@ export const onDeviceProvider: ExtractProvider = {
         message: `${unpinned.length} value(s) were read on-device but no single source line was found. Check them against the sheet.`,
       });
     }
-    return result(card, provenance, warnings, droppedPaths);
+    return result(card, provenance, warnings, droppedPaths, bare > 0);
   },
 };

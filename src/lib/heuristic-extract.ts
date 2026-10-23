@@ -1,3 +1,5 @@
+import { potLifeFromText, recoatFromText } from "./sheet-durations.ts";
+import { filmThicknessFromText, maskStandards, productTitleFromText } from "./sheet-title-film.ts";
 import type { Environmentals, FieldCardData, HoldPoint } from "./types";
 import {
   methodsFromGates,
@@ -260,7 +262,9 @@ export function logicalLines(t: string): string[] {
   const out: string[] = [];
   for (const l of phys) {
     const prev = out[out.length - 1];
-    if (prev !== undefined && (/:$/.test(prev) || (!/[.;!?]$/.test(prev) && /^[a-z(]/.test(l)))) {
+    // A range or phrase wrapped by the layout ("between 50-" / "120°F") continues on the next line.
+    const wrapped = prev !== undefined && (/(?:[-–]|\b(?:to|between|from|and|of|at|minimum|maximum|min\.|max\.))$/i.test(prev) || /^[-–]\s*\d/.test(l));
+    if (prev !== undefined && (wrapped || /:$/.test(prev) || (!/[.;!?]$/.test(prev) && /^[a-z(]/.test(l)))) {
       out[out.length - 1] = `${prev} ${l}`;
     } else out.push(l);
   }
@@ -275,6 +279,10 @@ function clauses(t: string): string[] {
     .filter(Boolean);
 }
 
+/** A substrate/filler/surface-prep step ("… at least 55°F before filling"), not an application limit. */
+const PREP_INSTRUCTION =
+  /\b(?:before|prior\s+to|when)\s+(?:filling|priming|sealing|patching|caulking|grouting|blasting|topping|block\s+filling)\b|\b(?:block|masonry)\s+fill(?:er|ing)?\b|\bfillers?\b|\bpatching\s+compound\b/i;
+
 export type TempGate = { target: Target; kind: Qual | "range"; lo: number; hi: number | null; quote: string };
 
 /**
@@ -287,6 +295,8 @@ export function temperatureGates(raw: string): TempGate[] {
   for (const c of clauses(t)) {
     const temps = tempsInClause(c);
     if (!temps.length) continue;
+    // Limits come from application conditions, never from a substrate, filler or prep instruction.
+    if (PREP_INSTRUCTION.test(c)) continue;
     const groups = labelGroups(c);
     // Which side owns each qualifier gap: decided left to right.
     let prevConsumedPost = false;
@@ -349,6 +359,41 @@ export function temperatureGates(raw: string): TempGate[] {
     for (const target of targets) out.push({ target, kind: "range", lo: Math.min(lo, hi), hi: Math.max(lo, hi), quote: m[0] });
   }
   return out.filter((g) => g.lo >= -60 && g.lo <= 400 && (g.hi === null || g.hi <= 400));
+}
+
+/** A heading that opens application-conditions / temperature limits ("Application conditions", "Temperature:"). */
+const TEMP_SECTION_HEAD =
+  /^(?:application|environmental|applied|ambient|operating)?\s*(?:conditions?|temperatures?|temp\.?)(?:\s+(?:conditions?|limits?|range|requirements?))?\s*:?$/i;
+/** A line of limits that are some other quantity, not a temperature. */
+const OTHER_QUANTITY = /%|\b(?:rh|humidity|dew|mils?|microns?|µm|hours?|hrs?|minutes?|mins?|days?|psi|mph|km\/h|ft|feet|gallons?|litres?|liters?|ratio|voc|g\/l|coats?|passes?|years?|months?|weeks?|seconds?|secs?)\b/i;
+/** "Minimum 50", "max. 120", "between 50 and 120" with no °F/°C after the number. */
+const BARE_LIMIT = new RegExp(
+  String.raw`\b(?:min(?:imum)?|max(?:imum)?|between|from|above|below|at\s+least|not\s+(?:below|above|exceed))\.?\s*:?\s*(${NUM})(?![\d.]|\s*(?:°|º|˚|deg|[FC]\b))`,
+  "i",
+);
+
+/**
+ * Lines of application conditions or temperature limits that hold bare numbers with no °F/°C.
+ * The reader never turns these into a temperature (a unit is required), so the field stays
+ * Not stated; the caller reports them as values it could not use and marks temperatures unverified.
+ */
+export function bareTemperatureLines(raw: string): string[] {
+  const out: string[] = [];
+  let inSection = false;
+  for (const line of logicalLines(normalizeTempText(raw ?? ""))) {
+    const head = TEMP_SECTION_HEAD.test(line) || /^(?:application|environmental)\s+conditions\b[^\d]*$/i.test(line);
+    if (head) {
+      inSection = true;
+      continue;
+    }
+    // A new heading (short, no digits, capitalised) closes the section.
+    if (inSection && !/\d/.test(line) && line.length <= 48 && /^[A-Z]/.test(line)) inSection = false;
+    const labelled = /\b(?:temperatures?|temp\.?|ambient|air|surface|substrate)\b/i.test(line);
+    if (!inSection && !labelled) continue;
+    if (OTHER_QUANTITY.test(line) || tempsInClause(line).length) continue;
+    if (BARE_LIMIT.test(line)) out.push(line);
+  }
+  return out;
 }
 
 /** First stated value wins per slot; a range fills a target only when both ends are still open. */
@@ -464,13 +509,8 @@ export function heuristicExtract(text: string): FieldCardData {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  const name =
-    firstMatch(t, [
-      /product(?:\s+name)?[:\s]+([A-Z0-9][^\n]{3,80})/i,
-      /^([A-Z][A-Za-z0-9][^\n]{4,60})$/m,
-    ]) ||
-    lines[0]?.slice(0, 80) ||
-    "Unnamed product";
+  // The leading title with data-sheet boilerplate stripped; "" (Not stated) when nothing is left.
+  const name = productTitleFromText(t);
 
   const manufacturer = firstMatch(t, [
     /manufacturer[:\s]+([^\n]+)/i,
@@ -480,15 +520,12 @@ export function heuristicExtract(text: string): FieldCardData {
 
   const mixRatio = mixRatioFromText(t);
 
-  const potLife = firstMatch(t, [/pot\s*life[:\s]+([^\n]+)/i, /working\s+time[:\s]+([^\n]+)/i]);
+  // Durations only (CONTRACT.md duration rule); prose -> Not stated.
+  const potLife = potLifeFromText(t);
   const shelf = firstMatch(t, [/shelf\s*life[:\s]+([^\n]+)/i]);
   const voc = firstMatch(t, [/voc[:\s]+([^\n]+)/i]);
-  const dft = firstMatch(t, [
-    /(?:recommended\s+)?(?:dft|dry\s+film(?:\s+thickness)?)[:\s]+([^\n]+)/i,
-    /(\d+\s*[–-]\s*\d+\s*mils?\s*(?:dft|dft)?)/i,
-  ]);
-  const recoatMin = firstMatch(t, [/recoat(?:ing)?\s+(?:min(?:imum)?|window)[:\s]+([^\n]+)/i, /minimum\s+recoat[:\s]+([^\n]+)/i]);
-  const recoatMax = firstMatch(t, [/maximum\s+recoat[:\s]+([^\n]+)/i, /recoat(?:ing)?\s+max(?:imum)?[:\s]+([^\n]+)/i]);
+  const dft = filmThicknessFromText(t);
+  const { min: recoatMin, max: recoatMax } = recoatFromText(t);
   const coverage = firstMatch(t, [/coverage[:\s]+([^\n]+)/i, /theoretical\s+coverage[:\s]+([^\n]+)/i]);
   const induction = firstMatch(t, [/induction[:\s]+([^\n]+)/i, /sweat-?in[:\s]+([^\n]+)/i]);
   const thinning = thinnerFromText(t);
@@ -517,7 +554,8 @@ export function heuristicExtract(text: string): FieldCardData {
     additional: [],
   };
 
-  applyTempGates(env, temperatureGates(t));
+  // Standard/grade names (SSPC-SP2/3, ISO8501-1, St 2) never yield a temperature.
+  applyTempGates(env, temperatureGates(maskStandards(t)));
   env.relativeHumidityMax = relativeHumidityMaxFromText(t);
   env.dewPointSpreadMinF = dewPointSpreadFromText(t);
 

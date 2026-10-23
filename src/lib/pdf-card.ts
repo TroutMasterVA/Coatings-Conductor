@@ -1,3 +1,4 @@
+import { formatTempRange } from "./temp-range.ts";
 import { mitigationById, substrateById, type SiteContext } from "./mitigations";
 import type { DayWindow, FieldCardData, ForecastBundle } from "./types";
 import { DRAFT_BANNER, NO_FLAGS, showWindows, windowHeadline, type ExtractFlags } from "./extract-flags.ts";
@@ -103,10 +104,10 @@ export async function downloadFieldCard(
   const env = card.environmentals;
   const envBits = [
     env.ambientTempMinF != null || env.ambientTempMaxF != null
-      ? `Air ${env.ambientTempMinF ?? "\u2014"}\u2013${env.ambientTempMaxF ?? "\u2014"}\u00b0F`
+      ? `Air ${formatTempRange(env.ambientTempMinF, env.ambientTempMaxF)}`
       : "",
     env.substrateTempMinF != null || env.substrateTempMaxF != null
-      ? `Substrate ${env.substrateTempMinF ?? "\u2014"}\u2013${env.substrateTempMaxF ?? "\u2014"}\u00b0F`
+      ? `Substrate ${formatTempRange(env.substrateTempMinF, env.substrateTempMaxF)}`
       : "",
     env.dewPointSpreadMinF != null ? `Dew spread \u2265 ${env.dewPointSpreadMinF}\u00b0F` : "",
     env.relativeHumidityMax != null ? `RH \u2264 ${env.relativeHumidityMax}%` : "",
