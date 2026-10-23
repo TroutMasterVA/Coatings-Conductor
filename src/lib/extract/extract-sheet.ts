@@ -60,6 +60,7 @@ export const extractSheet = createServerFn({ method: "POST" })
       fileName: typeof i.fileName === "string" ? i.fileName.slice(0, 200) : undefined,
       text: typeof i.text === "string" ? i.text : undefined,
       pages: Array.isArray(i.pages) ? i.pages.filter((p): p is string => typeof p === "string").slice(0, 200) : undefined,
+      jobId: typeof i.jobId === "string" && i.jobId ? i.jobId.slice(0, 200) : undefined,
     };
   })
   .handler(async ({ data, context }): Promise<ExtractResponse> => {
@@ -72,6 +73,13 @@ export const extractSheet = createServerFn({ method: "POST" })
       rate: rateStore(),
       maxFileBytes: maxFileBytes(),
       log: (entry) => console.info(JSON.stringify(entry)),
+      // Closed job -> { ok: false, error: { code: "JOB_CLOSED" } } (CONTRACT.md "Job closeout").
+      jobClosed: async (jobId) => {
+        const userId = context.userId;
+        if (!userId) return false;
+        const [{ getSql }, { isJobClosed }] = await Promise.all([import("../db"), import("../job-close.ts")]);
+        return isJobClosed(await getSql(), userId, jobId);
+      },
     });
     if (!res.ok || !context.userId) return res;
     // Sign the read for this user so a save can prove which values came from it (server-only).

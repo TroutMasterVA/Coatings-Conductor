@@ -60,6 +60,8 @@ export type ExtractRequest = {
   text?: string;
   /** Optional per-page text (pdf.js, one entry per page). When sent, quotes carry page numbers. */
   pages?: string[];
+  /** The job this read attaches to. A closed job is refused with JOB_CLOSED before any reading. */
+  jobId?: string;
 };
 
 /**
@@ -143,7 +145,9 @@ export type ExtractErrorCode =
   | "EXTRACT_TIMEOUT"
   | "EXTRACT_FAILED"
   | "FILE_TOO_LARGE"
-  | "UNSUPPORTED_FILE_TYPE";
+  | "UNSUPPORTED_FILE_TYPE"
+  /** The read would attach to a closed job (CONTRACT.md "Job closeout"). */
+  | "JOB_CLOSED";
 
 export type ExtractResponse =
   | ({ ok: true } & ExtractResult)

@@ -3,6 +3,7 @@ import type { ReadTrust } from "./extract/read-signature.ts";
 import type { Sql } from "@/lib/db";
 import type { FieldCardData } from "@/lib/types";
 import { isEmpty, isStructural, leaves, type Leaf } from "./extract/provenance.ts";
+import { JOB_CLOSED_MESSAGE } from "./job-close.ts";
 
 /** Saved extract records are capped so a client cannot park arbitrary data on a job. */
 export const SAVED_EXTRACT_MAX_CHARS = 1_000_000;
@@ -234,9 +235,23 @@ export async function editorName(sql: Sql, userId: string): Promise<string> {
   return (r?.name ?? "").trim() || (r?.email ?? "").trim() || "Signed-in user";
 }
 
+/** The rest of a saveProject write, applied in the same checked statement as the card. */
+export type JobSaveFields = {
+  name: string;
+  zip: string;
+  calibrationJson: string;
+  siteJson: string;
+  pdsText: string;
+  recentsJson: string;
+  outcomesJson: string;
+};
+
 /**
  * Save the card and its extract (with server edit stamps) in ONE statement, scoped by user.
  * `card` undefined leaves the stored card. Returns null when the job is not this user's.
+ * A closed job (CONTRACT.md "Job closeout") throws JOB_CLOSED_MESSAGE: `status = 'open'` is in the
+ * UPDATE's WHERE, so a close that lands after the read still blocks the write. `fields`, when
+ * given, are written in that same statement (saveProject), so a save is all-or-nothing.
  */
 export async function saveJobCard(
   sql: Sql,
@@ -245,15 +260,17 @@ export async function saveJobCard(
   input: { card?: FieldCardData | null; extract?: unknown },
   at: string = new Date().toISOString(),
   secret?: string,
+  fields?: JobSaveFields,
 ): Promise<ExtractSavePlan | null> {
   // Server-only modules, loaded lazily so the guest (browser) path never pulls node:crypto.
   const { verifyRead } = await import("./extract/read-signature.ts");
   const key = secret ?? (await import("./auth/secret.server.ts")).authSecret();
-  const rows = await sql<{ card_json: string | null; extract_json: string | null }>`
-    select card_json, extract_json from projects where id = ${jobId} and user_id = ${userId}
+  const rows = await sql<{ card_json: string | null; extract_json: string | null; status: string }>`
+    select card_json, extract_json, status from projects where id = ${jobId} and user_id = ${userId}
   `;
   const row = rows[0];
   if (!row) return null;
+  if (row.status === "closed") throw new Error(JOB_CLOSED_MESSAGE);
   let storedCard: FieldCardData | null = null;
   try {
     storedCard = row.card_json ? (JSON.parse(row.card_json) as FieldCardData) : null;
@@ -269,14 +286,24 @@ export async function saveJobCard(
     editor: { by: await editorName(sql, userId), at },
     trust: (incoming, c) => verifyRead(key, userId, incoming, c),
   });
+  const f = fields ?? null;
   const updated = await sql<{ id: string }>`
     update projects set
       card_json = ${card ? JSON.stringify(card) : null},
-      extract_json = ${encodeSavedExtract(plan.extract)}
-    where id = ${jobId} and user_id = ${userId}
+      extract_json = ${encodeSavedExtract(plan.extract)},
+      name = coalesce(${f?.name ?? null}, name),
+      zip = coalesce(${f?.zip ?? null}, zip),
+      calibration_json = coalesce(${f?.calibrationJson ?? null}, calibration_json),
+      site_json = coalesce(${f?.siteJson ?? null}, site_json),
+      pds_text = coalesce(${f?.pdsText ?? null}, pds_text),
+      recents_json = coalesce(${f?.recentsJson ?? null}, recents_json),
+      outcomes_json = coalesce(${f?.outcomesJson ?? null}, outcomes_json),
+      updated_at = coalesce(${f ? at : null}, updated_at)
+    where id = ${jobId} and user_id = ${userId} and status = 'open'
     returning id
   `;
-  return updated.length ? plan : null;
+  if (updated.length) return plan;
+  return refusedOrMissing(sql, userId, jobId);
 }
 
 export function encodeSavedExtract(extract: SavedExtract | null): string | null {
@@ -295,14 +322,28 @@ export function decodeSavedExtract(json: string | null | undefined): SavedExtrac
   }
 }
 
-/** Write a job's extract record. Scoped by user: another user's job id updates nothing. */
+/** After a guarded write matched nothing: closed job -> JOB_CLOSED_MESSAGE, else not this user's (null). */
+async function refusedOrMissing(sql: Sql, userId: string, jobId: string): Promise<null> {
+  const rows = await sql<{ status: string }>`
+    select status from projects where id = ${jobId} and user_id = ${userId}
+  `;
+  if (rows[0]?.status === "closed") throw new Error(JOB_CLOSED_MESSAGE);
+  return null;
+}
+
+/**
+ * Write a job's extract record. Scoped by user: another user's job id updates nothing (false).
+ * A closed job throws JOB_CLOSED_MESSAGE (status is checked in the same UPDATE).
+ */
 export async function writeJobExtract(sql: Sql, userId: string, jobId: string, extract: SavedExtract | null): Promise<boolean> {
   const rows = await sql<{ id: string }>`
     update projects set extract_json = ${encodeSavedExtract(extract)}
-    where id = ${jobId} and user_id = ${userId}
+    where id = ${jobId} and user_id = ${userId} and status = 'open'
     returning id
   `;
-  return rows.length > 0;
+  if (rows.length > 0) return true;
+  await refusedOrMissing(sql, userId, jobId);
+  return false;
 }
 
 /** Read a job's extract record, scoped by user. Missing job, other user's job, or none saved -> null. */

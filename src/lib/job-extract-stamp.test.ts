@@ -36,7 +36,7 @@ const EXTRACT: SavedExtract = {
 
 async function db(): Promise<Sql> {
   const pg = new PGlite();
-  for (const f of ["0001_auth.sql", "0002_projects.sql", "0003_job_extract.sql"]) {
+  for (const f of ["0001_auth.sql", "0002_projects.sql", "0003_job_extract.sql", "0004_job_status.sql"]) {
     await pg.exec(readFileSync(new URL(`../../migrations/${f}`, import.meta.url), "utf8"));
   }
   const run = async <T>(text: string, params: unknown[] = []) => (await pg.query<T>(text, params)).rows;
