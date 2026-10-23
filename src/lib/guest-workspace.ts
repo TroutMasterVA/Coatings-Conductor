@@ -89,8 +89,28 @@ export function guestJobCount(): number {
 }
 
 /** The explicit claim prompt. Nothing moves into an account without a yes to this. */
-export function claimPromptText(n: number): string {
-  return `Move ${n} job${n === 1 ? "" : "s"} from this device into your account?`;
+export function claimPromptText(n: number, names: string[] = []): string {
+  const shown = names.slice(0, 3).map((x) => x.trim()).filter(Boolean);
+  const more = names.length > shown.length ? `, +${names.length - shown.length} more` : "";
+  const list = shown.length ? ` (${shown.join(", ")}${more})` : "";
+  return `This browser has ${n} job${n === 1 ? "" : "s"} made while signed out${list}. They may not be yours. Move them into your account?`;
+}
+
+/** Device flag: the user chose "Not now / don't ask again on this device". */
+export const CLAIM_DONT_ASK_KEY = "fieldcard.guestClaim.dontAsk.v1";
+export type ClaimChoice = "move" | "not-now" | "dont-ask";
+
+export function guestClaimSuppressed(): boolean {
+  try {
+    return typeof window !== "undefined" && localStorage.getItem(CLAIM_DONT_ASK_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Names of the device jobs, newest first, for the prompt. */
+export function guestJobNames(): string[] {
+  return read().projects.map((p) => p.name);
 }
 
 /**
@@ -102,7 +122,7 @@ export function signedInJobList<T extends { id: string }>(serverJobs: T[]): T[] 
   return serverJobs.filter((p) => p && !device.has(p.id));
 }
 
-export type ClaimResult = { outcome: "declined" | "empty" | "imported" | "partial"; imported: number; kept: number };
+export type ClaimResult = { outcome: "declined" | "suppressed" | "empty" | "imported" | "partial"; imported: number; kept: number };
 
 /**
  * Claim device jobs into the signed-in account, only when `confirm` says yes. Declining imports
@@ -110,13 +130,20 @@ export type ClaimResult = { outcome: "declined" | "empty" | "imported" | "partia
  * store is cleared; on a partial one only the jobs that did not import are kept on the device.
  */
 export async function claimGuestJobs(
-  confirm: (n: number) => boolean | Promise<boolean>,
+  confirm: (n: number, names: string[]) => boolean | ClaimChoice | Promise<boolean | ClaimChoice>,
   importer: GuestImporter = importGuestWorkspace,
 ): Promise<ClaimResult> {
   const dump = read();
   const n = dump.projects.length;
   if (n === 0) return { outcome: "empty", imported: 0, kept: 0 };
-  if (!(await confirm(n))) return { outcome: "declined", imported: 0, kept: n };
+  if (guestClaimSuppressed()) return { outcome: "suppressed", imported: 0, kept: n };
+  const choice = await confirm(n, dump.projects.map((p) => p.name));
+  if (choice === "dont-ask") {
+    // Imports nothing; device jobs stay hidden while signed in; this device is not asked again.
+    localStorage.setItem(CLAIM_DONT_ASK_KEY, "1");
+    return { outcome: "declined", imported: 0, kept: n };
+  }
+  if (choice !== true && choice !== "move") return { outcome: "declined", imported: 0, kept: n };
   let res: Awaited<ReturnType<GuestImporter>>;
   try {
     res = await importer({

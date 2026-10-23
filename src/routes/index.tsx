@@ -308,7 +308,14 @@ function App({ user }: { user: AppUser | null }) {
       try {
         if (signedIn) {
           // Device (guest) jobs never join a signed-in list on their own: ask first, every time.
-          const claim = await claimGuestJobs((n) => window.confirm(claimPromptText(n)));
+          // Three choices: OK = move; Cancel = not now; then Cancel twice = don't ask again on this device.
+          const claim = await claimGuestJobs((n, names) =>
+            window.confirm(claimPromptText(n, names))
+              ? "move"
+              : window.confirm("Not now / don't ask again on this device? OK = don't ask again, Cancel = not now.")
+                ? "dont-ask"
+                : "not-now",
+          );
           if (cancelled) return;
           if (claim.outcome === "imported") toast.success(`Moved ${claim.imported} job(s) from this device into your account.`);
           if (claim.outcome === "partial") {

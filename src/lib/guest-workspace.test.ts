@@ -54,8 +54,27 @@ describe("guest jobs vs a signed-in list (QA item 4 / SEC HIGH)", () => {
     const list = gw.signedInJobList([...server, { id: g.id, name: g.name }]);
     assert.deepEqual(list.map((p) => p.id), ["srv-a1"]);
   });
-  it("prompt text names the count", () => {
-    assert.equal(gw.claimPromptText(2), "Move 2 jobs from this device into your account?");
+  it("prompt text names the count and the jobs (truncated when long)", () => {
+    assert.equal(
+      gw.claimPromptText(2, ["Tank 4", "Bridge"]),
+      "This browser has 2 jobs made while signed out (Tank 4, Bridge). They may not be yours. Move them into your account?",
+    );
+    assert.match(gw.claimPromptText(5, ["a", "b", "c", "d", "e"]), /\(a, b, c, \+2 more\)/);
+  });
+  it("'don't ask again' sets the device flag, imports nothing, and suppresses the prompt next time", async () => {
+    gw.guestCreateProject("Guest tank", "22202");
+    let imported = 0;
+    let asked = 0;
+    const importer = async () => (imported++, { imported: 1, skipped: false, importedIds: [], customOk: true });
+    const r = await gw.claimGuestJobs(() => (asked++, "dont-ask" as const), importer);
+    assert.equal(r.outcome, "declined");
+    assert.equal(mem.get(gw.CLAIM_DONT_ASK_KEY), "1");
+    const again = await gw.claimGuestJobs(() => (asked++, "move" as const), importer);
+    assert.equal(again.outcome, "suppressed");
+    assert.equal(asked, 1);
+    assert.equal(imported, 0);
+    assert.equal(gw.guestJobCount(), 1);
+    assert.deepEqual(gw.signedInJobList([{ id: "srv" }]).map((p) => p.id), ["srv"]);
   });
   it("declining imports nothing and leaves the device copy", async () => {
     gw.guestCreateProject("Guest tank", "22202");
