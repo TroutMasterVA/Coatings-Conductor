@@ -6,6 +6,7 @@ import {
   takeForecastSlot,
 } from "./forecast-cap";
 import type { Environmentals, ForecastBundle } from "./types";
+import { ForecastUnavailableError, fetchWithTimeout, hourlyWithBackup } from "./forecast-sources";
 
 const UA = "CoatingsConductor/1.0 (field-qc reference; nws-weather-windows)";
 
@@ -45,7 +46,14 @@ function parseWind(v: unknown): number | null {
 }
 
 async function geocodeZip(zip: string) {
-  const res = await fetch(`https://api.zippopotam.us/us/${zip}`);
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(`https://api.zippopotam.us/us/${zip}`);
+  } catch {
+    throw new ForecastUnavailableError(
+      "Forecast unavailable: the ZIP lookup did not answer. This is not a GO. Try again later.",
+    );
+  }
   if (!res.ok) throw new Error("ZIP not found. Use a 5-digit US ZIP.");
   const body = (await res.json()) as {
     "post code"?: string;
@@ -63,7 +71,7 @@ async function geocodeZip(zip: string) {
 }
 
 async function nwsHourly(lat: number, lon: number): Promise<{ hours: RawHour[]; source: string; timezone: string } | null> {
-  const points = await fetch(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`, {
+  const points = await fetchWithTimeout(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`, {
     headers: { "User-Agent": UA, Accept: "application/geo+json" },
   });
   if (!points.ok) return null;
@@ -72,7 +80,7 @@ async function nwsHourly(lat: number, lon: number): Promise<{ hours: RawHour[]; 
   };
   const hourlyUrl = pt.properties?.forecastHourly;
   if (!hourlyUrl) return null;
-  const hourly = await fetch(hourlyUrl, {
+  const hourly = await fetchWithTimeout(hourlyUrl, {
     headers: { "User-Agent": UA, Accept: "application/geo+json" },
   });
   if (!hourly.ok) return null;
@@ -125,7 +133,7 @@ async function openMeteo(lat: number, lon: number): Promise<{ hours: RawHour[]; 
   url.searchParams.set("precipitation_unit", "inch");
   url.searchParams.set("timezone", "auto");
   url.searchParams.set("forecast_days", "7");
-  const res = await fetch(url.toString());
+  const res = await fetchWithTimeout(url.toString());
   if (!res.ok) throw new Error("Weather forecast is unavailable.");
   const body = (await res.json()) as {
     timezone?: string;
@@ -203,10 +211,11 @@ export const loadForecast = createServerFn({ method: "POST" })
 
     try {
       const geo = await geocodeZip(data.zip);
-      let pack = await nwsHourly(geo.lat, geo.lon).catch(() => null);
-      if (!pack || pack.hours.length < 12) {
-        pack = await openMeteo(geo.lat, geo.lon);
-      }
+      // weather.gov first, Open-Meteo as backup; all down -> "Forecast unavailable" (never GO).
+      const pack = await hourlyWithBackup([
+        () => nwsHourly(geo.lat, geo.lon),
+        () => openMeteo(geo.lat, geo.lon),
+      ]);
       const scored = pack.hours.map((h) => scoreHour(h, data.environmentals, pack.timezone));
       const forecast = bundleDays(
         scored,
