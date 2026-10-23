@@ -30,7 +30,6 @@ import { randomBytes } from "node:crypto";
 import { Pool } from "pg";
 import { ensureDbReady, getPglite } from "../db";
 import { emailAndPasswordEnabled } from "./email-password";
-import { GATE_PROVIDER_ID, gateIdentitySessions } from "./gate-session.server";
 import { loginLockout } from "./login-lockout.server";
 import { pgliteDialect } from "./pglite-dialect";
 import { trustedHostsFromEnv, trustedOriginsFromEnv } from "./preview";
@@ -103,16 +102,9 @@ export const auth = betterAuth({
   // local loopback variants, or clients get "Invalid origin".
   trustedOrigins,
 
-  // No broker OAuth. Keep account linking only for the Grok Build preview gate
-  // (x-grok-identity), not federated Google/X.
-  account: {
-    encryptOAuthTokens: true,
-    accountLinking: {
-      enabled: true,
-      trustedProviders: [GATE_PROVIDER_ID],
-      requireLocalEmailVerified: false,
-    },
-  },
+  // No broker OAuth, no preview-gate auto sign-in, no account linking (SEC):
+  // email + password is the only way to get a session.
+  account: { encryptOAuthTokens: true, accountLinking: { enabled: false } },
 
   // Cache the session in the short-lived signed `session_data` cookie so reads
   // (incl. the client's `/get-session`) skip the DB — this shrinks the "loading"
@@ -142,7 +134,6 @@ export const auth = betterAuth({
   },
 
   plugins: [
-    gateIdentitySessions(),
     loginLockout(),
 
     // Accept `Authorization: Bearer <session-token>` as an alternative to the
