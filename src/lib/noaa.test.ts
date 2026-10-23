@@ -104,6 +104,13 @@ describe("strict GO rule in the existing window scoring (QA critical)", () => {
     assert.equal(h.status, "nogo");
     assert.ok(h.reasons.some((r) => /Dew spread/.test(r)));
   });
+  it("no dew margin on the sheet -> 5°F SSPC default (labelled), so a good hour can still reach GO", () => {
+    const env = { ...ENV, dewPointSpreadMinF: null };
+    assert.equal(scoreHour(raw("2026-10-24T06:00:00Z", 40), env, "UTC").status, "go");
+    const bad = scoreHour(raw("2026-10-24T05:00:00Z", 69), env, "UTC");
+    assert.equal(bad.status, "nogo");
+    assert.ok(bad.reasons.some((r) => r.includes("industry default (SSPC), not from sheet")), bad.reasons.join("; "));
+  });
   it("one failed scored hour makes the day not GO", () => {
     const hrs = ["2026-10-24T05:00:00Z", "2026-10-24T06:00:00Z", "2026-10-24T07:00:00Z"].map((iso, i) =>
       scoreHour(raw(iso, i === 0 ? 69 : 40), ENV, "UTC"),
