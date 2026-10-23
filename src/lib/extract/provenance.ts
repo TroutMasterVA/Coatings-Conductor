@@ -166,10 +166,12 @@ export function findQuote(path: string, value: string | number, source: SourceDo
   if (typeof value === "string") {
     const needle = normalize(value);
     if (needle.length >= 2) {
-      const hit = segs.find((s) => normalize(s.text).includes(needle));
-      if (hit) {
-        const at = normalize(hit.text).indexOf(needle);
-        return q(hit, { start: at, end: at + needle.length });
+      // A needle starting/ending with a digit must not match inside a longer number ("2 hours" in "12 hours").
+      const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`${/^\d/.test(needle) ? "(?<![\\d.])" : ""}${esc}${/\d$/.test(needle) ? "(?![\\d])" : ""}`);
+      for (const hit of segs) {
+        const m = re.exec(normalize(hit.text));
+        if (m) return q(hit, { start: m.index, end: m.index + needle.length });
       }
     }
     const want = tokens(value);
@@ -281,11 +283,14 @@ export function gateNumbers(input: FieldCardData, source: SourceDoc): Gated {
     // "10 hours at 35°F": the temperature is the table's column header, not part of the row's
     // line, so the quote must contain the row's own numbers (the durations).
     const core = typeof v === "string" ? v.replace(/ at -?\d+(?:\.\d+)?°F(?=,|$)/g, "") : v;
-    const found = findQuote(leaf.path, core, source);
+    // The full value verbatim first; the duration-only core only when that fails.
+    const full = findQuote(leaf.path, v, source);
+    const useFull = !!full && (!hasDigit(v) || quoteBacksValue(leaf.path, v, full.quote));
+    const found = useFull ? full : core === v ? full : findQuote(leaf.path, core, source);
     // Shared rule for every provider: a value with a number is shown only when its own quote
     // literally contains that number (spaces, dashes and degree signs normalized). Otherwise it is
     // Not stated and counted as dropped (VALUES_DROPPED_UNQUOTED; the read stays a draft).
-    const hit = found && (!hasDigit(v) || quoteBacksValue(leaf.path, core, found.quote)) ? found : null;
+    const hit = found && (!hasDigit(v) || quoteBacksValue(leaf.path, useFull ? v : core, found.quote)) ? found : null;
     if (hit) provenance[leaf.path] = hit;
     else if (hasDigit(v)) {
       blankAt(card, leaf.path, v);
