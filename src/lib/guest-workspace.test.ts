@@ -45,3 +45,56 @@ describe("guest workspace closeout (BE guard, #37)", () => {
     assert.equal(row.closedBy, "This device");
   });
 });
+
+describe("guest jobs vs a signed-in list (QA item 4 / SEC HIGH)", () => {
+  beforeEach(() => mem.clear());
+  const server = [{ id: "srv-a1", name: "A job" }];
+  it("a signed-in list never includes device (guest) jobs, even if one leaks into the payload", () => {
+    const g = gw.guestCreateProject("Guest tank", "22202");
+    const list = gw.signedInJobList([...server, { id: g.id, name: g.name }]);
+    assert.deepEqual(list.map((p) => p.id), ["srv-a1"]);
+  });
+  it("prompt text names the count", () => {
+    assert.equal(gw.claimPromptText(2), "Move 2 jobs from this device into your account?");
+  });
+  it("declining imports nothing and leaves the device copy", async () => {
+    gw.guestCreateProject("Guest tank", "22202");
+    let called = 0;
+    const r = await gw.claimGuestJobs(() => false, async () => {
+      called++;
+      return { imported: 1, skipped: false, importedIds: [], customOk: true };
+    });
+    assert.equal(r.outcome, "declined");
+    assert.equal(called, 0);
+    assert.equal(gw.guestJobCount(), 1);
+  });
+  it("confirming imports them (claim: true) and clears the device", async () => {
+    const a = gw.guestCreateProject("One", "22202");
+    const b = gw.guestCreateProject("Two", "22202");
+    let asked = 0;
+    let sent: { claim?: boolean; projects: { id: string }[] } | null = null;
+    const r = await gw.claimGuestJobs((n) => (asked = n, true), async ({ data }) => {
+      sent = data;
+      return { imported: 2, skipped: false, importedIds: [a.id, b.id], customOk: true };
+    });
+    assert.equal(asked, 2);
+    assert.equal(sent!.claim, true);
+    assert.equal(r.outcome, "imported");
+    assert.equal(gw.guestJobCount(), 0);
+    assert.equal(mem.get("fieldcard.projects.v1"), JSON.stringify({ lastProjectId: null, projects: [], custom: [] }));
+  });
+  it("partial failure keeps only the jobs that did not import, and says so", async () => {
+    const a = gw.guestCreateProject("One", "22202");
+    const b = gw.guestCreateProject("Two", "22202");
+    const r = await gw.claimGuestJobs(() => true, async () => ({ imported: 1, skipped: false, importedIds: [a.id], customOk: true }));
+    assert.equal(r.outcome, "partial");
+    assert.equal(r.kept, 1);
+    assert.deepEqual(gw.guestDump().projects.map((p) => p.id), [b.id]);
+  });
+  it("an importer error keeps every device job", async () => {
+    gw.guestCreateProject("One", "22202");
+    const r = await gw.claimGuestJobs(() => true, async () => { throw new Error("down"); });
+    assert.equal(r.outcome, "partial");
+    assert.equal(gw.guestJobCount(), 1);
+  });
+});

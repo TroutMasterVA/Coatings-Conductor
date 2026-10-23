@@ -60,7 +60,9 @@ import {
   guestArchiveProject,
   guestCloseProject,
   guestDeleteProject,
-  migrateGuestToAccount,
+  claimGuestJobs,
+  claimPromptText,
+  signedInJobList,
 } from "@/lib/guest-workspace";
 import {
   archiveProject,
@@ -305,16 +307,17 @@ function App({ user }: { user: AppUser | null }) {
     void (async () => {
       try {
         if (signedIn) {
-          const lifted = await migrateGuestToAccount();
+          // Device (guest) jobs never join a signed-in list on their own: ask first, every time.
+          const claim = await claimGuestJobs((n) => window.confirm(claimPromptText(n)));
           if (cancelled) return;
-          if (lifted === "imported") toast.success("Moved this device’s jobs into your account.");
-          if (lifted === "skipped") {
-            toast("This account already has jobs, so work from this browser was not added.");
+          if (claim.outcome === "imported") toast.success(`Moved ${claim.imported} job(s) from this device into your account.`);
+          if (claim.outcome === "partial") {
+            toast.error(`${claim.kept} job(s) could not be moved and stay on this device (hidden while signed in).`);
           }
         }
         const ws = await api.load();
         if (cancelled) return;
-        setProjects(dedupeProjectsById(ws.projects));
+        setProjects(dedupeProjectsById(signedIn ? signedInJobList(ws.projects) : ws.projects));
         setCustom(ws.custom);
         const last = ws.lastProjectId;
         const openable = last && ws.projects.some((p) => p.id === last && !p.archived);

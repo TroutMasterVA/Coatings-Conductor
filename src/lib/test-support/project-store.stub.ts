@@ -2,6 +2,6 @@
 export function defaultSite() {
   return { substrate: "bare_steel", mitigations: [], customMitigationIds: [] };
 }
-export async function importGuestWorkspace(): Promise<{ imported: number; skipped: boolean }> {
-  return { imported: 0, skipped: true };
+export async function importGuestWorkspace(): Promise<{ imported: number; skipped: boolean; importedIds: string[]; customOk: boolean }> {
+  return { imported: 0, skipped: true, importedIds: [], customOk: false };
 }
