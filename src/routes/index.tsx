@@ -3,6 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Download, FolderOpen, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { BootShell } from "@/components/boot-shell";
+import { CloseJobButton, ClosedBadge } from "@/components/close-job";
 import { Button } from "@/components/ui/button";
 import { ExtractNotice, ProvenancePanel } from "@/components/extract-status";
 import { EmptyCardSkeleton, FieldCardView } from "@/components/field-card-view";
@@ -49,7 +50,7 @@ import {
   type SiteContext,
 } from "@/lib/mitigations";
 import { downloadFieldCard, selectedMitigationLabels } from "@/lib/pdf-card";
-import { dedupeProjectsById, upsertProjectSummary } from "@/lib/project-list";
+import { dedupeProjectsById, summaryOfFull, upsertProjectSummary } from "@/lib/project-list";
 import {
   guestCreateProject,
   guestLoadWorkspace,
@@ -57,11 +58,13 @@ import {
   guestSaveCustom,
   guestSaveProject,
   guestArchiveProject,
+  guestCloseProject,
   guestDeleteProject,
   migrateGuestToAccount,
 } from "@/lib/guest-workspace";
 import {
   archiveProject,
+  closeProject,
   createProject,
   defaultSite,
   deleteProject,
@@ -72,6 +75,17 @@ import {
   type ProjectFull,
   type ProjectSummary,
 } from "@/lib/project-store";
+import {
+  canAutosave,
+  deleteErrorMessage,
+  isJobClosedError,
+  jobStatusOf,
+  mapCloseError,
+  mapCloseResult,
+  type CloseOutcome,
+  type JobStatusFields,
+  type JobStatusView,
+} from "@/lib/job-status";
 import { rescoreForecast } from "@/lib/score-windows";
 import { loadZip } from "@/lib/storage";
 import type {
@@ -84,6 +98,9 @@ import type {
 } from "@/lib/types";
 
 export const Route = createFileRoute("/")({ component: Home });
+
+type JobSummary = ProjectSummary & JobStatusFields;
+const OPEN_JOB: JobStatusView = { status: "open", closedAt: null, closedBy: null };
 
 function bounceExpired<T>(promise: Promise<T>): Promise<T> {
   return promise.catch((err: unknown) => {
@@ -135,7 +152,7 @@ function App({ user }: { user: AppUser | null }) {
   const signedIn = Boolean(user);
   const api = useMemo(() => workspaceApi(signedIn), [signedIn]);
   const [mode, setMode] = useState<"boot" | "home" | "job">("boot");
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projects, setProjects] = useState<JobSummary[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState("");
   const [text, setText] = useState("");
@@ -165,6 +182,11 @@ function App({ user }: { user: AppUser | null }) {
   const [downloading, setDownloading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<JobStatusView>(OPEN_JOB);
+  const closed = jobStatus.status === "closed";
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [closeError, setCloseError] = useState<string | null>(null);
   const [site, setSite] = useState<SiteContext>(defaultSite());
   const [calibration, setCalibration] = useState<Calibration>(DEFAULT_CALIBRATION);
   const [custom, setCustom] = useState<CustomMitigation[]>([]);
@@ -186,6 +208,7 @@ function App({ user }: { user: AppUser | null }) {
     extract: null as SavedExtract | null | undefined,
     extractResult: null as object | null,
     replaceToken: 0,
+    closed: false,
   });
   /** Fresh reads already stored: later autosaves omit `extract` so server edit stamps are kept. */
   const storedReads = useRef(new WeakSet<object>());
@@ -208,10 +231,14 @@ function App({ user }: { user: AppUser | null }) {
     }),
     replaceToken: cardReplaced.current,
     extractResult: extractState.kind === "done" ? extractState.result : null,
+    closed,
   };
 
-  const applyFull = useCallback((full: ProjectFull) => {
+  const applyFull = useCallback((full: ProjectFull & JobStatusFields) => {
     setProjectId(full.id);
+    setJobStatus(jobStatusOf(full));
+    setCloseOpen(false);
+    setCloseError(null);
     setProjectName(full.name);
     setZip(full.zip);
     setCard(full.card);
@@ -229,12 +256,13 @@ function App({ user }: { user: AppUser | null }) {
     setFlags(full.card ? flagsForSaved(full) : NO_FLAGS);
     setMode("job");
     // Update the existing row in place — do not prepend (that reordered + duplicated under race).
-    setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), toSummary(full)));
+    setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), summaryOfFull(full)));
   }, []);
 
   const flushSave = useCallback(async () => {
     const snap = jobRef.current;
-    if (!snap.projectId || !hydrated.current) return;
+    // Closed = a record: nothing to write (the server refuses it anyway).
+    if (!snap.projectId || !hydrated.current || snap.closed) return;
     window.clearTimeout(persistTimer.current);
     const gen = saveGen.current;
     try {
@@ -259,6 +287,12 @@ function App({ user }: { user: AppUser | null }) {
       if (gen !== saveGen.current) return;
       if (isUnauthorized(err)) {
         returnToLogin();
+        return;
+      }
+      if (isJobClosedError(err)) {
+        // Closed elsewhere (another tab/device): show the server's message and go read-only.
+        markClosed({ closedAt: null, closedBy: null });
+        toast.error((err as Error).message);
         return;
       }
       toast.error(err instanceof Error ? err.message : "Could not save project.");
@@ -356,7 +390,7 @@ function App({ user }: { user: AppUser | null }) {
   }, [flushSave]);
 
   useEffect(() => {
-    if (!projectId || !hydrated.current || mode !== "job") return;
+    if (!canAutosave({ projectId, hydrated: hydrated.current, mode, closed })) return;
     window.clearTimeout(persistTimer.current);
     persistTimer.current = window.setTimeout(() => persist(), 600);
     return () => window.clearTimeout(persistTimer.current);
@@ -372,6 +406,7 @@ function App({ user }: { user: AppUser | null }) {
     outcomes,
     extractState,
     mode,
+    closed,
     persist,
   ]);
 
@@ -413,8 +448,10 @@ function App({ user }: { user: AppUser | null }) {
   }
 
   async function runExtract(source: { file: File | null; text: string; pages?: string[] }) {
+    if (jobRef.current.closed) return;
     const gen = ++extractGen.current;
     const file = source.file;
+    const savedPrev = extractState;
     setExtracting(true);
     setExtractState({ kind: "loading" });
     try {
@@ -433,6 +470,13 @@ function App({ user }: { user: AppUser | null }) {
       if (gen !== extractGen.current) return;
       if (state.kind === "unauthenticated") {
         returnToLogin();
+        return;
+      }
+      if (state.kind === "error" && state.issue === "JOB_CLOSED") {
+        // Keep the stored read on screen; the job is a record now.
+        setExtractState(savedPrev);
+        markClosed({ closedAt: null, closedBy: null });
+        toast.error(state.message);
         return;
       }
       setExtractState(state);
@@ -500,6 +544,68 @@ function App({ user }: { user: AppUser | null }) {
     } finally {
       setDownloading(false);
     }
+  }
+
+  /** Flip to read-only. Keeps any closedAt/closedBy we already know. */
+  function markClosed(info: { closedAt: string | null; closedBy: string | null }) {
+    window.clearTimeout(persistTimer.current);
+    saveGen.current += 1;
+    extractGen.current += 1;
+    setExtracting(false);
+    setJobStatus((prev) => ({
+      status: "closed",
+      closedAt: info.closedAt ?? prev.closedAt,
+      closedBy: info.closedBy ?? prev.closedBy,
+    }));
+    const id = jobRef.current.projectId;
+    if (id) {
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === id
+            ? {
+                ...p,
+                status: "closed",
+                closedAt: info.closedAt ?? p.closedAt ?? null,
+                closedBy: info.closedBy ?? p.closedBy ?? null,
+              }
+            : p,
+        ),
+      );
+    }
+  }
+
+  async function handleClose() {
+    const id = projectId;
+    if (!id || closed) return;
+    setClosing(true);
+    setCloseError(null);
+    let outcome: CloseOutcome;
+    try {
+      // Write pending edits while the job is still open, then close.
+      await flushSave();
+      outcome = mapCloseResult(await api.close(id));
+    } catch (err) {
+      outcome = mapCloseError(err);
+    } finally {
+      setClosing(false);
+    }
+    if (outcome.kind === "unauthenticated") {
+      returnToLogin();
+      return;
+    }
+    if (outcome.kind === "closed") {
+      markClosed(outcome);
+      setCloseOpen(false);
+      toast.success("Job closed. It is read-only now.");
+      return;
+    }
+    if (outcome.kind === "not-found") {
+      // Same as job isolation elsewhere: show the message; the job stays as it was.
+      setCloseOpen(false);
+      toast.error(outcome.message);
+      return;
+    }
+    setCloseError(outcome.message);
   }
 
   async function goHome() {
@@ -584,7 +690,8 @@ function App({ user }: { user: AppUser | null }) {
         returnToLogin();
         return;
       }
-      toast.error(err instanceof Error ? err.message : "Could not remove project.");
+      // A closed job is a record: the server (or guest guard) refuses the delete.
+      toast.error(deleteErrorMessage(err));
     }
   }
 
@@ -642,6 +749,20 @@ function App({ user }: { user: AppUser | null }) {
                   <Download />
                   Download PDF
                 </Button>
+                {closed ? (
+                  <ClosedBadge view={jobStatus} />
+                ) : (
+                  <CloseJobButton
+                    open={closeOpen}
+                    onOpenChange={(v) => {
+                      setCloseOpen(v);
+                      if (!v) setCloseError(null);
+                    }}
+                    closing={closing}
+                    error={closeError}
+                    onConfirm={() => void handleClose()}
+                  />
+                )}
               </>
             ) : null}
             {user ? (
@@ -703,32 +824,34 @@ function App({ user }: { user: AppUser | null }) {
                 </p>
               </div>
             </section>
-            <PdsIntake
-              text={text}
-              onText={setText}
-              onExtract={() => handleExtract()}
-              onUpload={(file, pdfText, pages) => handleUpload(file, pdfText, pages)}
-              onSample={(next, raw) => {
-                extractGen.current += 1;
-                setExtracting(false);
-                setExtractState({ kind: "idle" });
-                uploadRef.current = null;
-                cardReplaced.current += 1;
-                setText(raw);
-                applyCard(next, NO_FLAGS);
-                remember(next, zip);
-                if (zip.length === 5) void handleForecast(next, zip);
-              }}
-              loading={extracting}
-              recents={recents}
-              onOpenRecent={(next) => {
-                extractGen.current += 1;
-                setExtracting(false);
-                cardReplaced.current += 1;
-                setExtractState({ kind: "idle" });
-                applyCard(next, flagsForSaved(null));
-              }}
-            />
+            <fieldset disabled={closed} className="min-w-0">
+              <PdsIntake
+                text={text}
+                onText={setText}
+                onExtract={() => handleExtract()}
+                onUpload={(file, pdfText, pages) => handleUpload(file, pdfText, pages)}
+                onSample={(next, raw) => {
+                  extractGen.current += 1;
+                  setExtracting(false);
+                  setExtractState({ kind: "idle" });
+                  uploadRef.current = null;
+                  cardReplaced.current += 1;
+                  setText(raw);
+                  applyCard(next, NO_FLAGS);
+                  remember(next, zip);
+                  if (zip.length === 5) void handleForecast(next, zip);
+                }}
+                loading={extracting}
+                recents={recents}
+                onOpenRecent={(next) => {
+                  extractGen.current += 1;
+                  setExtracting(false);
+                  cardReplaced.current += 1;
+                  setExtractState({ kind: "idle" });
+                  applyCard(next, flagsForSaved(null));
+                }}
+              />
+            </fieldset>
           </div>
 
           <div className="min-w-0 lg:col-start-1 lg:row-start-2">
@@ -747,7 +870,11 @@ function App({ user }: { user: AppUser | null }) {
             {card ? <ProvenancePanel state={extractState} card={card} /> : null}
           </div>
 
-          <div className="no-print space-y-4 lg:col-start-2 lg:row-start-1 lg:row-span-2">
+          {/* Closed: every control in the side panels is disabled natively; the server enforces it (BE). */}
+          <fieldset
+            disabled={closed}
+            className="no-print min-w-0 space-y-4 lg:col-start-2 lg:row-start-1 lg:row-span-2"
+          >
             <WeatherPanel
               zip={zip}
               onZip={setZip}
@@ -828,24 +955,13 @@ function App({ user }: { user: AppUser | null }) {
               forecast={scored}
               disabled={!card}
             />
-          </div>
+          </fieldset>
         </div>
       ) : null}
     </main>
   );
 }
 
-function toSummary(full: ProjectFull): ProjectSummary {
-  return {
-    id: full.id,
-    name: full.name,
-    zip: full.zip,
-    archived: full.archived,
-    lastOpenedAt: full.lastOpenedAt,
-    updatedAt: full.updatedAt,
-    hasCard: Boolean(full.card),
-  };
-}
 
 function workspaceApi(signedIn: boolean) {
   const wrap = <T,>(p: Promise<T>) => (signedIn ? bounceExpired(p) : p);
@@ -866,6 +982,12 @@ function workspaceApi(signedIn: boolean) {
     /** `extract` rides along next to `card` (pending BE-3 server write; guests store it locally). */
     save(data: Parameters<typeof guestSaveProject>[0]) {
       return wrap(signedIn ? saveProject({ data }) : Promise.resolve(guestSaveProject(data)));
+    },
+    /** CONTRACT closeout: BE closeProject({ id }) or the guest workspace (BE 37 mirror). */
+    close(id: string) {
+      return wrap<unknown>(
+        signedIn ? closeProject({ data: { id } }) : Promise.resolve(guestCloseProject(id)),
+      );
     },
     archive(id: string, archived: boolean) {
       return wrap<void | { ok: true }>(
