@@ -18,6 +18,26 @@ const databaseUrl =
  */
 export const dbSource: DbSource = databaseUrl ? "neon" : "pglite";
 
+// Loud, non-fatal warning: a production server without DATABASE_URL keeps all
+// data and logins in memory (lost on restart, different per instance). Previews
+// and CI rely on this fallback, so it must never crash. Logged once per process.
+const warnRef = globalThis as typeof globalThis & { __dbMemoryWarned__?: boolean };
+if (
+  typeof window === "undefined" &&
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV === "production" &&
+  !databaseUrl &&
+  !warnRef.__dbMemoryWarned__
+) {
+  warnRef.__dbMemoryWarned__ = true;
+  console.warn(
+    "[db] WARNING: DATABASE_URL is not set in production. Using the in-memory " +
+      "database: every account, job and record is lost on restart and differs " +
+      "between server instances. Set DATABASE_URL (Postgres) and " +
+      "BETTER_AUTH_SECRET for any real or shared deploy (see README > Deploy).",
+  );
+}
+
 /**
  * Minimal shared SQL surface, satisfied by both Neon and PGLite. Both the
  * tagged-template and `.query()` forms resolve to an array of row objects:
