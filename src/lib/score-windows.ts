@@ -66,6 +66,14 @@ function zoned(iso: string, timeZone: string) {
   };
 }
 
+/**
+ * Policy switch (PO): true = a scored limit the sheet does not state (e.g. spray wind max) blocks GO.
+ * false = that limit is skipped in the decision and GO carries a "<limit>: Not stated, check the sheet"
+ * note. Both branches are implemented and tested; changing the decision is this one line.
+ */
+export const NOT_STATED_LIMIT_BLOCKS_GO = true;
+export type ScoreOptions = { notStatedBlocksGo?: boolean };
+
 /** Used only when the sheet does not state a dew-point margin, and always labelled as such. */
 export const DEW_SPREAD_DEFAULT_F = 5;
 export const DEW_SPREAD_DEFAULT_LABEL = "industry default (SSPC), not from sheet";
@@ -116,7 +124,10 @@ export function scoreHour(
   env: Environmentals,
   timeZone = "UTC",
   site?: SiteContext,
+  opts: ScoreOptions = {},
 ): HourWindow {
+  const notStatedBlocks = opts.notStatedBlocksGo ?? NOT_STATED_LIMIT_BLOCKS_GO;
+  const notStatedNotes: string[] = [];
   const z = zoned(raw.startIso, timeZone);
   const reasons: string[] = [];
   let hard = 0;
@@ -320,7 +331,10 @@ export function scoreHour(
     }
   }
 
-  if (env.windMaxMph == null) unavailable.push("Spray wind max: Not stated");
+  if (env.windMaxMph == null) {
+    if (notStatedBlocks) unavailable.push("Spray wind max: Not stated");
+    else notStatedNotes.push("Wind limit: Not stated, check the sheet");
+  }
   else if (wind == null) unavailable.push("Wind unavailable");
   if (wind != null && env.windMaxMph != null) {
     const hit = overLimit(wind, env.windMaxMph, cal.wind, 6);
@@ -362,6 +376,7 @@ export function scoreHour(
     const extra = mits.length ? ` after ${mits.map((id) => mitigationById(id)?.label ?? id).join(", ")}` : "";
     reasons.push(`Inside PDS window${extra}`);
   }
+  reasons.push(...notStatedNotes);
 
   return {
     startIso: raw.startIso,

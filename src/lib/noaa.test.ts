@@ -1,8 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BACKUP_LABEL, NWS_USER_AGENT, SSPC_DEW_LABEL, checkHour, durationHours, sheetWindow, type SheetWindow, type WxHour } from "./noaa.ts";
-import { bundleDays, scoreHour } from "./score-windows.ts";
+import { BACKUP_LABEL, NWS_USER_AGENT, SSPC_DEW_LABEL, applySheetSurface, checkHour, durationHours, sheetWindow, type SheetWindow, type WxHour } from "./noaa.ts";
+import { NOT_STATED_LIMIT_BLOCKS_GO, bundleDays, rescoreForecast, scoreHour } from "./score-windows.ts";
 import type { Environmentals } from "./types.ts";
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`../../tests/fixtures/weather/${n}.json`, import.meta.url), "utf8"));
@@ -122,5 +122,48 @@ describe("strict GO rule in the existing window scoring (QA critical)", () => {
     assert.equal(day.status, "nogo");
     const good = bundleDays([hrs[1]!, hrs[2]!], meta, ENV).days[0]!;
     assert.equal(good.status, "go");
+  });
+});
+
+describe("Not-stated-limit policy switch (NOT_STATED_LIMIT_BLOCKS_GO)", () => {
+  const noWind = { ...ENV, windMaxMph: null };
+  const raw = { startIso: "2026-10-24T06:00:00Z", tempF: 70, rh: 40, dewpointF: 40, pop: 0, precipIn: 0, windMph: 3, shortForecast: "", cloudCover: 10 };
+  it("strict branch (current default): a Not stated wind limit blocks GO", () => {
+    assert.equal(NOT_STATED_LIMIT_BLOCKS_GO, true);
+    const h = scoreHour(raw, noWind, "UTC", undefined, { notStatedBlocksGo: true });
+    assert.equal(h.status, "unknown");
+    assert.ok(h.reasons.includes("Spray wind max: Not stated"));
+  });
+  it("lenient branch: the limit is skipped and GO carries a check-the-sheet note", () => {
+    const h = scoreHour(raw, noWind, "UTC", undefined, { notStatedBlocksGo: false });
+    assert.equal(h.status, "go");
+    assert.ok(h.reasons.includes("Wind limit: Not stated, check the sheet"));
+    const wx: WxHour = { startIso: "2026-10-24T06:00:00.000Z", tempF: 70, rh: 40, dewpointF: 40, windMph: 3, gustMph: null, skyCover: 10, pop: 0,
+      source: { kind: "gridpoint", office: "X", x: 1, y: 1, updateTime: "t", label: "g" } };
+    const c = checkHour(wx, noWind, 72, { notStatedBlocksGo: false });
+    assert.equal(c.verdict, "go");
+    assert.match(c.checks.find((x) => x.name === "Spray wind")!.reason, /Not stated, check the sheet/);
+  });
+});
+
+describe("surface temp: measured vs labelled estimate", () => {
+  it("uses a measured value labelled 'measured'; empty -> sun estimate labelled 'estimate, verify with gauge'", async () => {
+    const w = (await sheetWindow(29.7633, -95.3633, ENV, { fetch: nwsFetch, now: NOW }))!;
+    const rawHours = w.hours.map((c) => ({ startIso: c.startIso, tempF: c.hour.tempF, rh: c.hour.rh, dewpointF: c.hour.dewpointF,
+      pop: c.hour.pop, precipIn: null, windMph: c.hour.windMph, shortForecast: "", cloudCover: c.hour.skyCover }));
+    const meta = { zip: "77002", city: "", state: "", lat: 0, lon: 0, timezone: w.timezone, source: "t", issuedAt: "t", rawHours, sheet: w };
+    const base = bundleDays(rawHours.map((r) => scoreHour(r, ENV, w.timezone)), meta, ENV);
+    const site = { substrate: "bare_steel" as const, mitigations: [] };
+    const iso = "2026-10-23T19:00:00.000Z";
+    const surf = (f: typeof base) => f.sheet!.hours.find((h) => h.startIso === iso)!.checks.find((c) => c.name.startsWith("Surface temp"))!;
+
+    const measured = applySheetSurface(rescoreForecast(base, ENV, { ...site, measuredSurfaceTempF: 91 }), ENV, { ...site, measuredSurfaceTempF: 91 });
+    assert.equal(surf(measured).name, "Surface temp (measured)");
+    assert.match(surf(measured).reason, /91°F/);
+
+    const est = applySheetSurface(rescoreForecast(base, ENV, site), ENV, site);
+    assert.equal(surf(est).name, "Surface temp (estimate, verify with gauge)");
+    assert.ok(["pass", "fail"].includes(surf(est).status), "an estimate is scored (label still shown)");
+    assert.doesNotMatch(surf(est).name, /measured/);
   });
 });

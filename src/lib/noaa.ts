@@ -10,7 +10,16 @@
  * Every value carries its source and time. Missing data / timeout = unavailable, never GO.
  */
 import { fetchWithTimeout, type FetchLike, WEATHER_TIMEOUT_MS } from "./forecast-sources.ts";
-import type { Environmentals } from "./types";
+import type { Environmentals, ForecastBundle } from "./types";
+import type { SiteContext } from "./mitigations";
+import { NOT_STATED_LIMIT_BLOCKS_GO, type ScoreOptions } from "./score-windows.ts";
+
+/** Surface temperature for the checks: a gauge reading, or the sun-model estimate (always labelled). */
+export type SurfaceInput = { valueF: number; kind: "measured" | "estimate" };
+export const SURFACE_LABEL: Record<SurfaceInput["kind"], string> = {
+  measured: "measured",
+  estimate: "estimate, verify with gauge",
+};
 
 export const NWS_USER_AGENT = "CoatingsConductor (practice; lead-bot@users.noreply.github.com)";
 export const BACKUP_LABEL = "Backup source: Open-Meteo";
@@ -153,7 +162,16 @@ export function latestObservation(stationId: string, obs: { properties?: Record<
 }
 
 /** One hour vs the sheet. A missing limit is "Not stated" and never counts as a pass. */
-export function checkHour(hour: WxHour, env: Environmentals, surfaceTempF?: number | null): HourCheck {
+export function checkHour(
+  hour: WxHour,
+  env: Environmentals,
+  surfaceIn?: number | null | SurfaceInput,
+  opts: ScoreOptions = {},
+): HourCheck {
+  const notStatedBlocks = opts.notStatedBlocksGo ?? NOT_STATED_LIMIT_BLOCKS_GO;
+  const surface: SurfaceInput | null =
+    surfaceIn == null ? null : typeof surfaceIn === "number" ? { valueF: surfaceIn, kind: "measured" } : surfaceIn;
+  const surfaceTempF = surface?.valueF ?? null;
   const checks: LimitCheck[] = [];
   const range = (name: string, v: number | null, min: number | null, max: number | null, unit: string) => {
     if (min == null && max == null) return checks.push({ name, status: "not-stated", reason: `${name}: Not stated on the sheet` });
@@ -169,7 +187,7 @@ export function checkHour(hour: WxHour, env: Environmentals, surfaceTempF?: numb
   } else if (surfaceTempF == null) {
     checks.push({ name: "Surface temp", status: "unavailable", reason: "Surface temp unknown: not measured, not assumed. Measure it on site." });
   } else {
-    range("Surface temp", surfaceTempF, env.substrateTempMinF, env.substrateTempMaxF, "°F");
+    range(`Surface temp (${SURFACE_LABEL[surface!.kind]})`, surfaceTempF, env.substrateTempMinF, env.substrateTempMaxF, "°F");
   }
   range("RH", hour.rh, null, env.relativeHumidityMax, "%");
   const stated = env.dewPointSpreadMinF != null;
@@ -180,7 +198,7 @@ export function checkHour(hour: WxHour, env: Environmentals, surfaceTempF?: numb
     checks.push({ name: "Dew-point spread", status: "unavailable", reason: "Dew-point spread: no forecast value" });
   } else {
     const spread = r1(surfaceOrAir - hour.dewpointF);
-    const basis = surfaceTempF == null ? "air" : "surface";
+    const basis = surface == null ? "air" : `surface, ${SURFACE_LABEL[surface.kind]}`;
     checks.push({
       name: "Dew-point spread",
       status: spread >= margin ? "pass" : "fail",
@@ -200,9 +218,13 @@ export function checkHour(hour: WxHour, env: Environmentals, surfaceTempF?: numb
       reason: `Wind ${hour.windMph} mph${gust} ${ok ? "within" : "above"} sheet max ${env.windMaxMph} mph`,
     });
   }
-  const verdict: HourVerdict = checks.some((c) => c.status === "fail")
+  if (!notStatedBlocks) {
+    for (const c of checks) if (c.status === "not-stated") c.reason = `${c.name} limit: Not stated, check the sheet`;
+  }
+  const scored = notStatedBlocks ? checks : checks.filter((c) => c.status !== "not-stated");
+  const verdict: HourVerdict = scored.some((c) => c.status === "fail")
     ? "nogo"
-    : checks.every((c) => c.status === "pass")
+    : scored.length && scored.every((c) => c.status === "pass")
       ? "go"
       : "unavailable";
   return { startIso: hour.startIso, verdict, checks, hour };
@@ -299,4 +321,29 @@ export async function sheetWindow(
   }
   if (!hours.length) return null;
   return { source: hours[0]!.source, timezone, backup, now, hours: hours.map((h) => checkHour(h, env, surfaceTempF)) };
+}
+
+/**
+ * Re-check the NOAA table with the job's surface temperature: the saved gauge reading when present
+ * ("measured"), else the sun-model estimate from the scored strip ("estimate, verify with gauge").
+ */
+export function applySheetSurface(forecast: ForecastBundle, env: Environmentals, site: SiteContext): ForecastBundle {
+  const sheet = forecast.sheet;
+  if (!sheet) return forecast;
+  const est = new Map<string, number>();
+  for (const d of forecast.days) {
+    for (const h of d.hours ?? []) {
+      if (h.substrateF != null) est.set(new Date(h.startIso).toISOString(), h.substrateF);
+    }
+  }
+  const measured = typeof site.measuredSurfaceTempF === "number" && Number.isFinite(site.measuredSurfaceTempF)
+    ? site.measuredSurfaceTempF
+    : null;
+  const hours = sheet.hours.map((c) => {
+    const e = est.get(c.startIso);
+    const surface: SurfaceInput | null =
+      measured != null ? { valueF: measured, kind: "measured" } : e != null ? { valueF: e, kind: "estimate" } : null;
+    return checkHour(c.hour, env, surface);
+  });
+  return { ...forecast, sheet: { ...sheet, hours } };
 }

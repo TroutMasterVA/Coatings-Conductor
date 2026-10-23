@@ -416,6 +416,24 @@ export function WeatherPanel({
               </option>
             ))}
           </select>
+          <div className="mt-3">
+            <Label htmlFor="measured-surface">Measured surface temp (°F)</Label>
+            <Input
+              id="measured-surface"
+              type="number"
+              inputMode="decimal"
+              className="mt-1"
+              placeholder="Optional gauge reading"
+              value={site.measuredSurfaceTempF ?? ""}
+              onChange={(e) => {
+                const v = e.target.value.trim() === "" ? null : Number(e.target.value);
+                onSite({ ...site, measuredSurfaceTempF: v != null && Number.isFinite(v) ? v : null });
+              }}
+            />
+            <p className="mt-1 text-xs text-muted">
+              Empty: surface checks use the sun estimate, labelled “estimate, verify with gauge”.
+            </p>
+          </div>
           <p className="mt-2 text-xs leading-relaxed text-muted">
             {sub.note} On a sunny {example.airF}°F afternoon this face estimates about{" "}
             <span className="font-mono text-fg">{example.substrateF}°F</span>
