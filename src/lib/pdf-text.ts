@@ -51,15 +51,29 @@ export async function extractPdfPages(file: File): Promise<PdfPageText[]> {
   const workerUrl = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   const data = await file.arrayBuffer();
-  const loadingTask = pdfjs.getDocument({ data });
-  let doc;
+  return readLoadedPdf(pdfjs.getDocument({ data }));
+}
+
+/** The slice of a pdf.js loading task this module uses. */
+export type PdfLoadingTaskLike = { promise: Promise<unknown>; destroy(): Promise<unknown> | unknown };
+
+/**
+ * Wait for a pdf.js loading task, read its pages, then free it. pdf.js 5+/6 has no
+ * `PDFDocumentProxy.destroy()`: the loading task owns the worker, so destroy goes through it.
+ * (Calling `doc.destroy()` threw in `finally`, which threw away the text and left every upload empty.)
+ */
+export async function readLoadedPdf(loadingTask: PdfLoadingTaskLike, maxPages = 12): Promise<PdfPageText[]> {
+  let doc: PdfDocLike;
   try {
-    doc = await loadingTask.promise;
+    doc = (await loadingTask.promise) as PdfDocLike;
   } catch (err) {
     await loadingTask.destroy();
     throw err;
   }
-  return readPagesThenDestroy(doc as unknown as PdfDocLike);
+  return readPagesThenDestroy(
+    { numPages: doc.numPages, getPage: (n) => doc.getPage(n), destroy: () => loadingTask.destroy() },
+    maxPages,
+  );
 }
 
 /** Joined text for existing callers: pages joined by a blank line. */

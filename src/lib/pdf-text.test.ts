@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { flatPageText, readPagesThenDestroy, type PdfDocLike } from "./pdf-text.ts";
+import { readFileSync } from "node:fs";
+import { flatPageText, readLoadedPdf, readPagesThenDestroy, type PdfDocLike } from "./pdf-text.ts";
 
 function stubDoc(numPages: number, failOn?: number) {
   const log = { destroyed: 0, cleaned: [] as number[], read: [] as number[] };
@@ -68,5 +69,19 @@ describe("flatPageText", () => {
       { page: 1, text: "p1 text" },
       { page: 2, text: "p2 text" },
     ]);
+  });
+});
+
+describe("readLoadedPdf (real pdf.js, no AI config)", () => {
+  it("returns the text layer of a real PDF and frees the loading task", async () => {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const data = new Uint8Array(readFileSync(new URL("../../tests/fixtures/extract/text-layer.pdf", import.meta.url)));
+    const task = pdfjs.getDocument({ data, disableFontFace: true, verbosity: 0 });
+    let destroyed = 0;
+    const realDestroy = task.destroy.bind(task);
+    const pages = await readLoadedPdf({ promise: task.promise, destroy: () => ((destroyed += 1), realDestroy()) });
+    assert.ok(pages.length >= 1);
+    assert.ok(pages.map((p) => p.text).join(" ").trim().length > 0, "text layer must not come back empty");
+    assert.equal(destroyed, 1);
   });
 });
