@@ -33,7 +33,7 @@ import { emailAndPasswordEnabled } from "./email-password";
 import { GATE_PROVIDER_ID, gateIdentitySessions } from "./gate-session.server";
 import { loginLockout } from "./login-lockout.server";
 import { pgliteDialect } from "./pglite-dialect";
-import { PREVIEW_ALLOWED_HOSTS } from "./preview";
+import { trustedHostsFromEnv, trustedOriginsFromEnv } from "./preview";
 
 // Kick (and share) PGLite bootstrap as soon as the auth server module loads.
 void ensureDbReady();
@@ -65,43 +65,17 @@ const authDisabled = env("VITE_AUTH_ENABLED") === "false";
 /** True when email/password sign-in is active (real auth is enforced). */
 export const authConfigured = !authDisabled;
 
-// This app's own Better Auth origin. When deployed the deployer injects the
-// public URL. In the sandbox live preview there's no fixed URL (each preview gets
-// a dynamic `*.grok-sandbox.com` host), so we hand Better Auth a dynamic baseURL:
-// it derives the origin per-request from the (proxied) host, validated against the
-// preview allowlist. Practice copy is `*.vercel.app` (see PREVIEW_ALLOWED_HOSTS).
+// This app's own Better Auth origin: BETTER_AUTH_URL when set; otherwise a dynamic
+// baseURL limited to the EXACT hosts from env (AUTH_TRUSTED_ORIGINS, Vercel's own
+// VERCEL_BRANCH_URL / VERCEL_URL, loopback outside production). No wildcards (SEC).
 const explicitBaseURL = env("BETTER_AUTH_URL");
-// Explicit `string[]` (not a readonly tuple) — Better Auth's DynamicBaseURLConfig
-// requires a mutable `allowedHosts: string[]`.
-const previewAllowedHosts: string[] = [...PREVIEW_ALLOWED_HOSTS];
-// Local `npm run dev` (port 8080 contract). Browsers may send Origin as any of
-// these for the same server — trusting only `localhost` rejects `127.0.0.1` and
-// breaks email/password with "Invalid origin".
-const LOCAL_DEV_ORIGINS: string[] = [
-  "http://localhost:8080",
-  "http://127.0.0.1:8080",
-  "http://[::1]:8080",
-];
+const trustedOrigins: string[] = trustedOriginsFromEnv(process.env);
 const baseURL = explicitBaseURL ?? {
-  // Include loopback hosts so dynamic baseURL resolves for local email/password
-  // (not only the preview wildcard).
-  allowedHosts: [...previewAllowedHosts, "localhost", "127.0.0.1", "[::1]"],
-  // `auto` → trust both http:// and https:// expansions of allowedHosts
-  // (preview is https; local dev is http).
+  // Explicit `string[]`: Better Auth's DynamicBaseURLConfig needs a mutable array.
+  allowedHosts: trustedHostsFromEnv(process.env),
   protocol: "auto" as const,
   fallback: "http://localhost:8080",
 };
-
-// Origins Better Auth accepts on credentialed POSTs (sign-up/sign-in, etc.).
-// Missing entries here surface as FORBIDDEN "Invalid origin".
-// Always include preview wildcards so a practice Vercel host works even if
-// BETTER_AUTH_URL is set to something else. grok.me is not in this list.
-const trustedOrigins: string[] = [
-  ...(explicitBaseURL ? [explicitBaseURL] : []),
-  ...previewAllowedHosts,
-  ...previewAllowedHosts.flatMap((host) => [`https://${host}`, `http://${host}`]),
-  ...LOCAL_DEV_ORIGINS,
-];
 
 const databaseUrl = env("DATABASE_URL");
 
