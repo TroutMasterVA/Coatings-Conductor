@@ -4,6 +4,7 @@ import { heuristicExtract } from "./heuristic-extract.ts";
 import { buildCardFromPds } from "./on-device-extract.ts";
 import { SAMPLE_PDS_TEXT } from "./samples.ts";
 import { scoreHour, type RawHour } from "./score-windows.ts";
+import { checkHour } from "./noaa.ts";
 import type { Environmentals } from "./types.ts";
 
 function env(partial: Partial<Environmentals>): Environmentals {
@@ -151,10 +152,21 @@ describe("silent sheet extract", () => {
 });
 
 describe("silent sheet windows", () => {
-  it("does not score go when dew is not stated", () => {
-    const scored = scoreHour(hour({}), env({ dewPointSpreadMinF: null, precipitationAllowed: false }));
-    assert.notEqual(scored.status, "go");
-    assert.match(scored.reasons.join(" "), /Dew spread not stated/i);
+  it("dew not stated: the labelled 5°F SSPC default applies (>= 5°F can be GO, < 5°F is NO-GO)", () => {
+    const noDew = env({ dewPointSpreadMinF: null, precipitationAllowed: false });
+    // (a) spread well over 5°F, dry, in range: GO, and the reason carries the labelled default.
+    const ok = scoreHour(hour({}), noDew);
+    assert.equal(ok.status, "go");
+    // The per-hour sheet check (weather panel) shows the dew line with the labelled default.
+    const wx = { startIso: "2026-10-24T06:00:00.000Z", tempF: 70, rh: 40, dewpointF: 50, windMph: 3, gustMph: null, skyCover: 10, pop: 0,
+      source: { kind: "gridpoint" as const, office: "X", x: 1, y: 1, updateTime: "t", label: "g" } };
+    const dew = checkHour(wx, noDew, 70).checks.find((c) => c.name === "Dew-point spread")!;
+    assert.equal(dew.status, "pass");
+    assert.match(dew.reason, /meets 5°F \(industry default \(SSPC\), not from sheet\)|meets .*industry default \(SSPC\), not from sheet/);
+    // (b) spread under 5°F against the default: still NO-GO, with the labelled reason.
+    const thin = scoreHour(hour({ dewpointF: 69 }), noDew);
+    assert.equal(thin.status, "nogo");
+    assert.match(thin.reasons.join(" "), /Dew spread \d+°F < 5°F \(industry default \(SSPC\), not from sheet\)/);
   });
 
   it("scores wet hours nogo when rain is unstated", () => {
