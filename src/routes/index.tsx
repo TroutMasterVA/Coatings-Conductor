@@ -14,6 +14,7 @@ import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
 import { buildCardFromPds } from "@/lib/on-device-extract";
 import { loadForecast } from "@/lib/forecast";
+import { applySheetSurface } from "@/lib/noaa";
 import {
   DEFAULT_CALIBRATION,
   loadLegacyLearning,
@@ -305,7 +306,7 @@ function App({ user }: { user: AppUser | null }) {
 
   const scored = useMemo(() => {
     if (!forecast || !card) return forecast;
-    return rescoreForecast(forecast, card.environmentals, scoringSite);
+    return applySheetSurface(rescoreForecast(forecast, card.environmentals, scoringSite), card.environmentals, scoringSite);
   }, [forecast, card, scoringSite]);
 
   function remember(next: FieldCardData, nextZip: string) {
