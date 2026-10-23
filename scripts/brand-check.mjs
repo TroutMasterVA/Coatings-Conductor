@@ -13,9 +13,26 @@
  * Checked on the filesystem (not the served head) so preview and mid-scaffold
  * workspaces are judged the same way.
  */
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { OG_SITE_REL_PATH, readOgSite, siteHasCustomCard } from "./grok-pwa-shared.mjs";
+import { OG_SITE_REL_PATH } from "./grok-pwa-shared.mjs";
+
+// Local, filesystem-only readers. The shared module's readOgSite became a
+// no-op stub (and siteHasCustomCard was removed) when the Grok PWA/OG overlay
+// was disabled for the running app; this dev-time check still needs to read
+// the workspace it is judging, so it keeps its own copies.
+function readOgSite(workspaceRoot) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(workspaceRoot, OG_SITE_REL_PATH), "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function siteHasCustomCard(site = {}) {
+  return String(site?.card ?? "").toLowerCase() === "custom";
+}
 
 // Over this, link scrapers (X card previews included) time out or skip the
 // image, so the card silently fails to unfurl. The og skill's JPEG contract
