@@ -3,6 +3,8 @@ import type { FieldCardData, SubstratePrepGate } from "@/lib/types";
 import { STEP_RAIL } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { DRAFT_BANNER } from "@/lib/extract-flags";
+import { goGateChips } from "@/components/go-gate-chips";
 
 function join(items: string[] | undefined) {
   return (items ?? []).filter(Boolean).join(" · ");
@@ -53,27 +55,6 @@ function Section({
       </div>
     </section>
   );
-}
-
-function goGateChips(card: FieldCardData): string[] {
-  const env = card.environmentals;
-  const chips: string[] = [];
-  if (env.ambientTempMinF != null || env.ambientTempMaxF != null) {
-    chips.push(`Air ${env.ambientTempMinF ?? "—"}–${env.ambientTempMaxF ?? "—"}°F`);
-  }
-  if (env.substrateTempMinF != null || env.substrateTempMaxF != null) {
-    chips.push(`Substrate ${env.substrateTempMinF ?? "—"}–${env.substrateTempMaxF ?? "—"}°F`);
-  }
-  if (env.dewPointSpreadMinF != null) {
-    chips.push(`Dew spread ≥ ${env.dewPointSpreadMinF}°F`);
-  } else {
-    chips.push("Dew spread not stated");
-  }
-  if (env.relativeHumidityMax != null) chips.push(`RH ≤ ${env.relativeHumidityMax}%`);
-  if (env.relativeHumidityMin != null) chips.push(`RH ≥ ${env.relativeHumidityMin}%`);
-  if (env.precipitationAllowed === false) chips.push("No precipitation");
-  if (env.windMaxMph != null) chips.push(`Wind ≤ ${env.windMaxMph} mph`);
-  return chips;
 }
 
 function formatPrepGate(gate: SubstratePrepGate): string {
@@ -151,7 +132,7 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
         </div>
         {(card.surfacePrep.prepGates ?? []).length ? (
           <ul className="space-y-1 text-sm">
-            {card.surfacePrep.prepGates.map((g) => (
+            {(card.surfacePrep.prepGates ?? []).map((g) => (
               <li key={`${g.family}-${g.label}`} className="flex gap-2">
                 <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
                 <span>{formatPrepGate(g)}</span>
@@ -271,11 +252,14 @@ export function FieldCardView({
   zip,
   headline,
   mitigations,
+  draft,
 }: {
   card: FieldCardData;
   zip?: string;
   headline?: string;
   mitigations?: string[];
+  /** On-device read: one banner line, on screen and in print (LEAD exception, FE-3). */
+  draft?: boolean;
 }) {
   const mid = "·";
   const envGates = goGateChips(card);
@@ -310,6 +294,16 @@ export function FieldCardView({
               {mix ? <span className="font-mono text-xs text-ink-muted">{mix}</span> : null}
             </div>
           </header>
+
+          {draft ? (
+            <p
+              role="status"
+              data-testid="draft-banner"
+              className="mt-3 rounded-md bg-nogo-soft px-3 py-2 text-sm font-semibold text-nogo"
+            >
+              {DRAFT_BANNER}
+            </p>
+          ) : null}
 
           <dl className="print-only mt-3 space-y-1 border-b border-rail/80 pb-3 text-xs text-ink">
             <div>
