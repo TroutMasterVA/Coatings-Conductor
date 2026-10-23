@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { BACKUP_LABEL, NWS_USER_AGENT, SSPC_DEW_LABEL, applySheetSurface, checkHour, durationHours, sheetWindow, type SheetWindow, type WxHour } from "./noaa.ts";
-import { NOT_STATED_LIMIT_BLOCKS_GO, bundleDays, rescoreForecast, scoreHour } from "./score-windows.ts";
+import { NOT_STATED_LIMIT_BLOCKS_GO, WIND_ADVISORY, bundleDays, rescoreForecast, scoreHour } from "./score-windows.ts";
 import type { Environmentals } from "./types.ts";
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`../../tests/fixtures/weather/${n}.json`, import.meta.url), "utf8"));
@@ -67,8 +67,8 @@ describe("NOAA gridpoint vs sheet limits", () => {
     assert.equal(c.verdict, "nogo");
   });
 
-  it("a missing wind limit is Not stated and the hour is not GO; unknown surface is not assumed", () => {
-    const c = checkHour(hour({}), { ...ENV, windMaxMph: null }, 60);
+  it("a missing wind limit is Not stated and flagged (strict branch: not GO); unknown surface is not assumed", () => {
+    const c = checkHour(hour({}), { ...ENV, windMaxMph: null }, 60, { notStatedBlocksGo: true });
     assert.equal(c.checks.find((x) => x.name === "Spray wind")!.status, "not-stated");
     assert.notEqual(c.verdict, "go");
     const s = checkHour(hour({}), ENV);
@@ -128,21 +128,41 @@ describe("strict GO rule in the existing window scoring (QA critical)", () => {
 describe("Not-stated-limit policy switch (NOT_STATED_LIMIT_BLOCKS_GO)", () => {
   const noWind = { ...ENV, windMaxMph: null };
   const raw = { startIso: "2026-10-24T06:00:00Z", tempF: 70, rh: 40, dewpointF: 40, pop: 0, precipIn: 0, windMph: 3, shortForecast: "", cloudCover: 10 };
-  it("strict branch (current default): a Not stated wind limit blocks GO", () => {
-    assert.equal(NOT_STATED_LIMIT_BLOCKS_GO, true);
+  it("strict branch (opt-in): a Not stated wind limit blocks GO", () => {
     const h = scoreHour(raw, noWind, "UTC", undefined, { notStatedBlocksGo: true });
     assert.equal(h.status, "unknown");
     assert.ok(h.reasons.includes("Spray wind max: Not stated"));
   });
-  it("lenient branch: the limit is skipped and GO carries a check-the-sheet note", () => {
-    const h = scoreHour(raw, noWind, "UTC", undefined, { notStatedBlocksGo: false });
+  it("default (Isaiah, Oct 23): an unstated wind limit does not block; GO is flagged with the wind advisory", () => {
+    assert.equal(NOT_STATED_LIMIT_BLOCKS_GO, false);
+    const h = scoreHour(raw, noWind, "UTC");
     assert.equal(h.status, "go");
-    assert.ok(h.reasons.includes("Wind limit: Not stated, check the sheet"));
+    assert.ok(h.reasons.includes("Not stated — check the sheet for spray wind max"));
+    assert.ok(h.reasons.includes(WIND_ADVISORY));
+    assert.equal(WIND_ADVISORY, "Consider wind cover/screening; site lead makes the final call.");
     const wx: WxHour = { startIso: "2026-10-24T06:00:00.000Z", tempF: 70, rh: 40, dewpointF: 40, windMph: 3, gustMph: null, skyCover: 10, pop: 0,
       source: { kind: "gridpoint", office: "X", x: 1, y: 1, updateTime: "t", label: "g" } };
-    const c = checkHour(wx, noWind, 72, { notStatedBlocksGo: false });
+    const c = checkHour(wx, noWind, 72);
     assert.equal(c.verdict, "go");
-    assert.match(c.checks.find((x) => x.name === "Spray wind")!.reason, /Not stated, check the sheet/);
+    const w = c.checks.find((x) => x.name === "Spray wind")!.reason;
+    assert.match(w, /^Not stated — check the sheet for spray wind limit/);
+    assert.ok(w.includes(WIND_ADVISORY));
+  });
+  it("a STATED wind limit that is exceeded is still NO-GO (stated limits stay strict)", () => {
+    const windy = { ...raw, windMph: 30 };
+    const h = scoreHour(windy, { ...ENV, windMaxMph: 15 }, "UTC");
+    assert.notEqual(h.status, "go");
+    assert.ok(h.reasons.some((r) => /^Wind 30 mph > 15/.test(r)));
+    const wx: WxHour = { startIso: "2026-10-24T06:00:00.000Z", tempF: 70, rh: 40, dewpointF: 40, windMph: 30, gustMph: null, skyCover: 10, pop: 0,
+      source: { kind: "gridpoint", office: "X", x: 1, y: 1, updateTime: "t", label: "g" } };
+    const c = checkHour(wx, { ...ENV, windMaxMph: 15 }, 72);
+    assert.equal(c.verdict, "nogo");
+  });
+  it("missing weather is still unavailable, never GO, even with the lenient default", () => {
+    const wx: WxHour = { startIso: "2026-10-24T06:00:00.000Z", tempF: null, rh: null, dewpointF: null, windMph: null, gustMph: null, skyCover: null, pop: null,
+      source: { kind: "gridpoint", office: "X", x: 1, y: 1, updateTime: "t", label: "g" } } as unknown as WxHour;
+    const c = checkHour(wx, { ...ENV, windMaxMph: null }, 60);
+    assert.notEqual(c.verdict, "go");
   });
 });
 

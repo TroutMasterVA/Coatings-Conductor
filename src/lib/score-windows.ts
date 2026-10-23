@@ -71,7 +71,15 @@ function zoned(iso: string, timeZone: string) {
  * false = that limit is skipped in the decision and GO carries a "<limit>: Not stated, check the sheet"
  * note. Both branches are implemented and tested; changing the decision is this one line.
  */
-export const NOT_STATED_LIMIT_BLOCKS_GO = true;
+export const NOT_STATED_LIMIT_BLOCKS_GO = false;
+
+/** Visible flag on a GO hour/day whose sheet does not state a limit (Isaiah, Oct 23). */
+export function notStatedFlag(limit: string): string {
+  return `Not stated — check the sheet for ${limit}`;
+}
+
+/** Advisory only (never blocks) when the sheet states no wind limit. */
+export const WIND_ADVISORY = "Consider wind cover/screening; site lead makes the final call.";
 export type ScoreOptions = { notStatedBlocksGo?: boolean };
 
 /** Used only when the sheet does not state a dew-point margin, and always labelled as such. */
@@ -333,7 +341,7 @@ export function scoreHour(
 
   if (env.windMaxMph == null) {
     if (notStatedBlocks) unavailable.push("Spray wind max: Not stated");
-    else notStatedNotes.push("Wind limit: Not stated, check the sheet");
+    else notStatedNotes.push(notStatedFlag("spray wind max"), WIND_ADVISORY);
   }
   else if (wind == null) unavailable.push("Wind unavailable");
   if (wind != null && env.windMaxMph != null) {

@@ -12,7 +12,7 @@
 import { fetchWithTimeout, type FetchLike, WEATHER_TIMEOUT_MS } from "./forecast-sources.ts";
 import type { Environmentals, ForecastBundle } from "./types";
 import type { SiteContext } from "./mitigations";
-import { NOT_STATED_LIMIT_BLOCKS_GO, type ScoreOptions } from "./score-windows.ts";
+import { NOT_STATED_LIMIT_BLOCKS_GO, WIND_ADVISORY, notStatedFlag, type ScoreOptions } from "./score-windows.ts";
 
 /** Surface temperature for the checks: a gauge reading, or the sun-model estimate (always labelled). */
 export type SurfaceInput = { valueF: number; kind: "measured" | "estimate" };
@@ -219,7 +219,12 @@ export function checkHour(
     });
   }
   if (!notStatedBlocks) {
-    for (const c of checks) if (c.status === "not-stated") c.reason = `${c.name} limit: Not stated, check the sheet`;
+    // An unstated limit never blocks; the hour carries a visible flag (and, for wind, an advisory).
+    for (const c of checks) {
+      if (c.status !== "not-stated") continue;
+      c.reason = notStatedFlag(`${c.name.toLowerCase()} limit`);
+      if (c.name === "Spray wind") c.reason += `. ${WIND_ADVISORY}`;
+    }
   }
   const scored = notStatedBlocks ? checks : checks.filter((c) => c.status !== "not-stated");
   const verdict: HourVerdict = scored.some((c) => c.status === "fail")
