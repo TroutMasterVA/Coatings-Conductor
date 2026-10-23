@@ -1,4 +1,4 @@
-import type { Calibration, CustomMitigation } from "./types";
+import type { Calibration, CustomMitigation } from "./types.ts";
 
 export type SubstrateId =
   | "bare_steel"

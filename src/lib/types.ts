@@ -167,6 +167,8 @@ export type ForecastBundle = {
   days: DayWindow[];
   headline: string;
   rawHours?: RawHourLite[];
+  /** NOAA hourly vs sheet limits, every value with its source and time (src/lib/noaa.ts). */
+  sheet?: import("./noaa").SheetWindow;
 };
 
 export type RawHourLite = {

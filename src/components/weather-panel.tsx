@@ -20,6 +20,7 @@ import {
   type SubstrateId,
 } from "@/lib/mitigations";
 import { detectLimiters, goHourCount, unlockedGoHours } from "@/lib/score-windows";
+import { BACKUP_LABEL, type HourCheck, type LimitCheck, type SheetWindow } from "@/lib/noaa";
 import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,49 @@ function statusFill(s: WindowStatus) {
   if (s === "caution") return "bg-caution";
   if (s === "nogo") return "bg-nogo";
   return "bg-subtle";
+}
+
+const VERDICT_TEXT: Record<HourCheck["verdict"], string> = { go: "GO", nogo: "NO-GO", unavailable: "Unavailable" };
+const CHECK_TEXT: Record<LimitCheck["status"], string> = {
+  pass: "pass",
+  fail: "fail",
+  unavailable: "unavailable",
+  "not-stated": "Not stated",
+};
+
+/** NOAA hourly vs the sheet's limits: per-hour verdict, each check's reason, every value's source. */
+function SheetLimitChecks({ sheet, timezone }: { sheet: SheetWindow; timezone: string }) {
+  const fmt = (iso: string) =>
+    new Date(iso).toLocaleString("en-US", { timeZone: timezone, weekday: "short", hour: "numeric", hour12: false });
+  const hours = sheet.hours.slice(0, 24);
+  return (
+    <div className="rounded-xl bg-surface p-4 text-xs shadow-[0_0_0_1px_rgba(255,255,255,0.08)] sm:p-5">
+      <p className="text-sm font-medium text-fg">Hourly vs sheet limits (next 24 h)</p>
+      <p className="mt-1 text-muted">
+        {sheet.backup ? <strong className="text-caution">{BACKUP_LABEL}. </strong> : null}
+        Forecast: {sheet.source.label}
+      </p>
+      <p className="mt-1 text-muted">
+        {sheet.now
+          ? `Now: ${sheet.now.tempF ?? "—"}°F, RH ${sheet.now.rh ?? "—"}%, dew point ${sheet.now.dewpointF ?? "—"}°F, wind ${sheet.now.windMph ?? "—"} mph · ${sheet.now.label}`
+          : "Now: no station observation available."}
+      </p>
+      <ul className="mt-3 space-y-1.5">
+        {hours.map((h) => (
+          <li key={h.startIso}>
+            <span className="font-mono text-fg">{fmt(h.startIso)}:00</span>{" "}
+            <Badge variant={h.verdict === "go" ? "go" : h.verdict === "nogo" ? "nogo" : "default"}>{VERDICT_TEXT[h.verdict]}</Badge>{" "}
+            <span className="text-muted">
+              {h.checks
+                .filter((c) => c.status !== "pass" || h.verdict === "go")
+                .map((c) => `${CHECK_TEXT[c.status]}: ${c.reason}`)
+                .join(" · ")}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function HourStrip({ hours, night }: { hours: HourWindow[]; night?: boolean }) {
@@ -552,6 +596,7 @@ export function WeatherPanel({
               <span>{night ? "Strip is 00:00–23:00 (night shift)" : "Strip is 05:00–20:00 local"}</span>
             </div>
           </div>
+          {forecast.sheet ? <SheetLimitChecks sheet={forecast.sheet} timezone={forecast.timezone} /> : null}
           <div className="grid gap-3 sm:grid-cols-2">
             {days.map((d) => (
               <DayCard key={d.date} day={d} night={night} />

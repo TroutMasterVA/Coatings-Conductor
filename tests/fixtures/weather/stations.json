@@ -1,0 +1,16 @@
+{
+ "features": [
+  {
+   "properties": {
+    "stationIdentifier": "KHOU",
+    "name": "Houston, Houston Hobby Airport"
+   }
+  },
+  {
+   "properties": {
+    "stationIdentifier": "KIAH",
+    "name": "Houston Intercontinental Airport"
+   }
+  }
+ ]
+}
