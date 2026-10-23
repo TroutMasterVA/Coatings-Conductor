@@ -5,7 +5,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { heuristicExtract } from "./heuristic-extract.ts";
-import { potLifeFromText, recoatFromText } from "./sheet-durations.ts";
+import { potLifeFromText, recoatFromText, VARIES_BY_TEMP } from "./sheet-durations.ts";
 
 describe("recoat window is a duration (or a table of durations)", () => {
   it("Macropoxy-style drying table: 'maximum: 1 year 1 year 1 year' -> 1 year, never the prose after it", () => {
@@ -13,7 +13,7 @@ describe("recoat window is a duration (or a table of durations)", () => {
       "Average Drying Times @ 7.0 mils (175 microns) wet: 35 ° F (1.7 ° C) 77 ° F (25 ° C) 100 ° F (38 ° C) 50% RH 50% RH 50% RH Touch: 4-5 hours 2 hours 1.5 hours Handle: 48 hours 8 hours 4.5 hours Recoat: minimum: 48 hours 8 hours 4.5 hours maximum: 1 year 1 year 1 year Cure to service: atmospheric: 10 days 7 days 4 days If maximum recoat time is exceeded, abrade surface before recoating.";
     const r = recoatFromText(t);
     assert.equal(r.max, "1 year");
-    assert.equal(r.min, "48 hours 8 hours 4.5 hours");
+    assert.equal(r.min, "48 hours at 35°F, 8 hours at 77°F, 4.5 hours at 100°F");
     const card = heuristicExtract(t);
     assert.equal(card.cure.recoatMax, "1 year");
     assert.doesNotMatch(card.cure.recoatMax, /abrade|exceeded/);
@@ -90,7 +90,7 @@ describe("pot life is a duration (or a table of durations)", () => {
     );
     assert.equal(
       potLifeFromText("Pot Life: 10 hours 4 hours 2 hours Sweat-in-time: 30 minutes"),
-      "10 hours 4 hours 2 hours",
+      VARIES_BY_TEMP,
     );
     assert.equal(potLifeFromText("Working pot life: 1½ hours at 77°F"), "1½ hours at 77°F");
     assert.equal(potLifeFromText("Pot life: 2 hour(s) 20°C/68°F"), "2 hour(s) 20°C/68°F");

@@ -278,11 +278,14 @@ export function gateNumbers(input: FieldCardData, source: SourceDoc): Gated {
       continue;
     }
     const v = leaf.value as string | number;
-    const found = findQuote(leaf.path, v, source);
+    // "10 hours at 35°F": the temperature is the table's column header, not part of the row's
+    // line, so the quote must contain the row's own numbers (the durations).
+    const core = typeof v === "string" ? v.replace(/ at -?\d+(?:\.\d+)?°F(?=,|$)/g, "") : v;
+    const found = findQuote(leaf.path, core, source);
     // Shared rule for every provider: a value with a number is shown only when its own quote
     // literally contains that number (spaces, dashes and degree signs normalized). Otherwise it is
     // Not stated and counted as dropped (VALUES_DROPPED_UNQUOTED; the read stays a draft).
-    const hit = found && (!hasDigit(v) || quoteBacksValue(leaf.path, v, found.quote)) ? found : null;
+    const hit = found && (!hasDigit(v) || quoteBacksValue(leaf.path, core, found.quote)) ? found : null;
     if (hit) provenance[leaf.path] = hit;
     else if (hasDigit(v)) {
       blankAt(card, leaf.path, v);

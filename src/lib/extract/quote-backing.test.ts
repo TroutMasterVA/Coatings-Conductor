@@ -28,7 +28,9 @@ describe("every shown value's number appears in its own quote", () => {
           if (p === undefined) continue; // structural / inferred guidance, not a sheet value
           assert.notEqual(p, "not-stated", `${l.path} shown but marked not-stated`);
           if (p === "not-stated") continue;
-          assert.ok(quoteBacksValue(l.path, l.value, p.quote), `${l.path}=${l.value} not in quote "${p.quote}"`);
+          // "N h at 50°F": the temperature is the column header; the row's own numbers must be quoted.
+          const core = typeof l.value === "string" ? l.value.replace(/ at -?\d+(?:\.\d+)?°F(?=,|$)/g, "") : l.value;
+          assert.ok(quoteBacksValue(l.path, core, p.quote), `${l.path}=${l.value} not in quote "${p.quote}"`);
           assert.ok(quoteIsVerbatim(p.quote, text), `${l.path} quote not on the sheet`);
           checked++;
         }
