@@ -9,7 +9,7 @@ import {
   type SiteContext,
 } from "./mitigations.ts";
 import { axes, DEFAULT_CALIBRATION, lerp } from "./learning.ts";
-import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "./types";
+import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "./types.ts";
 
 export type RawHour = {
   startIso: string;
@@ -71,6 +71,30 @@ function zoned(iso: string, timeZone: string) {
   };
 }
 
+/**
+ * Policy switch (PO): true = a scored limit the sheet does not state (e.g. spray wind max) blocks GO.
+ * false = that limit is skipped in the decision and GO carries a "<limit>: Not stated, check the sheet"
+ * note. Both branches are implemented and tested; changing the decision is this one line.
+ */
+export const NOT_STATED_LIMIT_BLOCKS_GO = false;
+
+/** Visible flag on a GO hour/day whose sheet does not state a limit (Isaiah, Oct 23). */
+export function notStatedFlag(limit: string): string {
+  return `Not stated — check the sheet for ${limit}`;
+}
+
+/** Advisory only (never blocks) when the sheet states no wind limit. */
+export const WIND_ADVISORY = "Consider wind cover/screening; site lead makes the final call.";
+export type ScoreOptions = {
+  notStatedBlocksGo?: boolean;
+  /** `extract.unverifiedTemps` (#32): when true, no hour or day is scored go/caution/no-go. */
+  unverifiedTemps?: boolean;
+};
+
+/** Used only when the sheet does not state a dew-point margin, and always labelled as such. */
+export const DEW_SPREAD_DEFAULT_F = 5;
+export const DEW_SPREAD_DEFAULT_LABEL = "industry default (SSPC), not from sheet";
+
 function hasNumericWindow(env: Environmentals) {
   return (
     env.ambientTempMinF != null ||
@@ -96,23 +120,18 @@ function round1(n: number) {
   return Math.round(n * 10) / 10;
 }
 
+// Strict (QA critical): any value past the sheet limit is a hard fail. Calibration only moves the
+// "near the limit" caution band inside the limit; it never opens hours beyond the sheet.
 function overLimit(value: number, max: number, axis: number, unitSoft = 8): "hard" | "soft" | null {
-  const hardPad = lerp(10, 0, axis);
   const softStart = lerp(unitSoft, 3, axis);
-  if (value > max + hardPad) return "hard";
+  if (value > max) return "hard";
   if (value > max - softStart) return "soft";
   return null;
 }
 
-function underLimit(
-  value: number,
-  min: number,
-  axis: number,
-  unitSoft = 8,
-): "hard" | "soft" | null {
-  const hardPad = lerp(10, 0, axis);
+function underLimit(value: number, min: number, axis: number, unitSoft = 8): "hard" | "soft" | null {
   const softStart = lerp(unitSoft, 3, axis);
-  if (value < min - hardPad) return "hard";
+  if (value < min) return "hard";
   if (value < min + softStart) return "soft";
   return null;
 }
@@ -120,11 +139,6 @@ function underLimit(
 /** Why weather scoring is paused when a card's temperature limits have no verbatim quote. */
 export const TEMPS_UNVERIFIED_REASON = "temperature limits not verified on the sheet";
 
-/** Optional scoring inputs. Additive: omitting them scores exactly as before. */
-export type ScoreOptions = {
-  /** `extract.unverifiedTemps`: when true, no hour or day is scored go/caution/no-go. */
-  unverifiedTemps?: boolean;
-};
 
 /** Non-null when scoring must be skipped; the reason is shown instead of windows. */
 export function scoringPause(opts?: ScoreOptions): { reason: string } | null {
@@ -136,8 +150,10 @@ export function scoreHour(
   env: Environmentals,
   timeZone = "UTC",
   site?: SiteContext,
-  opts?: ScoreOptions,
+  opts: ScoreOptions = {},
 ): HourWindow {
+  const notStatedBlocks = opts.notStatedBlocksGo ?? NOT_STATED_LIMIT_BLOCKS_GO;
+  const notStatedNotes: string[] = [];
   const z = zoned(raw.startIso, timeZone);
   const pause = scoringPause(opts);
   if (pause) {
@@ -267,6 +283,9 @@ export function scoreHour(
   const subMin = env.substrateTempMinF ?? env.ambientTempMinF;
   const subMax = env.substrateTempMaxF ?? env.ambientTempMaxF;
 
+  // Stated limit with no forecast value (or a scored limit the sheet does not state): never GO.
+  const unavailable: string[] = [];
+  if (air == null && (airMin != null || airMax != null)) unavailable.push("Air temp unavailable");
   if (air != null && airMin != null) {
     const hit = underLimit(air, airMin, cal.thermal);
     if (hit === "hard") {
@@ -311,6 +330,7 @@ export function scoreHour(
     }
   }
 
+  if (rh == null && env.relativeHumidityMax != null && !skipRhMax) unavailable.push("RH unavailable");
   if (rh != null && env.relativeHumidityMax != null && !skipRhMax) {
     const hit = overLimit(rh, env.relativeHumidityMax, cal.moisture, 6);
     if (hit === "hard") {
@@ -328,13 +348,16 @@ export function scoreHour(
       : air != null && dew != null
         ? round1(air - dew)
         : null;
-  if (spread != null && env.dewPointSpreadMinF != null && !skipDew) {
-    const hardPad = lerp(3, 0, cal.moisture);
+  // Dew margin: the sheet's, else 5°F labelled as the SSPC industry default (not from the sheet).
+  const dewMin = env.dewPointSpreadMinF ?? DEW_SPREAD_DEFAULT_F;
+  const dewLabel = env.dewPointSpreadMinF != null ? `${dewMin}°F` : `${dewMin}°F (${DEW_SPREAD_DEFAULT_LABEL})`;
+  if (spread == null && !skipDew) unavailable.push("Dew-point spread unavailable");
+  if (spread != null && !skipDew) {
     const softPad = lerp(4, 1.5, cal.moisture);
-    if (spread < env.dewPointSpreadMinF - hardPad) {
-      reasons.push(`Dew spread ${spread}°F < ${env.dewPointSpreadMinF}°F`);
+    if (spread < dewMin) {
+      reasons.push(`Dew spread ${spread}°F < ${dewLabel}`);
       hard += 1;
-    } else if (spread < env.dewPointSpreadMinF + softPad) {
+    } else if (spread < dewMin + softPad) {
       reasons.push(`Dew spread ${spread}°F is thin`);
       soft += 1;
     }
@@ -371,6 +394,11 @@ export function scoreHour(
     }
   }
 
+  if (env.windMaxMph == null) {
+    if (notStatedBlocks) unavailable.push("Spray wind max: Not stated");
+    else notStatedNotes.push(notStatedFlag("spray wind max"), WIND_ADVISORY);
+  }
+  else if (wind == null) unavailable.push("Wind unavailable");
   if (wind != null && env.windMaxMph != null) {
     const hit = overLimit(wind, env.windMaxMph, cal.wind, 6);
     if (hit === "hard") {
@@ -404,11 +432,10 @@ export function scoreHour(
   let status: WindowStatus = "go";
   if (!hasNumericWindow(env)) status = "unknown";
   else if (hard > 0) status = "nogo";
-  else if (soft > 0) status = "caution";
-  else if (env.dewPointSpreadMinF == null && !skipDew) {
+  else if (unavailable.length) {
     status = "unknown";
-    reasons.push("Dew spread not stated");
-  }
+    reasons.push(...unavailable);
+  } else if (soft > 0) status = "caution";
 
   if (status === "go" && reasons.length === 0) {
     const extra = mits.length
@@ -416,6 +443,7 @@ export function scoreHour(
       : "";
     reasons.push(`Inside PDS window${extra}`);
   }
+  reasons.push(...notStatedNotes);
 
   return {
     startIso: raw.startIso,
@@ -509,12 +537,14 @@ export function bundleDays(
     const goHours = list.filter((h) => h.status === "go").length;
     const cautionHours = list.filter((h) => h.status === "caution").length;
     const nogoHours = list.filter((h) => h.status === "nogo").length;
-    const goNeed = Math.round(lerp(2, 5, site?.calibration?.master ?? 0.55));
-    const cautionNeed = Math.round(lerp(2, 5, site?.calibration?.master ?? 0.55));
+    // Strict day rule (QA critical): the scored hours are the work-shift hours. Any failed hour
+    // makes the day NO-GO; any unavailable / Not stated or caution hour means not GO; GO only
+    // when every scored hour passes.
+    const scoredHours = list.filter((h) => h.inShift !== false);
     let status: WindowStatus = "unknown";
-    if (goHours >= goNeed) status = "go";
-    else if (goHours > 0 || cautionHours >= cautionNeed) status = "caution";
-    else if (list.some((h) => h.status !== "unknown")) status = "nogo";
+    if (scoredHours.some((h) => h.status === "nogo")) status = "nogo";
+    else if (scoredHours.length && scoredHours.every((h) => h.status === "go")) status = "go";
+    else if (scoredHours.some((h) => h.status === "go" || h.status === "caution")) status = "caution";
 
     const reasonCount = new Map<string, number>();
     for (const h of list) {
@@ -606,6 +636,7 @@ export function rescoreForecast(
       source: forecast.source,
       issuedAt: forecast.issuedAt,
       rawHours: raw,
+      sheet: forecast.sheet,
     },
     env,
     site,

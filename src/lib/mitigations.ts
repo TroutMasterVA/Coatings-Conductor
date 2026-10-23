@@ -1,4 +1,4 @@
-import type { Calibration, CustomMitigation } from "./types";
+import type { Calibration, CustomMitigation } from "./types.ts";
 
 export type SubstrateId =
   | "bare_steel"
@@ -40,6 +40,8 @@ export type SiteContext = {
   calibration?: Calibration;
   customMitigations?: CustomMitigation[];
   customMitigationIds?: string[];
+  /** Optional on-site gauge reading for the surface (°F), saved with the job's site. */
+  measuredSurfaceTempF?: number | null;
 };
 
 export const SUBSTRATES: {
