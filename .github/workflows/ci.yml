@@ -42,6 +42,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: npm run test
 
+      # SEC: fail on any high/critical advisory in the installed tree.
+      - name: Audit (high/critical)
+        if: ${{ !cancelled() }}
+        run: npm audit --audit-level=high
+
   build:
     name: build (vercel preset)
     runs-on: ubuntu-latest
@@ -118,7 +123,9 @@ jobs:
           docker logs cc
           echo "health: $code $(cat /tmp/health.json 2>/dev/null)"
           test "$code" = "200"
-          grep -q '"dbSource":"postgres"' /tmp/health.json
+          grep -q '"status":"ok"' /tmp/health.json
+          # SEC: the public body never names the commit, DB type or reader provider.
+          ! grep -Eq 'dbSource|extractProvider|version' /tmp/health.json
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "200"
           # Docker's own HEALTHCHECK should turn healthy too.
           for i in $(seq 1 30); do
@@ -133,6 +140,7 @@ jobs:
         run: |
           docker run -d --name cc-down -p 3001:3000 \
             -e RUN_MIGRATIONS=false \
+            -e BETTER_AUTH_SECRET="ci-only-$(openssl rand -hex 16)" \
             -e DATABASE_URL=postgres://nobody:nothing@127.0.0.1:1/none \
             coatings-conductor:ci
           for i in $(seq 1 30); do
