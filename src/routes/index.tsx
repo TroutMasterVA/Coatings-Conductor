@@ -3,7 +3,9 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Download, FolderOpen, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { BootShell } from "@/components/boot-shell";
+import { CloseJobButton, ClosedBadge } from "@/components/close-job";
 import { Button } from "@/components/ui/button";
+import { ExtractNotice, ProvenancePanel } from "@/components/extract-status";
 import { EmptyCardSkeleton, FieldCardView } from "@/components/field-card-view";
 import { LearningPanel } from "@/components/learning-panel";
 import { PdsIntake } from "@/components/pds-intake";
@@ -12,8 +14,26 @@ import { WeatherPanel } from "@/components/weather-panel";
 import { isUnauthorized, returnToLogin } from "@/lib/auth/expired";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState, type AppUser } from "@/lib/auth/use-current-user";
-import { buildCardFromPds } from "@/lib/on-device-extract";
+import { onDeviceProvider } from "@/lib/extract/on-device-provider";
+import {
+  bytesToBase64,
+  extractPasted,
+  extractUpload,
+  savedExtractState,
+  extractForSave,
+  type ExtractState,
+  type SavedExtract,
+} from "@/lib/extract-client";
+import {
+  flagsForResult,
+  flagsForSaved,
+  NO_FLAGS,
+  windowHeadline,
+  type ExtractFlags,
+} from "@/lib/extract-flags";
+import { callExtractSheet, loadUploadLimitBytes } from "@/lib/extract-server";
 import { loadForecast } from "@/lib/forecast";
+import { applySheetSurface } from "@/lib/noaa";
 import {
   DEFAULT_CALIBRATION,
   loadLegacyLearning,
@@ -31,7 +51,7 @@ import {
   type SiteContext,
 } from "@/lib/mitigations";
 import { downloadFieldCard, selectedMitigationLabels } from "@/lib/pdf-card";
-import { dedupeProjectsById, upsertProjectSummary } from "@/lib/project-list";
+import { dedupeProjectsById, summaryOfFull, upsertProjectSummary } from "@/lib/project-list";
 import {
   guestCreateProject,
   guestLoadWorkspace,
@@ -39,11 +59,15 @@ import {
   guestSaveCustom,
   guestSaveProject,
   guestArchiveProject,
+  guestCloseProject,
   guestDeleteProject,
-  migrateGuestToAccount,
+  claimGuestJobs,
+  claimPromptText,
+  signedInJobList,
 } from "@/lib/guest-workspace";
 import {
   archiveProject,
+  closeProject,
   createProject,
   defaultSite,
   deleteProject,
@@ -54,11 +78,33 @@ import {
   type ProjectFull,
   type ProjectSummary,
 } from "@/lib/project-store";
+import { setCardValue } from "@/lib/card-edit";
+import {
+  canAutosave,
+  deleteErrorMessage,
+  isJobClosedError,
+  jobStatusOf,
+  mapCloseError,
+  mapCloseResult,
+  type CloseOutcome,
+  type JobStatusFields,
+  type JobStatusView,
+} from "@/lib/job-status";
 import { rescoreForecast } from "@/lib/score-windows";
 import { loadZip } from "@/lib/storage";
-import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, ForecastBundle, SavedCard } from "@/lib/types";
+import type {
+  Calibration,
+  CustomMitigation,
+  FieldCardData,
+  FieldOutcome,
+  ForecastBundle,
+  SavedCard,
+} from "@/lib/types";
 
 export const Route = createFileRoute("/")({ component: Home });
+
+type JobSummary = ProjectSummary & JobStatusFields;
+const OPEN_JOB: JobStatusView = { status: "open", closedAt: null, closedBy: null };
 
 function bounceExpired<T>(promise: Promise<T>): Promise<T> {
   return promise.catch((err: unknown) => {
@@ -89,7 +135,9 @@ function siteFromCard(card: FieldCardData, prev?: SiteContext): SiteContext {
   return {
     substrate,
     mitigations: sanitizeMitigations(
-      (prev?.substrate === substrate ? prev.mitigations : []).filter((id) => Boolean(mitigationById(id))),
+      (prev?.substrate === substrate ? prev.mitigations : []).filter((id) =>
+        Boolean(mitigationById(id)),
+      ),
     ),
     customMitigationIds: prev?.customMitigationIds ?? [],
     moistureTolerant: isMoistureTolerant(notes),
@@ -108,7 +156,7 @@ function App({ user }: { user: AppUser | null }) {
   const signedIn = Boolean(user);
   const api = useMemo(() => workspaceApi(signedIn), [signedIn]);
   const [mode, setMode] = useState<"boot" | "home" | "job">("boot");
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projects, setProjects] = useState<JobSummary[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState("");
   const [text, setText] = useState("");
@@ -116,12 +164,33 @@ function App({ user }: { user: AppUser | null }) {
   const [card, setCard] = useState<FieldCardData | null>(null);
   const [forecast, setForecast] = useState<ForecastBundle | null>(null);
   const [extracting, setExtracting] = useState(false);
+  const [extractState, setExtractState] = useState<ExtractState>({ kind: "idle" });
+  const [uploadLimit, setUploadLimit] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loadUploadLimitBytes().then((n) => {
+      if (live) setUploadLimit(n);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  /** Last uploaded file and its pdf.js text; Build re-sends it while the textarea still matches. */
+  const uploadRef = useRef<{ file: File; text: string; pages?: string[] } | null>(null);
+  const extractGen = useRef(0);
+  /** Draft / unverified-temps flags of the current read (saved job `extract`, or the extract response). */
+  const [flags, setFlags] = useState<ExtractFlags>(NO_FLAGS);
   const [wxLoading, setWxLoading] = useState(false);
   const [wxError, setWxError] = useState<string | null>(null);
   const [recents, setRecents] = useState<SavedCard[]>([]);
   const [downloading, setDownloading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<JobStatusView>(OPEN_JOB);
+  const closed = jobStatus.status === "closed";
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [closeError, setCloseError] = useState<string | null>(null);
   const [site, setSite] = useState<SiteContext>(defaultSite());
   const [calibration, setCalibration] = useState<Calibration>(DEFAULT_CALIBRATION);
   const [custom, setCustom] = useState<CustomMitigation[]>([]);
@@ -140,7 +209,16 @@ function App({ user }: { user: AppUser | null }) {
     text: "",
     recents: [] as SavedCard[],
     outcomes: [] as FieldOutcome[],
+    extract: null as SavedExtract | null | undefined,
+    extractResult: null as object | null,
+    replaceToken: 0,
+    closed: false,
   });
+  /** Fresh reads already stored: later autosaves omit `extract` so server edit stamps are kept. */
+  const storedReads = useRef(new WeakSet<object>());
+  /** Card replaced without a read (sample / recent): the next save clears the stored extract once. */
+  const cardReplaced = useRef(0);
+  const clearedSent = useRef(0);
   jobRef.current = {
     projectId,
     projectName,
@@ -151,10 +229,20 @@ function App({ user }: { user: AppUser | null }) {
     text,
     recents,
     outcomes,
+    extract: extractForSave(extractState, {
+      alreadyStored: extractState.kind === "done" && storedReads.current.has(extractState.result),
+      cardReplaced: cardReplaced.current !== clearedSent.current,
+    }),
+    replaceToken: cardReplaced.current,
+    extractResult: extractState.kind === "done" ? extractState.result : null,
+    closed,
   };
 
-  const applyFull = useCallback((full: ProjectFull) => {
+  const applyFull = useCallback((full: ProjectFull & JobStatusFields) => {
     setProjectId(full.id);
+    setJobStatus(jobStatusOf(full));
+    setCloseOpen(false);
+    setCloseError(null);
     setProjectName(full.name);
     setZip(full.zip);
     setCard(full.card);
@@ -165,14 +253,20 @@ function App({ user }: { user: AppUser | null }) {
     setOutcomes(full.outcomes);
     setForecast(null);
     setWxError(null);
+    setExtractState(savedExtractState(full));
+    uploadRef.current = null;
+    extractGen.current += 1;
+    clearedSent.current = cardReplaced.current;
+    setFlags(full.card ? flagsForSaved(full) : NO_FLAGS);
     setMode("job");
     // Update the existing row in place — do not prepend (that reordered + duplicated under race).
-    setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), toSummary(full)));
+    setProjects((prev) => upsertProjectSummary(dedupeProjectsById(prev), summaryOfFull(full)));
   }, []);
 
   const flushSave = useCallback(async () => {
     const snap = jobRef.current;
-    if (!snap.projectId || !hydrated.current) return;
+    // Closed = a record: nothing to write (the server refuses it anyway).
+    if (!snap.projectId || !hydrated.current || snap.closed) return;
     window.clearTimeout(persistTimer.current);
     const gen = saveGen.current;
     try {
@@ -186,13 +280,23 @@ function App({ user }: { user: AppUser | null }) {
         pdsText: snap.text,
         recents: snap.recents,
         outcomes: snap.outcomes,
+        extract: snap.extract,
       });
+      if (snap.extract && snap.extractResult) storedReads.current.add(snap.extractResult);
+      // A clear or a replace both satisfy a pending card replacement.
+      if (snap.extract !== undefined) clearedSent.current = snap.replaceToken;
       if (gen !== saveGen.current) return;
       setProjects((prev) => upsertProjectSummary(prev, summary));
     } catch (err) {
       if (gen !== saveGen.current) return;
       if (isUnauthorized(err)) {
         returnToLogin();
+        return;
+      }
+      if (isJobClosedError(err)) {
+        // Closed elsewhere (another tab/device): show the server's message and go read-only.
+        markClosed({ closedAt: null, closedBy: null });
+        toast.error((err as Error).message);
         return;
       }
       toast.error(err instanceof Error ? err.message : "Could not save project.");
@@ -204,16 +308,24 @@ function App({ user }: { user: AppUser | null }) {
     void (async () => {
       try {
         if (signedIn) {
-          const lifted = await migrateGuestToAccount();
+          // Device (guest) jobs never join a signed-in list on their own: ask first, every time.
+          // Three choices: OK = move; Cancel = not now; then Cancel twice = don't ask again on this device.
+          const claim = await claimGuestJobs((n, names) =>
+            window.confirm(claimPromptText(n, names))
+              ? "move"
+              : window.confirm("Not now / don't ask again on this device? OK = don't ask again, Cancel = not now.")
+                ? "dont-ask"
+                : "not-now",
+          );
           if (cancelled) return;
-          if (lifted === "imported") toast.success("Moved this device’s jobs into your account.");
-          if (lifted === "skipped") {
-            toast("This account already has jobs, so work from this browser was not added.");
+          if (claim.outcome === "imported") toast.success(`Moved ${claim.imported} job(s) from this device into your account.`);
+          if (claim.outcome === "partial") {
+            toast.error(`${claim.kept} job(s) could not be moved and stay on this device (hidden while signed in).`);
           }
         }
         const ws = await api.load();
         if (cancelled) return;
-        setProjects(dedupeProjectsById(ws.projects));
+        setProjects(dedupeProjectsById(signedIn ? signedInJobList(ws.projects) : ws.projects));
         setCustom(ws.custom);
         const last = ws.lastProjectId;
         const openable = last && ws.projects.some((p) => p.id === last && !p.archived);
@@ -246,7 +358,13 @@ function App({ user }: { user: AppUser | null }) {
                   summary: c.summary,
                   helps: (c.helps ?? []) as Limiter[],
                   before: { air: null, steel: null, rh: null, dew: null, wind: null },
-                  after: { air: c.dAirF, steel: c.dSubstrateF, rh: c.dRh, dew: c.dDewF, wind: c.dWindMph },
+                  after: {
+                    air: c.dAirF,
+                    steel: c.dSubstrateF,
+                    rh: c.dRh,
+                    dew: c.dDewF,
+                    wind: c.dWindMph,
+                  },
                   notes: c.notes,
                 });
               }
@@ -284,11 +402,25 @@ function App({ user }: { user: AppUser | null }) {
   }, [flushSave]);
 
   useEffect(() => {
-    if (!projectId || !hydrated.current || mode !== "job") return;
+    if (!canAutosave({ projectId, hydrated: hydrated.current, mode, closed })) return;
     window.clearTimeout(persistTimer.current);
     persistTimer.current = window.setTimeout(() => persist(), 600);
     return () => window.clearTimeout(persistTimer.current);
-  }, [projectId, projectName, zip, calibration, site, card, text, recents, outcomes, mode, persist]);
+  }, [
+    projectId,
+    projectName,
+    zip,
+    calibration,
+    site,
+    card,
+    text,
+    recents,
+    outcomes,
+    extractState,
+    mode,
+    closed,
+    persist,
+  ]);
 
   useEffect(() => {
     if (!card) return;
@@ -305,32 +437,85 @@ function App({ user }: { user: AppUser | null }) {
 
   const scored = useMemo(() => {
     if (!forecast || !card) return forecast;
-    return rescoreForecast(forecast, card.environmentals, scoringSite);
+    return applySheetSurface(rescoreForecast(forecast, card.environmentals, scoringSite), card.environmentals, scoringSite);
   }, [forecast, card, scoringSite]);
 
   function remember(next: FieldCardData, nextZip: string) {
-    const entry: SavedCard = { id: next.id, savedAt: new Date().toISOString(), card: next, zip: nextZip };
-    setRecents((prev) => [entry, ...prev.filter((r) => r.card.product.name !== next.product.name)].slice(0, 8));
+    const entry: SavedCard = {
+      id: next.id,
+      savedAt: new Date().toISOString(),
+      card: next,
+      zip: nextZip,
+    };
+    setRecents((prev) =>
+      [entry, ...prev.filter((r) => r.card.product.name !== next.product.name)].slice(0, 8),
+    );
   }
 
-  function applyCard(next: FieldCardData) {
+  /** Built-in samples pass NO_FLAGS; everything else passes flags from the read or the saved record. */
+  function applyCard(next: FieldCardData, nextFlags: ExtractFlags) {
     setCard(next);
+    setFlags(nextFlags);
     setSite((prev) => siteFromCard(next, prev));
   }
 
-  function handleExtract() {
+  async function runExtract(source: { file: File | null; text: string; pages?: string[] }) {
+    if (jobRef.current.closed) return;
+    const gen = ++extractGen.current;
+    const file = source.file;
+    const savedPrev = extractState;
     setExtracting(true);
+    setExtractState({ kind: "loading" });
     try {
-      const next = buildCardFromPds(text);
-      applyCard(next);
-      remember(next, zip);
-      toast.success("Review every field.");
-      if (zip.length === 5) void handleForecast(next, zip);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Extract failed");
+      const state = file
+        ? await extractUpload({
+            file,
+            text: source.text,
+            pages: source.pages,
+            signedIn,
+            onDevice: (input) => onDeviceProvider.extract(input),
+            readBase64: async () => bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+            server: callExtractSheet,
+            maxUploadBytes: uploadLimit ?? undefined,
+          })
+        : await extractPasted(source.text, (input) => onDeviceProvider.extract(input));
+      if (gen !== extractGen.current) return;
+      if (state.kind === "unauthenticated") {
+        returnToLogin();
+        return;
+      }
+      if (state.kind === "error" && state.issue === "JOB_CLOSED") {
+        // Keep the stored read on screen; the job is a record now.
+        setExtractState(savedPrev);
+        markClosed({ closedAt: null, closedBy: null });
+        toast.error(state.message);
+        return;
+      }
+      setExtractState(state);
+      if (state.kind === "done") {
+        const next = state.result.card;
+        applyCard(next, flagsForResult(state.result));
+        remember(next, zip);
+        toast.success("Review every field.");
+        if (zip.length === 5) void handleForecast(next, zip);
+      } else if (state.kind === "error") {
+        toast.error(state.message);
+      }
     } finally {
-      setExtracting(false);
+      if (gen === extractGen.current) setExtracting(false);
     }
+  }
+
+  function handleExtract() {
+    const upload = uploadRef.current;
+    const fromUpload = upload && upload.text === text ? upload.file : null;
+    void runExtract({ file: fromUpload, text, pages: fromUpload ? upload?.pages : undefined });
+  }
+
+  function handleUpload(file: File, pdfText: string, pages?: string[]) {
+    uploadRef.current = { file, text: pdfText, pages };
+    if (pdfText) setText(pdfText);
+    void runExtract({ file, text: pdfText, pages });
   }
 
   async function handleForecast(active: FieldCardData | null = card, nextZip = zip) {
@@ -361,16 +546,78 @@ function App({ user }: { user: AppUser | null }) {
     }
   }
 
-  async function handlePdf() {
+  async function handleDownloadPdf() {
     if (!card) return;
     setDownloading(true);
     try {
-      await downloadFieldCard(card, scored, scoringSite, zip);
+      await downloadFieldCard(card, scored, scoringSite, zip, flags);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "PDF failed");
     } finally {
       setDownloading(false);
     }
+  }
+
+  /** Flip to read-only. Keeps any closedAt/closedBy we already know. */
+  function markClosed(info: { closedAt: string | null; closedBy: string | null }) {
+    window.clearTimeout(persistTimer.current);
+    saveGen.current += 1;
+    extractGen.current += 1;
+    setExtracting(false);
+    setJobStatus((prev) => ({
+      status: "closed",
+      closedAt: info.closedAt ?? prev.closedAt,
+      closedBy: info.closedBy ?? prev.closedBy,
+    }));
+    const id = jobRef.current.projectId;
+    if (id) {
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === id
+            ? {
+                ...p,
+                status: "closed",
+                closedAt: info.closedAt ?? p.closedAt ?? null,
+                closedBy: info.closedBy ?? p.closedBy ?? null,
+              }
+            : p,
+        ),
+      );
+    }
+  }
+
+  async function handleClose() {
+    const id = projectId;
+    if (!id || closed) return;
+    setClosing(true);
+    setCloseError(null);
+    let outcome: CloseOutcome;
+    try {
+      // Write pending edits while the job is still open, then close.
+      await flushSave();
+      outcome = mapCloseResult(await api.close(id));
+    } catch (err) {
+      outcome = mapCloseError(err);
+    } finally {
+      setClosing(false);
+    }
+    if (outcome.kind === "unauthenticated") {
+      returnToLogin();
+      return;
+    }
+    if (outcome.kind === "closed") {
+      markClosed(outcome);
+      setCloseOpen(false);
+      toast.success("Job closed. It is read-only now.");
+      return;
+    }
+    if (outcome.kind === "not-found") {
+      // Same as job isolation elsewhere: show the message; the job stays as it was.
+      setCloseOpen(false);
+      toast.error(outcome.message);
+      return;
+    }
+    setCloseError(outcome.message);
   }
 
   async function goHome() {
@@ -455,7 +702,8 @@ function App({ user }: { user: AppUser | null }) {
         returnToLogin();
         return;
       }
-      toast.error(err instanceof Error ? err.message : "Could not remove project.");
+      // A closed job is a record: the server (or guest guard) refuses the delete.
+      toast.error(deleteErrorMessage(err));
     }
   }
 
@@ -470,7 +718,9 @@ function App({ user }: { user: AppUser | null }) {
               className="size-12 rounded-md object-cover object-top shadow-[0_0_0_1px_rgba(255,183,3,0.45)] sm:size-14"
             />
             <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Job-site conductor</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">
+                Job-site conductor
+              </p>
               <p className="text-base font-bold tracking-tight sm:text-lg">Coatings Conductor</p>
               <p className="truncate text-xs text-muted">
                 {mode === "job" && projectName ? (
@@ -492,14 +742,39 @@ function App({ user }: { user: AppUser | null }) {
             ) : null}
             {mode === "job" ? (
               <>
-                <Button type="button" variant="outline" size="sm" disabled={!card} onClick={() => window.print()}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!card}
+                  onClick={() => window.print()}
+                >
                   <Printer />
                   Print
                 </Button>
-                <Button type="button" size="sm" disabled={!card || downloading} onClick={() => void handlePdf()}>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!card || downloading}
+                  onClick={() => void handleDownloadPdf()}
+                >
                   <Download />
                   Download PDF
                 </Button>
+                {closed ? (
+                  <ClosedBadge view={jobStatus} />
+                ) : (
+                  <CloseJobButton
+                    open={closeOpen}
+                    onOpenChange={(v) => {
+                      setCloseOpen(v);
+                      if (!v) setCloseError(null);
+                    }}
+                    closing={closing}
+                    error={closeError}
+                    onConfirm={() => void handleClose()}
+                  />
+                )}
               </>
             ) : null}
             {user ? (
@@ -552,43 +827,74 @@ function App({ user }: { user: AppUser | null }) {
                 className="hidden size-20 shrink-0 rounded-lg object-cover object-top shadow-[0_0_0_1px_rgba(232,93,4,0.45)] sm:block"
               />
               <div>
-                <h1 className="max-w-xl text-3xl font-bold tracking-tight sm:text-4xl">Call the coating window.</h1>
+                <h1 className="max-w-xl text-3xl font-bold tracking-tight sm:text-4xl">
+                  Call the coating window.
+                </h1>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
-                  {projectName} at {zip || "this ZIP"}. Storage through safety in job order, then NOAA windows scored
-                  against the real substrate — this project’s model only.
+                  {projectName} at {zip || "this ZIP"}. Storage through safety in job order, then
+                  NOAA windows scored against the real substrate — this project’s model only.
                 </p>
               </div>
             </section>
-            <PdsIntake
-              text={text}
-              onText={setText}
-              onExtract={() => void handleExtract()}
-              onSample={(next, raw) => {
-                setText(raw);
-                applyCard(next);
-                remember(next, zip);
-                if (zip.length === 5) void handleForecast(next, zip);
-              }}
-              loading={extracting}
-              recents={recents}
-              onOpenRecent={(next) => applyCard(next)}
-            />
+            <fieldset disabled={closed} className="min-w-0">
+              <PdsIntake
+                text={text}
+                onText={setText}
+                onExtract={() => handleExtract()}
+                onUpload={(file, pdfText, pages) => handleUpload(file, pdfText, pages)}
+                onSample={(next, raw) => {
+                  extractGen.current += 1;
+                  setExtracting(false);
+                  setExtractState({ kind: "idle" });
+                  uploadRef.current = null;
+                  cardReplaced.current += 1;
+                  setText(raw);
+                  applyCard(next, NO_FLAGS);
+                  remember(next, zip);
+                  if (zip.length === 5) void handleForecast(next, zip);
+                }}
+                loading={extracting}
+                recents={recents}
+                onOpenRecent={(next) => {
+                  extractGen.current += 1;
+                  setExtracting(false);
+                  cardReplaced.current += 1;
+                  setExtractState({ kind: "idle" });
+                  applyCard(next, flagsForSaved(null));
+                }}
+              />
+            </fieldset>
           </div>
 
           <div className="min-w-0 lg:col-start-1 lg:row-start-2">
+            <ExtractNotice state={extractState} />
             {card ? (
               <FieldCardView
                 card={card}
                 zip={zip}
-                headline={scored?.headline}
+                headline={windowHeadline(scored?.headline, flags)}
                 mitigations={selectedMitigationLabels(scoringSite)}
+                draft={flags.draft}
+                onEditField={
+                  closed
+                    ? undefined
+                    : (path, value) => {
+                        // Card only; autosave sends it via saveProject. The server stamps "Edited by".
+                        setCard((prev) => (prev ? setCardValue(prev, path, value) : prev));
+                      }
+                }
               />
             ) : (
               <EmptyCardSkeleton />
             )}
+            {card ? <ProvenancePanel state={extractState} card={card} /> : null}
           </div>
 
-          <div className="no-print space-y-4 lg:col-start-2 lg:row-start-1 lg:row-span-2">
+          {/* Closed: every control in the side panels is disabled natively; the server enforces it (BE). */}
+          <fieldset
+            disabled={closed}
+            className="no-print min-w-0 space-y-4 lg:col-start-2 lg:row-start-1 lg:row-span-2"
+          >
             <WeatherPanel
               zip={zip}
               onZip={setZip}
@@ -607,6 +913,7 @@ function App({ user }: { user: AppUser | null }) {
               }
               site={scoringSite}
               onSite={setSite}
+              paused={flags.unverifiedTemps}
             />
             <LearningPanel
               calibration={calibration}
@@ -617,7 +924,9 @@ function App({ user }: { user: AppUser | null }) {
                 const cur = site.customMitigationIds ?? [];
                 setSite({
                   ...site,
-                  customMitigationIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
+                  customMitigationIds: cur.includes(id)
+                    ? cur.filter((x) => x !== id)
+                    : [...cur, id],
                 });
               }}
               onAddCustom={(input) => {
@@ -625,7 +934,11 @@ function App({ user }: { user: AppUser | null }) {
                   .saveCustom(input)
                   .then((created) => {
                     setCustom((prev) => {
-                      const rest = prev.filter((c) => c.id !== created.id && c.label.toLowerCase() !== created.label.toLowerCase());
+                      const rest = prev.filter(
+                        (c) =>
+                          c.id !== created.id &&
+                          c.label.toLowerCase() !== created.label.toLowerCase(),
+                      );
                       return [created, ...rest];
                     });
                     const cur = site.customMitigationIds ?? [];
@@ -655,29 +968,20 @@ function App({ user }: { user: AppUser | null }) {
               substrateLabel={substrateById(site.substrate).label}
               mitigationsInPlay={[
                 ...site.mitigations,
-                ...custom.filter((c) => (site.customMitigationIds ?? []).includes(c.id)).map((c) => c.label),
+                ...custom
+                  .filter((c) => (site.customMitigationIds ?? []).includes(c.id))
+                  .map((c) => c.label),
               ]}
               forecast={scored}
               disabled={!card}
             />
-          </div>
+          </fieldset>
         </div>
       ) : null}
     </main>
   );
 }
 
-function toSummary(full: ProjectFull): ProjectSummary {
-  return {
-    id: full.id,
-    name: full.name,
-    zip: full.zip,
-    archived: full.archived,
-    lastOpenedAt: full.lastOpenedAt,
-    updatedAt: full.updatedAt,
-    hasCard: Boolean(full.card),
-  };
-}
 
 function workspaceApi(signedIn: boolean) {
   const wrap = <T,>(p: Promise<T>) => (signedIn ? bounceExpired(p) : p);
@@ -686,22 +990,41 @@ function workspaceApi(signedIn: boolean) {
       return wrap(signedIn ? loadWorkspace() : Promise.resolve(guestLoadWorkspace()));
     },
     create(data: { name: string; zip: string; seed?: Partial<ProjectFull> }) {
-      return wrap(signedIn ? createProject({ data }) : Promise.resolve(guestCreateProject(data.name, data.zip, data.seed)));
+      return wrap(
+        signedIn
+          ? createProject({ data })
+          : Promise.resolve(guestCreateProject(data.name, data.zip, data.seed)),
+      );
     },
     open(id: string) {
       return wrap(signedIn ? openProject({ data: id }) : Promise.resolve(guestOpenProject(id)));
     },
+    /** `extract` rides along next to `card` (pending BE-3 server write; guests store it locally). */
     save(data: Parameters<typeof guestSaveProject>[0]) {
       return wrap(signedIn ? saveProject({ data }) : Promise.resolve(guestSaveProject(data)));
     },
+    /** CONTRACT closeout: BE closeProject({ id }) or the guest workspace (BE 37 mirror). */
+    close(id: string) {
+      return wrap<unknown>(
+        signedIn ? closeProject({ data: { id } }) : Promise.resolve(guestCloseProject(id)),
+      );
+    },
     archive(id: string, archived: boolean) {
-      return wrap(signedIn ? archiveProject({ data: { id, archived } }) : Promise.resolve(guestArchiveProject(id, archived)));
+      return wrap<void | { ok: true }>(
+        signedIn
+          ? archiveProject({ data: { id, archived } })
+          : Promise.resolve(guestArchiveProject(id, archived)),
+      );
     },
     remove(id: string) {
-      return wrap(signedIn ? deleteProject({ data: id }) : Promise.resolve(guestDeleteProject(id)));
+      return wrap<void | { ok: true }>(
+        signedIn ? deleteProject({ data: id }) : Promise.resolve(guestDeleteProject(id)),
+      );
     },
     saveCustom(data: CustomMitigationInput) {
-      return wrap(signedIn ? saveCustomMitigation({ data }) : Promise.resolve(guestSaveCustom(data)));
+      return wrap(
+        signedIn ? saveCustomMitigation({ data }) : Promise.resolve(guestSaveCustom(data)),
+      );
     },
   };
 }

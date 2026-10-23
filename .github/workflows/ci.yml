@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, release/beta-azure]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: lint-typecheck-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      # Each check runs even if an earlier one fails, so one red run shows
+      # every problem at once.
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: npm run lint
+
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: npm run typecheck
+
+      - name: Test
+        if: ${{ !cancelled() }}
+        run: npm run test
+
+      # SEC: fail on any high/critical advisory in the installed tree.
+      - name: Audit (high/critical)
+        if: ${{ !cancelled() }}
+        run: npm audit --audit-level=high
+
+  build:
+    name: build (vercel preset)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      # Build uses scripts/with-app-env.mjs. migrate.mjs no-ops without
+      # DATABASE_URL so CI stays on the PGLite preview path, never a prod DB.
+      - name: Build
+        run: npm run build
+        env:
+          VITE_AUTH_ENABLED: "true"
+
+  docker:
+    name: docker build + smoke (node-server preset)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+          POSTGRES_DB: coatings_conductor
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d coatings_conductor"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only; nothing is pushed to any registry.
+      - name: Docker build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: coatings-conductor:ci
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (Postgres, migrations, /api/health)
+        env:
+          DATABASE_URL: postgres://ci:ci-only-not-a-secret@127.0.0.1:5432/coatings_conductor
+        run: |
+          docker run -d --name cc --network host \
+            -e PORT=3000 \
+            -e DATABASE_URL="$DATABASE_URL" \
+            -e BETTER_AUTH_SECRET="ci-only-$(openssl rand -hex 16)" \
+            -e BETTER_AUTH_URL=http://127.0.0.1:3000 \
+            coatings-conductor:ci
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:3000/api/health || true)
+            if [ "$code" = "200" ]; then break; fi
+            sleep 2
+          done
+          docker logs cc
+          echo "health: $code $(cat /tmp/health.json 2>/dev/null)"
+          test "$code" = "200"
+          grep -q '"status":"ok"' /tmp/health.json
+          # SEC: the public body never names the commit, DB type or reader provider.
+          ! grep -Eq 'dbSource|extractProvider|version' /tmp/health.json
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "200"
+          # Docker's own HEALTHCHECK should turn healthy too.
+          for i in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' cc)
+            [ "$status" = "healthy" ] && break
+            sleep 2
+          done
+          echo "container health: $status"
+          test "$status" = "healthy"
+
+      - name: Smoke test (DB down -> 503)
+        run: |
+          docker run -d --name cc-down -p 3001:3000 \
+            -e RUN_MIGRATIONS=false \
+            -e BETTER_AUTH_SECRET="ci-only-$(openssl rand -hex 16)" \
+            -e DATABASE_URL=postgres://nobody:nothing@127.0.0.1:1/none \
+            coatings-conductor:ci
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /tmp/down.json -w '%{http_code}' http://127.0.0.1:3001/api/health || true)
+            [ "$code" = "503" ] && break
+            sleep 2
+          done
+          echo "health: $code $(cat /tmp/down.json 2>/dev/null)"
+          test "$code" = "503"
+          grep -q '"db":"down"' /tmp/down.json

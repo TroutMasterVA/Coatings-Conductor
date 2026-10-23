@@ -44,3 +44,20 @@ describe("Grok auth broker is not in the running app", () => {
     assert.equal(preview.includes("auth.grok.me"), false);
   });
 });
+
+describe("no preview-gate auto sign-in (SEC)", () => {
+  const server = readAuth("server.ts");
+  it("does not register the gate session plugin", () => {
+    assert.equal(/gateIdentitySessions\s*\(/.test(server), false);
+    assert.equal(server.includes("gate-session.server"), false);
+    assert.equal(server.includes("GATE_PROVIDER_ID"), false);
+  });
+  it("turns account linking off and does not trust a host-header gate identity", () => {
+    assert.match(server, /accountLinking:\s*\{\s*enabled:\s*false\s*\}/);
+    assert.equal(server.includes("x-grok-identity"), false);
+  });
+  it("leaves email + password as the only sign-in", () => {
+    assert.equal(emailAndPasswordEnabled, true);
+    assert.equal(GROK_PROVIDERS.length, 0);
+  });
+});

@@ -20,8 +20,10 @@ import {
   type SubstrateId,
 } from "@/lib/mitigations";
 import { detectLimiters, goHourCount, unlockedGoHours } from "@/lib/score-windows";
+import { BACKUP_LABEL, type HourCheck, type LimitCheck, type SheetWindow } from "@/lib/noaa";
 import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { WINDOWS_PAUSED } from "@/lib/extract-flags";
 
 const selectClass =
   "flex h-11 w-full rounded-md bg-surface-2 px-3 text-sm text-fg shadow-[0_0_0_1px_rgba(255,255,255,0.08)] transition-[box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40";
@@ -36,6 +38,49 @@ function statusFill(s: WindowStatus) {
   if (s === "caution") return "bg-caution";
   if (s === "nogo") return "bg-nogo";
   return "bg-subtle";
+}
+
+const VERDICT_TEXT: Record<HourCheck["verdict"], string> = { go: "GO", nogo: "NO-GO", unavailable: "Unavailable" };
+const CHECK_TEXT: Record<LimitCheck["status"], string> = {
+  pass: "pass",
+  fail: "fail",
+  unavailable: "unavailable",
+  "not-stated": "Not stated",
+};
+
+/** NOAA hourly vs the sheet's limits: per-hour verdict, each check's reason, every value's source. */
+function SheetLimitChecks({ sheet, timezone }: { sheet: SheetWindow; timezone: string }) {
+  const fmt = (iso: string) =>
+    new Date(iso).toLocaleString("en-US", { timeZone: timezone, weekday: "short", hour: "numeric", hour12: false });
+  const hours = sheet.hours.slice(0, 24);
+  return (
+    <div className="rounded-xl bg-surface p-4 text-xs shadow-[0_0_0_1px_rgba(255,255,255,0.08)] sm:p-5">
+      <p className="text-sm font-medium text-fg">Hourly vs sheet limits (next 24 h)</p>
+      <p className="mt-1 text-muted">
+        {sheet.backup ? <strong className="text-caution">{BACKUP_LABEL}. </strong> : null}
+        Forecast: {sheet.source.label}
+      </p>
+      <p className="mt-1 text-muted">
+        {sheet.now
+          ? `Now: ${sheet.now.tempF ?? "—"}°F, RH ${sheet.now.rh ?? "—"}%, dew point ${sheet.now.dewpointF ?? "—"}°F, wind ${sheet.now.windMph ?? "—"} mph · ${sheet.now.label}`
+          : "Now: no station observation available."}
+      </p>
+      <ul className="mt-3 space-y-1.5">
+        {hours.map((h) => (
+          <li key={h.startIso}>
+            <span className="font-mono text-fg">{fmt(h.startIso)}:00</span>{" "}
+            <Badge variant={h.verdict === "go" ? "go" : h.verdict === "nogo" ? "nogo" : "default"}>{VERDICT_TEXT[h.verdict]}</Badge>{" "}
+            <span className="text-muted">
+              {h.checks
+                .filter((c) => c.status !== "pass" || h.verdict === "go")
+                .map((c) => `${CHECK_TEXT[c.status]}: ${c.reason}`)
+                .join(" · ")}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function HourStrip({ hours, night }: { hours: HourWindow[]; night?: boolean }) {
@@ -218,6 +263,7 @@ export function WeatherPanel({
   onEnvironmentals,
   site,
   onSite,
+  paused,
 }: {
   zip: string;
   onZip: (v: string) => void;
@@ -230,6 +276,8 @@ export function WeatherPanel({
   onEnvironmentals?: (env: Environmentals) => void;
   site: SiteContext;
   onSite: (site: SiteContext) => void;
+  /** Temperature limits not verified on the sheet: no windows are shown (FE-3). */
+  paused?: boolean;
 }) {
   const days = forecast?.days ?? [];
   const night = site.mitigations.includes("night_shift");
@@ -372,6 +420,24 @@ export function WeatherPanel({
               </option>
             ))}
           </select>
+          <div className="mt-3">
+            <Label htmlFor="measured-surface">Measured surface temp (°F)</Label>
+            <Input
+              id="measured-surface"
+              type="number"
+              inputMode="decimal"
+              className="mt-1"
+              placeholder="Optional gauge reading"
+              value={site.measuredSurfaceTempF ?? ""}
+              onChange={(e) => {
+                const v = e.target.value.trim() === "" ? null : Number(e.target.value);
+                onSite({ ...site, measuredSurfaceTempF: v != null && Number.isFinite(v) ? v : null });
+              }}
+            />
+            <p className="mt-1 text-xs text-muted">
+              Empty: surface checks use the sun estimate, labelled “estimate, verify with gauge”.
+            </p>
+          </div>
           <p className="mt-2 text-xs leading-relaxed text-muted">
             {sub.note} On a sunny {example.airF}°F afternoon this face estimates about{" "}
             <span className="font-mono text-fg">{example.substrateF}°F</span>
@@ -467,7 +533,7 @@ export function WeatherPanel({
           ) : (
             <p className="mt-2 text-xs text-muted">None selected — calendar is unmitigated field conditions.</p>
           )}
-          {forecast && environmentals && site.mitigations.length ? (
+          {!paused && forecast && environmentals && site.mitigations.length ? (
             <p className="mt-2 font-mono text-xs text-accent">
               {unlockedGoHours(forecast, environmentals, site)}h reopened from no-go
               {" · "}
@@ -526,7 +592,18 @@ export function WeatherPanel({
         ) : null}
       </div>
 
-      {forecast ? (
+      {paused ? (
+        <div
+          role="status"
+          data-testid="windows-paused"
+          className="rounded-xl bg-caution-soft px-4 py-6 text-center text-sm font-semibold text-ink"
+        >
+          {WINDOWS_PAUSED}
+          <span className="mt-1 block text-xs font-normal text-muted">
+            Limits typed in by hand don't unpause the windows yet.
+          </span>
+        </div>
+      ) : forecast ? (
         <div className="rise-in space-y-4">
           <div className="rounded-xl bg-surface p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.08)] sm:p-5">
             <p className="text-base font-medium leading-snug text-fg">{forecast.headline}</p>
@@ -552,6 +629,7 @@ export function WeatherPanel({
               <span>{night ? "Strip is 00:00–23:00 (night shift)" : "Strip is 05:00–20:00 local"}</span>
             </div>
           </div>
+          {forecast.sheet ? <SheetLimitChecks sheet={forecast.sheet} timezone={forecast.timezone} /> : null}
           <div className="grid gap-3 sm:grid-cols-2">
             {days.map((d) => (
               <DayCard key={d.date} day={d} night={night} />
