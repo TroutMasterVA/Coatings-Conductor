@@ -102,11 +102,37 @@ function headerUnitRow(s: string, inheritedTemps: number[] = []): string | null 
   return nums.map((n) => `${n} ${unit}`).join(" / ");
 }
 
+/** One note instead of unlabeled numbers when a temperature row can't be paired with confidence. */
+export const VARIES_BY_TEMP = "Varies by temperature, see sheet table";
+
+/**
+ * Temperature column headers printed before a table row, as °F: the LAST run of 2+ consecutive
+ * temperatures ("35°F (1.7°C) 77°F (25°C) 100°F (38°C)", "-5°C (23°F) 5°C (41°F)"), with optional
+ * "50% RH" cells between them. Empty when there is no such run.
+ */
+export function columnTemps(before: string): number[] {
+  const one = String.raw`(?:(-?\d+(?:\.\d+)?)°F(?:\s*\(\s*-?\d+(?:\.\d+)?°C\s*\))?|-?\d+(?:\.\d+)?°C\s*\(\s*(-?\d+(?:\.\d+)?)°F\s*\))`;
+  const runRe = new RegExp(String.raw`${one}(?:\s+${one})+`, "gi");
+  let last: string | null = null;
+  for (const m of before.matchAll(runRe)) last = m[0];
+  if (!last) return [];
+  return [...last.matchAll(new RegExp(one, "gi"))].map((m) => Number(m[1] ?? m[2]));
+}
+
+/**
+ * Cells of one row ("10 hours 4 hours 2 hours") paired with column temperatures:
+ * "10 hours at 35°F, 4 hours at 77°F, 2 hours at 100°F". When the counts don't match, one note.
+ */
+export function pairCells(cells: string[], temps: number[]): string {
+  if (temps.length === cells.length) return cells.map((c, i) => `${c} at ${temps[i]}°F`).join(", ");
+  return VARIES_BY_TEMP;
+}
+
 /**
  * Durations right after a label. Up to 16 characters of kit-size noise (e.g. "8 2 gallons") may sit
  * between the label and the first cell; any other text or a colon (another label) stops the search.
  */
-function afterLabel(s: string, inheritedTemps: number[] = []): string | null {
+function afterLabel(s: string, inheritedTemps: number[] = [], before = ""): string | null {
   const hu = headerUnitRow(s, inheritedTemps);
   if (hu) return hu;
   const body = s.replace(/^\s*[:\-–]?\s*/, "");
@@ -121,6 +147,12 @@ function afterLabel(s: string, inheritedTemps: number[] = []): string | null {
     )
       break;
     const run = durationRun(body.slice(skip));
+    const distinct = run ? new Set(run.cells.map((c) => c.toLowerCase())).size : 0;
+    // Several different cells with no temperature written next to them are table columns:
+    // pair each with its column header, or say it varies. Never a list of unlabeled numbers.
+    if (run && distinct > 1 && !/°[CF]/.test(run.text)) {
+      return pairCells(run.cells, inheritedTemps.length ? inheritedTemps : columnTemps(before));
+    }
     if (run)
       return cap(
         new Set(run.cells.map((c) => c.toLowerCase())).size === 1 && run.cells.length > 1
@@ -138,7 +170,7 @@ export function potLifeFromText(text: string): string {
     /\b(?:working\s+)?pot\s*life\b(?:\s*\((?=minutes|mins?|hours|hrs?)|\s*:?)/gi,
   )) {
     const start = m.index! + m[0].length - (m[0].endsWith("(") ? 1 : 0);
-    const v = afterLabel(t.slice(start, start + 220));
+    const v = afterLabel(t.slice(start, start + 220), [], t.slice(Math.max(0, m.index! - 400), m.index!));
     if (v) return v;
   }
   return "";
@@ -161,7 +193,7 @@ export function recoatFromText(text: string): Recoat {
   )) {
     set(
       /min/i.test(m[1]!) ? "min" : "max",
-      afterLabel(t.slice(m.index! + m[0].length, m.index! + m[0].length + 200)),
+      afterLabel(t.slice(m.index! + m[0].length, m.index! + m[0].length + 200), [], t.slice(Math.max(0, m.index! - 400), m.index!)),
     );
   }
   for (const m of t.matchAll(
@@ -169,7 +201,7 @@ export function recoatFromText(text: string): Recoat {
   )) {
     set(
       /min/i.test(m[1]!) ? "min" : "max",
-      afterLabel(t.slice(m.index! + m[0].length, m.index! + m[0].length + 200)),
+      afterLabel(t.slice(m.index! + m[0].length, m.index! + m[0].length + 200), [], t.slice(Math.max(0, m.index! - 400), m.index!)),
     );
   }
   for (const m of t.matchAll(/\brecoat(?:s|ing)?(?:\s+times?)?\b\s*:?/gi)) {
@@ -187,7 +219,11 @@ export function recoatFromText(text: string): Recoat {
     for (const row of block.matchAll(/\b(minimum|maximum|min\.|max\.)\s*:?/gi)) {
       // A row label must come before any sentence ends (stay inside the block).
       if (/[.!?]\s+[A-Z]/.test(block.slice(0, row.index!))) break;
-      const v = afterLabel(block.slice(row.index! + row[0].length), th.temps);
+      const v = afterLabel(
+        block.slice(row.index! + row[0].length),
+        th.temps,
+        t.slice(Math.max(0, m.index! - 400), m.index! + m[0].length + row.index!),
+      );
       if (v) set(/^min/i.test(row[1]!) ? "min" : "max", v);
     }
   }

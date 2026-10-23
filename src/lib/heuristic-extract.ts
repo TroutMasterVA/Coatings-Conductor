@@ -776,6 +776,67 @@ export function thinnerFromText(t: string): string {
   return "";
 }
 
+const COV_US = String.raw`\d+(?:[.,]\d+)?\s*(?:sq\.?\s*ft\.?|ft²|ft2)\s*\/\s*(?:US\s+)?gal(?:lon)?s?\.?(?:\s*(?:@|at)\s*\d+(?:\.\d+)?\s*mils?(?:\s*d\.?f\.?t\.?)?)?`;
+const COV_SI = String.raw`\d+(?:[.,]\d+)?\s*m(?:²|2)\s*\/\s*(?:l|lit(?:re|er))\b(?:\s*(?:@|at)\s*\d+\s*microns?(?:\s*d\.?f\.?t\.?)?)?`;
+
+/**
+ * Theoretical coverage as a whole "number unit @ film" value ("457 sq.ft/US gallon at 2 mils d.f.t"),
+ * looked for within 300 chars after a "coverage" label. US units first. "" when none.
+ */
+export function coverageFromText(t: string): string {
+  const flat = t.replace(/\s+/g, " ");
+  for (const re of [COV_US, COV_SI]) {
+    for (const m of flat.matchAll(/\b(?:theoretical\s+)?coverage\b/gi)) {
+      const hit = flat.slice(m.index!, m.index! + 300).match(new RegExp(re, "i"));
+      if (hit) return hit[0].trim();
+    }
+  }
+  return "";
+}
+
+/** A value without any number (e.g. table header text) is not a coverage figure. */
+function numericOrEmpty(v: string): string {
+  return /\d/.test(v) ? v : "";
+}
+
+/**
+ * Table text that ran into a field (another row label, or no leading value) is dropped to Not
+ * stated rather than shown as junk.
+ */
+export function tableJunkOrValue(v: string, mustStart: RegExp): string {
+  const s = v.trim();
+  if (!s || !mustStart.test(s)) return "";
+  if (/\b(?:handle|recoat|cure to service|hard dry|touch dry|minimum maximum)\b\s*:?/i.test(s)) return "";
+  return s;
+}
+
+/** A thinner identifier: "#26", "No. 10", or a 4+ digit product code ("160402 Thinner"). */
+const THINNER_ID = /#\s?\d+|\bNo\.\s?\d+|\b\d{4,}\b/;
+
+/**
+ * Keep the thinner's identifier. When the read value has none, use the first sentence after a
+ * thinning/reducer label (across line and page breaks) that names one, e.g.
+ * "May be thinned up to 5 oz/gal (4%) with #26 for ambient and warm surfaces."
+ */
+export function withThinnerId(v: string, t: string): string {
+  if (THINNER_ID.test(v)) return v;
+  const flat = t.replace(/\s+/g, " ");
+  for (const m of flat.matchAll(/\b(?:thinn(?:ing|er|ers)|reducer)\b\s*:?/gi)) {
+    const block = flat.slice(m.index! + m[0].length, m.index! + m[0].length + 500);
+    for (const sent of block.split(/(?<=[.!?])\s+(?=[A-Z])/)) {
+      if (/\b(?:clean[\s-]?up|cleaning)\b/i.test(sent)) break;
+      const id = sent.match(THINNER_ID);
+      if (id && /\bthin|reduc/i.test(sent)) {
+        const s = sent.trim();
+        if (s.length <= 160) return s;
+        const cut = s.slice(0, Math.max(160, id.index! + id[0].length + 20));
+        return cut.slice(0, cut.lastIndexOf(" ") > id.index! ? cut.lastIndexOf(" ") : cut.length) + "…";
+      }
+    }
+  }
+  return v;
+}
+
 export function heuristicExtract(text: string): FieldCardData {
   const t = text.replace(/\u00a0/g, " ").replace(/\s+\n/g, "\n");
   const lines = t
@@ -800,12 +861,12 @@ export function heuristicExtract(text: string): FieldCardData {
   const voc = firstMatch(t, [/voc[:\s]+([^\n]+)/i]);
   const dft = filmThicknessFromText(t);
   const { min: recoatMin, max: recoatMax } = recoatFromText(t);
-  const coverage = firstMatch(t, [
+  const coverage = coverageFromText(t) || numericOrEmpty(firstMatch(t, [
     /coverage[:\s]+([^\n]+)/i,
     /theoretical\s+coverage[:\s]+([^\n]+)/i,
-  ]);
+  ]));
   const induction = firstMatch(t, [/induction[:\s]+([^\n]+)/i, /sweat-?in[:\s]+([^\n]+)/i]);
-  const thinning = thinnerFromText(t);
+  const thinning = withThinnerId(thinnerFromText(t), t);
 
   const prepGates = parsePrepBySubstrate(t);
   const substrates = substratesFromGates(prepGates);
@@ -849,7 +910,7 @@ export function heuristicExtract(text: string): FieldCardData {
             return bits.join(": ").replace(/^([^:]+):\s*/, "$1 — ");
           })
           .join(" · ")
-      : "Prep per PDS / spec";
+      : "Not stated";
 
   const holdPoints: HoldPoint[] = [
     {
@@ -997,7 +1058,7 @@ export function heuristicExtract(text: string): FieldCardData {
       ),
       filmThickness: dft,
       coverage,
-      numberOfCoats: firstMatch(t, [/(?:number of )?coats?[:\s]+([^\n]+)/i]),
+      numberOfCoats: tableJunkOrValue(firstMatch(t, [/(?:number of )?coats?[:\s]+([^\n]+)/i]), /^(?:\d|one|two|three|four|single)/i),
       sequence: [],
       notes: "",
     },
@@ -1008,7 +1069,7 @@ export function heuristicExtract(text: string): FieldCardData {
       documentation: "Record batch, mix time, ambients, and film thickness.",
     },
     cure: {
-      touch: firstMatch(t, [/dry to touch[:\s]+([^\n]+)/i, /touch[:\s]+([^\n]+)/i]),
+      touch: tableJunkOrValue(firstMatch(t, [/dry to touch[:\s]+([^\n]+)/i, /touch[:\s]+([^\n]+)/i]), /^[\d¼½¾]/),
       handle: firstMatch(t, [/dry to handle[:\s]+([^\n]+)/i, /handle[:\s]+([^\n]+)/i]),
       recoatMin,
       recoatMax,

@@ -71,8 +71,25 @@ function segments(src: SourceDoc): { page?: number; text: string }[] {
   return out;
 }
 
-function q(seg: { page?: number; text: string }): ProvenanceQuote {
-  return seg.page ? { page: seg.page, quote: clip(seg.text) } : { quote: clip(seg.text) };
+function q(seg: { page?: number; text: string }, at?: { start: number; end: number }): ProvenanceQuote {
+  const quote = at ? windowOf(seg.text, at.start, at.end) : clip(seg.text);
+  return seg.page ? { page: seg.page, quote } : { quote };
+}
+
+/**
+ * The part of a line around [start, end) (the value itself), cut at word edges, at most 240 chars.
+ * A long run-on line (flat pdf.js text has no line breaks) is no longer quoted from its start,
+ * which put page headers and titles in front of values that were further along the line.
+ */
+function windowOf(text: string, start: number, end: number, before = 80, after = 60): string {
+  if (text.length <= 240 && start < 240) return text;
+  let a = Math.max(0, start - before);
+  let b = Math.min(text.length, Math.max(end, start) + after);
+  if (b - a > 240) b = a + 240;
+  if (a > 0) a = text.indexOf(" ", a) + 1 || a;
+  if (b < text.length) b = Math.max(text.lastIndexOf(" ", b), Math.min(end, text.length));
+  if (a > start) a = start;
+  return text.slice(a, b).trim();
 }
 
 /** Numbers that appear in a value, as strings (e.g. "2", "3", "77", "1.5"). */
@@ -119,6 +136,20 @@ export function quoteCoversNumbers(path: string, value: string | number, quote: 
   );
 }
 
+/** Spaces, dash styles and degree glyphs normalized before the number check. */
+function normQuote(s: string): string {
+  return s
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/[\u02DA\u00BA\u2103\u2109]/g, "°")
+    .replace(/\s+/g, " ");
+}
+
+/** True when the quote contains every number in the value (temps: as a temperature). */
+export function quoteBacksValue(path: string, value: string | number, quote: string): boolean {
+  if (!quote.trim()) return false;
+  return quoteCoversNumbers(path, typeof value === "string" ? normQuote(value) : value, normQuote(quote));
+}
+
 const STOP = new Set(["no", "the", "and", "of", "or", "a", "to", "at", "by", "for", "in", "with"]);
 function tokens(s: string): string[] {
   return normalize(s)
@@ -135,8 +166,13 @@ export function findQuote(path: string, value: string | number, source: SourceDo
   if (typeof value === "string") {
     const needle = normalize(value);
     if (needle.length >= 2) {
-      const hit = segs.find((s) => normalize(s.text).includes(needle));
-      if (hit) return q(hit);
+      // A needle starting/ending with a digit must not match inside a longer number ("2 hours" in "12 hours").
+      const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`${/^\d/.test(needle) ? "(?<![\\d.])" : ""}${esc}${/\d$/.test(needle) ? "(?![\\d])" : ""}`);
+      for (const hit of segs) {
+        const m = re.exec(normalize(hit.text));
+        if (m) return q(hit, { start: m.index, end: m.index + needle.length });
+      }
     }
     const want = tokens(value);
     if (want.length) {
@@ -150,11 +186,29 @@ export function findQuote(path: string, value: string | number, source: SourceDo
   }
   const forms = numberForms(path, String(value));
   const key = keywordFor(path);
-  const hits = segs.filter((s) => hasNumber(s.text, forms));
   // Every numeric field needs its own keyword on the same line; a bare number match is not proof.
   if (!key) return null;
-  const best = hits.find((s) => key.test(s.text));
-  return best ? q(best) : null;
+  const temp = TEMP_PATH.test(path) || /dewPointSpreadMinF$/.test(path);
+  // A generic "Temperature:" heading is not the substrate's own label.
+  const nearKey = /substrateTemp/.test(path) ? /substrate|surface|steel/i : key;
+  // Pass 1: the field's keyword sits right before the number ("Surface*: 35°F"), so the quote is
+  // that field's own line. Pass 2: keyword anywhere in the quote window.
+  for (const near of [true, false])
+  for (const seg of segs) {
+    for (const f of forms) {
+      const re = new RegExp(`(^|[^\\d.])(${f.replace(".", "\\.")})(?![\\d])`, "g");
+      for (const m of seg.text.matchAll(re)) {
+        const start = m.index! + m[1]!.length;
+        const quote = q(seg, { start, end: start + m[2]!.length });
+        // The quote must carry the keyword and back the value (a temp needs its unit: "SP2" is not 2°C).
+        if (near && !nearKey.test(seg.text.slice(Math.max(0, start - 24), start))) continue;
+        if (key.test(quote.quote) && quoteCoversNumbers(path, value, quote.quote) && (!temp || hasTemperature(quote.quote, forms))) {
+          return quote;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 function keywordFor(path: string): RegExp | null {
@@ -226,7 +280,17 @@ export function gateNumbers(input: FieldCardData, source: SourceDoc): Gated {
       continue;
     }
     const v = leaf.value as string | number;
-    const hit = findQuote(leaf.path, v, source);
+    // "10 hours at 35°F": the temperature is the table's column header, not part of the row's
+    // line, so the quote must contain the row's own numbers (the durations).
+    const core = typeof v === "string" ? v.replace(/ at -?\d+(?:\.\d+)?°F(?=,|$)/g, "") : v;
+    // The full value verbatim first; the duration-only core only when that fails.
+    const full = findQuote(leaf.path, v, source);
+    const useFull = !!full && (!hasDigit(v) || quoteBacksValue(leaf.path, v, full.quote));
+    const found = useFull ? full : core === v ? full : findQuote(leaf.path, core, source);
+    // Shared rule for every provider: a value with a number is shown only when its own quote
+    // literally contains that number (spaces, dashes and degree signs normalized). Otherwise it is
+    // Not stated and counted as dropped (VALUES_DROPPED_UNQUOTED; the read stays a draft).
+    const hit = found && (!hasDigit(v) || quoteBacksValue(leaf.path, useFull ? v : core, found.quote)) ? found : null;
     if (hit) provenance[leaf.path] = hit;
     else if (hasDigit(v)) {
       blankAt(card, leaf.path, v);

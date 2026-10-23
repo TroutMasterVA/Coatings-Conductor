@@ -1,4 +1,4 @@
-import { guestMigrateResult, NOT_YOUR_JOB_MESSAGE } from "@/lib/guest-import";
+import { NOT_YOUR_JOB_MESSAGE } from "@/lib/guest-import";
 import { GUEST_CLOSED_BY, JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE, statusFields, type CloseResult } from "@/lib/job-close";
 import { guestTrust, planExtractSave } from "@/lib/job-extract";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
@@ -21,8 +21,8 @@ type GuestStore = {
 };
 
 type GuestImporter = (args: {
-  data: { projects: ProjectFull[]; custom: CustomMitigation[]; lastProjectId?: string | null };
-}) => Promise<{ imported: number; skipped: boolean }>;
+  data: { projects: ProjectFull[]; custom: CustomMitigation[]; lastProjectId?: string | null; claim?: boolean };
+}) => Promise<{ imported: number; skipped: boolean; importedIds?: string[]; customOk?: boolean }>;
 
 function empty(): GuestStore {
   return { lastProjectId: null, projects: [], custom: [] };
@@ -83,23 +83,88 @@ export function guestHasData(): boolean {
   return s.projects.length > 0 || s.custom.length > 0;
 }
 
-/** First sign-in with an empty account lifts this device’s jobs. Account jobs win if both exist. */
-export async function migrateGuestToAccount(
+/** How many device (guest) jobs are waiting on this browser. */
+export function guestJobCount(): number {
+  return read().projects.length;
+}
+
+/** The explicit claim prompt. Nothing moves into an account without a yes to this. */
+export function claimPromptText(n: number, names: string[] = []): string {
+  const shown = names.slice(0, 3).map((x) => x.trim()).filter(Boolean);
+  const more = names.length > shown.length ? `, +${names.length - shown.length} more` : "";
+  const list = shown.length ? ` (${shown.join(", ")}${more})` : "";
+  return `This browser has ${n} job${n === 1 ? "" : "s"} made while signed out${list}. They may not be yours. Move them into your account?`;
+}
+
+/** Device flag: the user chose "Not now / don't ask again on this device". */
+export const CLAIM_DONT_ASK_KEY = "fieldcard.guestClaim.dontAsk.v1";
+export type ClaimChoice = "move" | "not-now" | "dont-ask";
+
+export function guestClaimSuppressed(): boolean {
+  try {
+    return typeof window !== "undefined" && localStorage.getItem(CLAIM_DONT_ASK_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Names of the device jobs, newest first, for the prompt. */
+export function guestJobNames(): string[] {
+  return read().projects.map((p) => p.name);
+}
+
+/**
+ * A signed-in list is only that account's server jobs. Device (guest) jobs are never shown there,
+ * even if a row with a device id slipped into the payload; they stay hidden until claimed.
+ */
+export function signedInJobList<T extends { id: string }>(serverJobs: T[]): T[] {
+  const device = new Set(read().projects.map((p) => p.id));
+  return serverJobs.filter((p) => p && !device.has(p.id));
+}
+
+export type ClaimResult = { outcome: "declined" | "suppressed" | "empty" | "imported" | "partial"; imported: number; kept: number };
+
+/**
+ * Claim device jobs into the signed-in account, only when `confirm` says yes. Declining imports
+ * nothing and leaves the device copy as-is (hidden while signed in). On a full import the device
+ * store is cleared; on a partial one only the jobs that did not import are kept on the device.
+ */
+export async function claimGuestJobs(
+  confirm: (n: number, names: string[]) => boolean | ClaimChoice | Promise<boolean | ClaimChoice>,
   importer: GuestImporter = importGuestWorkspace,
-): Promise<"imported" | "skipped" | "empty"> {
+): Promise<ClaimResult> {
   const dump = read();
-  const guestHasData = dump.projects.length > 0 || dump.custom.length > 0;
-  if (!guestHasData) return "empty";
-  const result = await importer({
-    data: {
-      projects: dump.projects,
-      custom: dump.custom,
-      lastProjectId: dump.lastProjectId,
-    },
+  const n = dump.projects.length;
+  if (n === 0) return { outcome: "empty", imported: 0, kept: 0 };
+  if (guestClaimSuppressed()) return { outcome: "suppressed", imported: 0, kept: n };
+  const choice = await confirm(n, dump.projects.map((p) => p.name));
+  if (choice === "dont-ask") {
+    // Imports nothing; device jobs stay hidden while signed in; this device is not asked again.
+    localStorage.setItem(CLAIM_DONT_ASK_KEY, "1");
+    return { outcome: "declined", imported: 0, kept: n };
+  }
+  if (choice !== true && choice !== "move") return { outcome: "declined", imported: 0, kept: n };
+  let res: Awaited<ReturnType<GuestImporter>>;
+  try {
+    res = await importer({
+      data: { projects: dump.projects, custom: dump.custom, lastProjectId: dump.lastProjectId, claim: true },
+    });
+  } catch {
+    return { outcome: "partial", imported: 0, kept: n };
+  }
+  const done = new Set(res.skipped ? [] : (res.importedIds ?? []));
+  const left = dump.projects.filter((p) => !done.has(p.id));
+  const customLeft = res.customOk ? [] : dump.custom;
+  if (left.length === 0 && customLeft.length === 0) {
+    write(empty());
+    return { outcome: "imported", imported: n, kept: 0 };
+  }
+  write({
+    lastProjectId: left.some((p) => p.id === dump.lastProjectId) ? dump.lastProjectId : null,
+    projects: left,
+    custom: customLeft,
   });
-  const decided = guestMigrateResult({ guestHasData: true, skipped: result.skipped });
-  if (decided.clearGuest) write(empty());
-  return decided.outcome;
+  return { outcome: left.length ? "partial" : "imported", imported: n - left.length, kept: left.length };
 }
 
 export function guestCreateProject(name: string, zip: string, seed?: Partial<ProjectFull>): ProjectFull {

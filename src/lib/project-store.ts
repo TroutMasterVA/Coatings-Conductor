@@ -301,19 +301,26 @@ export const saveCustomMitigation = createServerFn({ method: "POST" })
     return saved;
   });
 
-/** Lift device-local jobs into an empty account. No-op if the account already has projects or a library. */
+/**
+ * Lift device-local jobs into the signed-in account. Only runs after the user confirms the
+ * "Move N jobs from this device into your account?" prompt (`claim: true`); without it the old
+ * empty-account-only rule applies. Returns the device ids that were written, so the device keeps
+ * exactly the jobs that failed.
+ */
 export const importGuestWorkspace = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { projects: ProjectFull[]; custom: CustomMitigation[]; lastProjectId?: string | null }) => {
+  .validator((input: { projects: ProjectFull[]; custom: CustomMitigation[]; lastProjectId?: string | null; claim?: boolean }) => {
     const projects = Array.isArray(input.projects) ? input.projects.slice(0, 50) : [];
     const custom = Array.isArray(input.custom) ? input.custom.slice(0, 40) : [];
-    return { projects, custom, lastProjectId: input.lastProjectId ?? null };
+    return { projects, custom, lastProjectId: input.lastProjectId ?? null, claim: input.claim === true };
   })
-  .handler(async ({ context, data }): Promise<{ imported: number; skipped: boolean }> => {
+  .handler(async ({ context, data }): Promise<{ imported: number; skipped: boolean; importedIds: string[]; customOk: boolean }> => {
     const [existing, existingCustom] = await Promise.all([listRows(context.userId), loadCustom(context.userId)]);
-    if (accountRejectsGuestImport(existing.length, existingCustom.length)) {
-      return { imported: 0, skipped: true };
+    if (!data.claim && accountRejectsGuestImport(existing.length, existingCustom.length)) {
+      return { imported: 0, skipped: true, importedIds: [], customOk: false };
     }
+    const importedIds: string[] = [];
+    let customOk = true;
     const minted = remapGuestImportInput({
       projects: data.projects,
       custom: data.custom,
@@ -322,7 +329,8 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
     const sql = await getSql();
     const now = new Date().toISOString();
     let imported = 0;
-    for (const p of minted.projects) {
+    for (const [i, p] of minted.projects.entries()) {
+      const guestId = data.projects[i]?.id;
       const name = String(p.name ?? "").trim();
       const zip = String(p.zip ?? "").replace(/\D/g, "").slice(0, 5);
       if (!name || zip.length !== 5) continue;
@@ -344,6 +352,7 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
         guestStatus.status === "closed"
           ? { status: "closed", closedAt: guestStatus.closedAt ?? now, closedBy: GUEST_CLOSED_BY }
           : { status: "open", closedAt: null, closedBy: null };
+      try {
       await sql`
         insert into projects (
           id, user_id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
@@ -358,15 +367,23 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
         )
         on conflict (id) do nothing
       `;
+      } catch {
+        continue;
+      }
       imported += 1;
+      if (typeof guestId === "string") importedIds.push(guestId);
     }
     for (const c of minted.custom) {
       if (!c?.id || !c?.label) continue;
+      try {
       await sql`
         insert into custom_mitigations (id, user_id, label, payload_json, created_at, updated_at)
         values (${c.id}, ${context.userId}, ${c.label}, ${JSON.stringify(c)}, ${c.createdAt || now}, ${now})
         on conflict (id) do nothing
       `;
+      } catch {
+        customOk = false;
+      }
     }
     const last = minted.lastProjectId ?? minted.projects[0]?.id ?? null;
     if (last) {
@@ -375,5 +392,5 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
         on conflict (user_id) do update set last_project_id = ${last}
       `;
     }
-    return { imported, skipped: false };
+    return { imported, skipped: false, importedIds, customOk };
   });
