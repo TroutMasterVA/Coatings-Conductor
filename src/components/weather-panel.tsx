@@ -22,6 +22,7 @@ import {
 import { detectLimiters, goHourCount, unlockedGoHours } from "@/lib/score-windows";
 import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { WINDOWS_PAUSED } from "@/lib/extract-flags";
 
 const selectClass =
   "flex h-11 w-full rounded-md bg-surface-2 px-3 text-sm text-fg shadow-[0_0_0_1px_rgba(255,255,255,0.08)] transition-[box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40";
@@ -218,6 +219,7 @@ export function WeatherPanel({
   onEnvironmentals,
   site,
   onSite,
+  paused,
 }: {
   zip: string;
   onZip: (v: string) => void;
@@ -230,6 +232,8 @@ export function WeatherPanel({
   onEnvironmentals?: (env: Environmentals) => void;
   site: SiteContext;
   onSite: (site: SiteContext) => void;
+  /** Temperature limits not verified on the sheet: no windows are shown (FE-3). */
+  paused?: boolean;
 }) {
   const days = forecast?.days ?? [];
   const night = site.mitigations.includes("night_shift");
@@ -467,7 +471,7 @@ export function WeatherPanel({
           ) : (
             <p className="mt-2 text-xs text-muted">None selected — calendar is unmitigated field conditions.</p>
           )}
-          {forecast && environmentals && site.mitigations.length ? (
+          {!paused && forecast && environmentals && site.mitigations.length ? (
             <p className="mt-2 font-mono text-xs text-accent">
               {unlockedGoHours(forecast, environmentals, site)}h reopened from no-go
               {" · "}
@@ -526,7 +530,18 @@ export function WeatherPanel({
         ) : null}
       </div>
 
-      {forecast ? (
+      {paused ? (
+        <div
+          role="status"
+          data-testid="windows-paused"
+          className="rounded-xl bg-caution-soft px-4 py-6 text-center text-sm font-semibold text-ink"
+        >
+          {WINDOWS_PAUSED}
+          <span className="mt-1 block text-xs font-normal text-muted">
+            Limits typed in by hand don't unpause the windows yet.
+          </span>
+        </div>
+      ) : forecast ? (
         <div className="rise-in space-y-4">
           <div className="rounded-xl bg-surface p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.08)] sm:p-5">
             <p className="text-base font-medium leading-snug text-fg">{forecast.headline}</p>
