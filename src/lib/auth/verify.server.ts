@@ -1,6 +1,7 @@
 import { getRequest } from "@tanstack/react-start/server";
 import { gateIdentityEnabled } from "./gate-identity.server";
 import { auth, authConfigured } from "./server";
+import { loginsAvailable } from "./secret.server";
 
 /**
  * Server-side session resolution (server-only).
@@ -58,6 +59,8 @@ export async function getSessionUser(
   bearerToken?: string,
 ): Promise<VerifiedUser | null> {
   if (!authConfigured && !gateIdentityEnabled()) return null;
+  // Logins off on this copy (Vercel Preview, no secret): nobody is signed in.
+  if (!loginsAvailable()) return null;
   const request = getRequest();
   if (!request) return null;
   let headers = request.headers;
