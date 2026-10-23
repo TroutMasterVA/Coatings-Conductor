@@ -1,0 +1,14 @@
+# Keep the build context small and secret-free.
+.git
+.github
+node_modules
+.output
+.vercel
+dist
+.env
+.env.*
+!.env.example
+artifacts
+screenshots
+*.log
+.DS_Store

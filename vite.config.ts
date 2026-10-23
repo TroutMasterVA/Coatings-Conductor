@@ -19,6 +19,15 @@ function hasGlobbedMigrations(root: string): boolean {
   }
 }
 
+/**
+ * Nitro deploy preset. Defaults to `vercel` so the existing Vercel build is
+ * unchanged; the Dockerfile sets `NITRO_PRESET=node-server`.
+ */
+function nitroPreset(): string {
+  const preset = process.env.NITRO_PRESET?.trim();
+  return preset ? preset : "vercel";
+}
+
 function pgliteBootstrapPlugin(): Plugin {
   return {
     name: "app-builder:pglite-bootstrap",
@@ -136,7 +145,9 @@ export default defineConfig(({ command, isPreview }) => ({
     ...(command === "build" || isPreview
       ? [
           nitro({
-            preset: "vercel",
+            // Vercel stays the default (practice copy). Docker / PAVE builds set
+            // NITRO_PRESET=node-server to get a standalone `.output/server`.
+            preset: nitroPreset(),
             serverDir: "./server",
           }),
         ]
