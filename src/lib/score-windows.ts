@@ -441,7 +441,9 @@ export function scoreHour(
     const extra = mits.length
       ? ` after ${mits.map((id) => mitigationById(id)?.label ?? id).join(", ")}`
       : "";
-    reasons.push(`Inside PDS window${extra}`);
+    // No dew margin on the sheet: say the GO used the labelled 5°F default.
+    const dewNote = env.dewPointSpreadMinF == null && !skipDew ? ` (dew margin ${DEW_SPREAD_DEFAULT_F}°F, ${DEW_SPREAD_DEFAULT_LABEL})` : "";
+    reasons.push(`Inside PDS window${extra}${dewNote}`);
   }
   reasons.push(...notStatedNotes);
 

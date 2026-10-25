@@ -87,7 +87,7 @@ function windowOf(text: string, start: number, end: number, before = 80, after =
   let b = Math.min(text.length, Math.max(end, start) + after);
   if (b - a > 240) b = a + 240;
   if (a > 0) a = text.indexOf(" ", a) + 1 || a;
-  if (b < text.length) b = Math.max(text.lastIndexOf(" ", b), Math.min(end, text.length));
+  if (b < text.length) b = Math.max(text.lastIndexOf(" ", b), Math.min(end, a + 240));
   if (a > start) a = start;
   return text.slice(a, b).trim();
 }
@@ -120,9 +120,20 @@ function hasNumber(haystack: string, forms: string[]): boolean {
 function hasTemperature(haystack: string, forms: string[]): boolean {
   const end = String.raw`(?:\s*(?:-|–|to)\s*-?\d+(?:\.\d+)?)?\s*(?:°|º|˚|deg|[FC]\b)`;
   const start = String.raw`(?:\d+(?:\.\d+)?\s*°?\s*[FC]?\s*(?:-|–|to)\s*)?`;
-  return forms.some((f) =>
-    new RegExp(String.raw`(^|[^\d.])${start}${f.replace(".", "\\.")}${end}`, "i").test(haystack),
-  );
+  if (
+    forms.some((f) =>
+      new RegExp(String.raw`(^|[^\d.])${start}${f.replace(".", "\\.")}${end}`, "i").test(haystack),
+    )
+  )
+    return true;
+  // Table row under a unit column header: "˚F ˚C air and surface temp 20 to 120 -7 to 49".
+  // The °F header, then the row label (words only), then the row's own °F cell, whole-number
+  // matched. A header with no row label and cell after it never counts.
+  const f = forms[0]!.replace(".", "\\.");
+  return new RegExp(
+    String.raw`[°˚º]\s*F\b(?:\s*[°˚º]\s*C\b)?\s+[A-Za-z][A-Za-z ,&/()*:\-]{0,40}?\s(?:-?\d+(?:\.\d+)?\s*(?:-|–|to)\s*)?(?<![\d.])${f}(?![\d.])`,
+    "i",
+  ).test(haystack.replace(/\s+/g, " "));
 }
 
 /** True when every number in `value` is present in `quote` (°C allowed for °F temp fields). */
@@ -180,7 +191,35 @@ export function findQuote(path: string, value: string | number, source: SourceDo
         const have = new Set(tokens(s.text));
         return want.every((t) => have.has(t)) && quoteCoversNumbers(path, value, s.text);
       });
-      if (hit) return q(hit);
+      if (hit) {
+        // Quote the span from the value's first number to its last (table cells may be spaced,
+        // tab- or newline-separated), not the first 240 chars of a run-on line.
+        const nums = numbersIn(value);
+        const num = (n: string) => new RegExp(`(?<![\\d.])${n.replace(".", "\\.")}(?!\\d|\\.\\d)`, "g");
+        if (!nums.length) return q(hit);
+        // First occurrence of the value's first number whose span to its last number is short.
+        let first: RegExpExecArray | null = null;
+        let end = 0;
+        for (const f of hit.text.matchAll(num(nums[0]!))) {
+          let e = f.index! + f[0].length;
+          for (const n of nums.slice(1)) {
+            const m = num(n);
+            m.lastIndex = e;
+            const r = m.exec(hit.text);
+            if (r) e = r.index + r[0].length;
+          }
+          if (e - f.index! <= 200) {
+            first = f as RegExpExecArray;
+            end = e;
+            break;
+          }
+        }
+        if (!first) return q(hit);
+        const lead = hit.text.slice(Math.max(0, first.index - 60), first.index);
+        const label = lead.search(/[A-Za-z][^.;]*$/);
+        const startAt = label >= 0 ? Math.max(0, first.index - 60) + label : first.index;
+        return q(hit, { start: startAt, end });
+      }
     }
     return null;
   }
@@ -204,6 +243,26 @@ export function findQuote(path: string, value: string | number, source: SourceDo
         if (near && !nearKey.test(seg.text.slice(Math.max(0, start - 24), start))) continue;
         if (key.test(quote.quote) && quoteCoversNumbers(path, value, quote.quote) && (!temp || hasTemperature(quote.quote, forms))) {
           return quote;
+        }
+      }
+    }
+  }
+  // Pass 3: a table whose row label / column header sits further back in the same row block
+  // ("Ambient ... Maximum 130 ° F"): quote from the nearest keyword to the value, verbatim.
+  for (const seg of segs) {
+    for (const f of forms) {
+      const re = new RegExp(`(^|[^\\d.])(${f.replace(".", "\\.")})(?![\\d])`, "g");
+      for (const m of seg.text.matchAll(re)) {
+        const start = m.index! + m[1]!.length;
+        const before = seg.text.slice(Math.max(0, start - 300), start);
+        let kw = -1;
+        for (const k of before.matchAll(new RegExp(key.source, "gi"))) kw = k.index!;
+        if (kw < 0) continue;
+        const from = Math.max(0, start - 300) + kw;
+        const tail = seg.text.slice(start + m[2]!.length).match(/^\s*(?:°|º|˚)?\s*[FC]?\b/)?.[0] ?? "";
+        const quote = seg.text.slice(from, start + m[2]!.length + tail.length).trim();
+        if (quote.length <= 320 && quoteCoversNumbers(path, value, quote) && (!temp || hasTemperature(quote, forms))) {
+          return seg.page ? { page: seg.page, quote } : { quote };
         }
       }
     }
