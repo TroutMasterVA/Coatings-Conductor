@@ -45,7 +45,8 @@ export async function azureFetch(
 ): Promise<Response> {
   let res: Response;
   try {
-    res = await fetchImpl(url, init);
+    // Never follow redirects: Node keeps custom headers (keys, bearer tokens) on a cross-host hop.
+    res = await fetchImpl(url, { ...init, redirect: "error" });
   } catch (err) {
     throw toAzureError(err, stage);
   }

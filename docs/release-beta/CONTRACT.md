@@ -158,7 +158,7 @@ interface ExtractProvider {
 | `AZURE_OPENAI_API_KEY` | Optional — key auth fallback |
 | `MAX_UPLOAD_MB` | Upload cap in MB (decoded file). Default 10; practice on Vercel sets 3. Exposed to the UI via `getExtractLimits()` |
 
-- **Auth order**: `DefaultAzureCredential` (managed identity / Entra) **first**; API-key env vars only if set and credential is not used/available.
+- **Auth order**: managed identity **first**, fetched directly from Azure's documented token endpoints (IMDS `http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01` with `Metadata: true`, or App Service / Functions `IDENTITY_ENDPOINT` + `IDENTITY_HEADER`, which must be https or http on localhost/127.0.0.1). No redirects are followed (`redirect: "error"`), 5 s timeout, in-memory token cache capped at 24 h; managed identity is skipped for 5 min only after a network error or our own timeout. API-key env vars are the fallback only if set (logged once, no secrets). `AZURE_AUTH_MODE=identity` (optional; default `auto`) never uses a key. `@azure/identity` is not used for now: every release pins `@azure/msal-node` ^6, vulnerable to GHSA-xcx6-jx8p-x3h5; go back to `DefaultAzureCredential` once `@azure/identity` supports `@azure/msal-node` >= 7.1.0.
 - Azure is used when endpoints + deployment + API version are set. Otherwise → on-device fallback.
 - Azure failure / timeout / schema-invalid → **fall back to on-device** with a user-visible warning.
 - Config is never sent to the browser. `/api/health` may report `extractProvider: "azure"|"on-device"` but never values.
@@ -193,7 +193,7 @@ Plus negative mocks: invented number not in text → Not stated; injection text 
 | Ticket | Owner | Scope | Deps |
 |---|---|---|---|
 | BE-1 | BE | `ExtractProvider` interface + on-device fallback provider wrapping `buildCardFromPds`/`heuristicExtract` | — |
-| BE-2 | BE | Azure adapter (primary): DocIntel prebuilt-layout → server-side page images → vision deployment `json_schema`; `DefaultAzureCredential` first, keys secondary; provenance validator; mocks for all fixtures. Old `eaff352:src/lib/extract-pds.ts` SYSTEM prompt may seed the schema/prompt (no xAI). | BE-1 |
+| BE-2 | BE | Azure adapter (primary): DocIntel prebuilt-layout → server-side page images → vision deployment `json_schema`; managed identity first (direct token endpoints, see Auth order), keys secondary; provenance validator; mocks for all fixtures. Old `eaff352:src/lib/extract-pds.ts` SYSTEM prompt may seed the schema/prompt (no xAI). | BE-1 |
 | BE-3 | BE | Server extract fn (`createServerFn` POST + `authMiddleware`), accepts file upload server-side; rate limit, 60 s timeout, error shapes, fallback | BE-1 |
 | BE-4 | BE | Scoring harness across the full fixture set (per-field precision/recall, invented-number count = must be 0), Azure-mocked vs on-device; Carbomastic 615 is one row | BE-1, BE-2 (mocked) |
 | FE-1 | FE | Upload any PDF/image → server extract; provenance quotes in a collapsed panel under the card (card face/windows/print unchanged); loading / empty / error / rate-limited / fallback-warning states | BE-3 contract only |

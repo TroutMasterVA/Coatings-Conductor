@@ -120,6 +120,7 @@ Copy [`.env.example`](.env.example) for a commented template.
 | `AZURE_OPENAI_API_VERSION` | For Azure | API version that supports `json_schema` output and images, e.g. `2024-10-21` |
 | `AZURE_DOCINTEL_KEY` | No | Key fallback only. Prefer managed identity. |
 | `AZURE_OPENAI_API_KEY` | No | Key fallback only. Prefer managed identity. |
+| `AZURE_AUTH_MODE` | No | `identity` = managed identity only, keys never used. Default `auto` (managed identity, then key). |
 
 All Azure settings stay on the server. The browser never sees endpoints or keys.
 

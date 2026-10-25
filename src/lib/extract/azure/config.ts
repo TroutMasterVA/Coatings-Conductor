@@ -9,6 +9,8 @@ export type AzureConfig = {
   apiVersion: string;
   docintelKey?: string;
   openaiKey?: string;
+  /** AZURE_AUTH_MODE: "auto" (default: managed identity, then key) or "identity" (never a key). */
+  authMode: "auto" | "identity";
 };
 
 export const DEFAULT_DOCINTEL_MODEL = "prebuilt-layout";
@@ -95,7 +97,11 @@ export function readAzureConfig(env: Env = process.env): AzureConfig {
       "AZURE_CONFIG",
       "AZURE_OPENAI_API_VERSION is not a valid API version.",
     );
+  const mode = (val(env, "AZURE_AUTH_MODE") ?? "auto").toLowerCase();
+  if (mode !== "auto" && mode !== "identity")
+    throw new AzureExtractError("AZURE_CONFIG", "AZURE_AUTH_MODE must be 'identity' or 'auto'.");
   return {
+    authMode: mode,
     docintelEndpoint: checkAzureEndpoint(di!, "AZURE_DOCINTEL_ENDPOINT"),
     docintelModel: model,
     openaiEndpoint: checkAzureEndpoint(oa!, "AZURE_OPENAI_ENDPOINT"),
