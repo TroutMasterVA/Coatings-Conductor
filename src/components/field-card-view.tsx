@@ -1,8 +1,10 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import type { FieldCardData, SubstratePrepGate } from "@/lib/types";
 import { STEP_RAIL } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { DRAFT_BANNER } from "@/lib/extract-flags";
+import { goGateChips } from "@/components/go-gate-chips";
 
 function join(items: string[] | undefined) {
   return (items ?? []).filter(Boolean).join(" · ");
@@ -12,24 +14,102 @@ function stated(value?: string | null) {
   return Boolean(value && value.trim());
 }
 
+/** Set only on the on-screen card of an open job; print copy and closed jobs render plain text. */
+type CardEdit = ((path: string, value: string) => void) | null;
+const CardEditContext = createContext<CardEdit>(null);
+
+/**
+ * Tap / click a value to edit it in place. Enter or leaving the field saves, Esc cancels.
+ * Looks like the text it replaces; only a dotted underline on hover and a focus ring.
+ */
+function Editable({
+  path,
+  label,
+  value,
+  children,
+  className,
+}: {
+  path?: string;
+  label: string;
+  value: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  const onEdit = useContext(CardEditContext);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  if (!onEdit || !path) return <>{children}</>;
+  if (editing) {
+    const done = (save: boolean) => {
+      setEditing(false);
+      if (save) onEdit(path, draft);
+    };
+    return (
+      <input
+        autoFocus
+        aria-label={`Edit ${label}`}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            done(true);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            done(false);
+          }
+        }}
+        onBlur={() => done(true)}
+        className={cn(
+          "w-full min-w-0 rounded-sm bg-paper px-0.5 text-ink outline-none ring-2 ring-accent/50",
+          className,
+        )}
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      aria-label={`Edit ${label}: ${value.trim() ? value : "Not stated"}`}
+      onClick={() => {
+        setDraft(value);
+        setEditing(true);
+      }}
+      className={cn(
+        "-mx-0.5 cursor-text rounded-sm px-0.5 text-left decoration-dotted underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 /** Row only when the PDS stated a value — silent fields stay off the primary face. */
-function Attr({ label, value }: { label: string; value?: string | null }) {
+function Attr({ label, value, path }: { label: string; value?: string | null; path?: string }) {
   if (!stated(value)) return null;
   return (
     <div className="min-w-0 border-b border-paper-edge py-2 last:border-b-0">
       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">{label}</div>
-      <div className="mt-0.5 text-sm leading-snug text-ink">{value}</div>
+      <div className="mt-0.5 text-sm leading-snug text-ink">
+        <Editable path={path} label={label} value={value ?? ""}>
+          {value}
+        </Editable>
+      </div>
     </div>
   );
 }
 
-function Cell({ label, value }: { label: string; value?: string | null }) {
+function Cell({ label, value, path }: { label: string; value?: string | null; path?: string }) {
   const ok = stated(value);
   return (
     <div className="min-w-0">
       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-ink-muted">{label}</div>
       <div className={cn("mt-0.5 text-sm leading-snug", ok ? "text-ink" : "text-ink-muted")}>
-        {ok ? value : "Not stated"}
+        <Editable path={path} label={label} value={value ?? ""}>
+          {ok ? value : "Not stated"}
+        </Editable>
       </div>
     </div>
   );
@@ -53,27 +133,6 @@ function Section({
       </div>
     </section>
   );
-}
-
-function goGateChips(card: FieldCardData): string[] {
-  const env = card.environmentals;
-  const chips: string[] = [];
-  if (env.ambientTempMinF != null || env.ambientTempMaxF != null) {
-    chips.push(`Air ${env.ambientTempMinF ?? "—"}–${env.ambientTempMaxF ?? "—"}°F`);
-  }
-  if (env.substrateTempMinF != null || env.substrateTempMaxF != null) {
-    chips.push(`Substrate ${env.substrateTempMinF ?? "—"}–${env.substrateTempMaxF ?? "—"}°F`);
-  }
-  if (env.dewPointSpreadMinF != null) {
-    chips.push(`Dew spread ≥ ${env.dewPointSpreadMinF}°F`);
-  } else {
-    chips.push("Dew spread not stated");
-  }
-  if (env.relativeHumidityMax != null) chips.push(`RH ≤ ${env.relativeHumidityMax}%`);
-  if (env.relativeHumidityMin != null) chips.push(`RH ≥ ${env.relativeHumidityMin}%`);
-  if (env.precipitationAllowed === false) chips.push("No precipitation");
-  if (env.windMaxMph != null) chips.push(`Wind ≤ ${env.windMaxMph} mph`);
-  return chips;
 }
 
 function formatPrepGate(gate: SubstratePrepGate): string {
@@ -110,10 +169,10 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
       <div id="step-store" />
       <Section n="01" title="Store & shelf life">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Cell label="Storage" value={card.storage.temperatureRange} />
-          <Cell label="Unopened shelf" value={card.shelfLife.unopened} />
-          <Cell label="Opened" value={card.shelfLife.opened} />
-          <Cell label="Mixed / pot life" value={card.shelfLife.mixedPotLife} />
+          <Cell label="Storage" value={card.storage.temperatureRange} path="storage.temperatureRange" />
+          <Cell label="Unopened shelf" value={card.shelfLife.unopened} path="shelfLife.unopened" />
+          <Cell label="Opened" value={card.shelfLife.opened} path="shelfLife.opened" />
+          <Cell label="Mixed / pot life" value={card.shelfLife.mixedPotLife} path="shelfLife.mixedPotLife" />
         </div>
         {card.storage.conditions.length ? (
           <p className="text-sm text-ink">{join(card.storage.conditions)}</p>
@@ -145,13 +204,13 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
         <div className="grid gap-3 sm:grid-cols-2">
           <Cell label="Substrates" value={join(card.surfacePrep.substrates)} />
           <Cell label="Methods" value={join(card.surfacePrep.methods)} />
-          <Cell label="Profile" value={card.surfacePrep.profile} />
-          <Cell label="Cleanliness" value={card.surfacePrep.cleanliness} />
-          <Cell label="Moisture" value={card.surfacePrep.moisture} />
+          <Cell label="Profile" value={card.surfacePrep.profile} path="surfacePrep.profile" />
+          <Cell label="Cleanliness" value={card.surfacePrep.cleanliness} path="surfacePrep.cleanliness" />
+          <Cell label="Moisture" value={card.surfacePrep.moisture} path="surfacePrep.moisture" />
         </div>
         {(card.surfacePrep.prepGates ?? []).length ? (
           <ul className="space-y-1 text-sm">
-            {card.surfacePrep.prepGates.map((g) => (
+            {(card.surfacePrep.prepGates ?? []).map((g) => (
               <li key={`${g.family}-${g.label}`} className="flex gap-2">
                 <span className="mt-2 size-1 shrink-0 rounded-full bg-rail" />
                 <span>{formatPrepGate(g)}</span>
@@ -182,11 +241,11 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
       <div id="step-mix" />
       <Section n="05" title="Mix">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Cell label="Components" value={card.mixing.components} />
-          <Cell label="Ratio" value={card.mixing.ratio} />
-          <Cell label="Induction" value={card.mixing.inductionTime} />
-          <Cell label="Pot life" value={card.mixing.potLife} />
-          <Cell label="Thinning" value={card.mixing.thinning} />
+          <Cell label="Components" value={card.mixing.components} path="mixing.components" />
+          <Cell label="Ratio" value={card.mixing.ratio} path="mixing.ratio" />
+          <Cell label="Induction" value={card.mixing.inductionTime} path="mixing.inductionTime" />
+          <Cell label="Pot life" value={card.mixing.potLife} path="mixing.potLife" />
+          <Cell label="Thinning" value={card.mixing.thinning} path="mixing.thinning" />
         </div>
         {card.mixing.notes ? <p className="text-sm text-ink-muted">{card.mixing.notes}</p> : null}
       </Section>
@@ -195,9 +254,9 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
       <Section n="06" title="Install / apply">
         <div className="grid gap-3 sm:grid-cols-2">
           <Cell label="Methods" value={join(card.installation.methods)} />
-          <Cell label="Film" value={card.installation.filmThickness} />
-          <Cell label="Coverage" value={card.installation.coverage} />
-          <Cell label="Coats" value={card.installation.numberOfCoats} />
+          <Cell label="Film" value={card.installation.filmThickness} path="installation.filmThickness" />
+          <Cell label="Coverage" value={card.installation.coverage} path="installation.coverage" />
+          <Cell label="Coats" value={card.installation.numberOfCoats} path="installation.numberOfCoats" />
         </div>
         {card.installation.sequence.length ? (
           <ol className="space-y-1 text-sm">
@@ -238,18 +297,18 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
       <Section n="08" title="Inspection">
         <Cell label="Methods" value={join(card.inspection.methods)} />
         <Cell label="Acceptance" value={join(card.inspection.acceptance)} />
-        <Cell label="Record" value={card.inspection.documentation} />
+        <Cell label="Record" value={card.inspection.documentation} path="inspection.documentation" />
       </Section>
 
       <div id="step-cure" />
       <Section n="09" title="Cure & recoat">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Cell label="Touch" value={card.cure.touch} />
-          <Cell label="Handle" value={card.cure.handle} />
-          <Cell label="Recoat min" value={card.cure.recoatMin} />
-          <Cell label="Recoat max" value={card.cure.recoatMax} />
-          <Cell label="Full cure" value={card.cure.fullCure} />
-          <Cell label="Immersion" value={card.cure.immersionService} />
+          <Cell label="Touch" value={card.cure.touch} path="cure.touch" />
+          <Cell label="Handle" value={card.cure.handle} path="cure.handle" />
+          <Cell label="Recoat min" value={card.cure.recoatMin} path="cure.recoatMin" />
+          <Cell label="Recoat max" value={card.cure.recoatMax} path="cure.recoatMax" />
+          <Cell label="Full cure" value={card.cure.fullCure} path="cure.fullCure" />
+          <Cell label="Immersion" value={card.cure.immersionService} path="cure.immersionService" />
         </div>
         {card.cure.temperatureDependence ? (
           <p className="text-sm text-ink-muted">{card.cure.temperatureDependence}</p>
@@ -259,7 +318,7 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
       <div id="step-safe" />
       <Section n="10" title="Safety">
         <Cell label="PPE" value={join(card.safety.ppe)} />
-        <Cell label="Ventilation" value={card.safety.ventilation} />
+        <Cell label="Ventilation" value={card.safety.ventilation} path="safety.ventilation" />
         <Cell label="Hazards" value={join(card.safety.hazards)} />
       </Section>
     </div>
@@ -271,11 +330,17 @@ export function FieldCardView({
   zip,
   headline,
   mitigations,
+  onEditField,
+  draft,
 }: {
   card: FieldCardData;
   zip?: string;
   headline?: string;
   mitigations?: string[];
+  /** Tap-to-edit (FE-5). Omit to render read-only (closed job). */
+  onEditField?: (path: string, value: string) => void;
+  /** On-device read: one banner line, on screen and in print (LEAD exception, FE-3). */
+  draft?: boolean;
 }) {
   const mid = "·";
   const envGates = goGateChips(card);
@@ -286,6 +351,7 @@ export function FieldCardView({
     .join("; ");
 
   return (
+    <CardEditContext.Provider value={onEditField ?? null}>
     <article
       id="field-card-print"
       className="print-sheet overflow-hidden rounded-xl bg-paper text-ink shadow-[0_0_0_1px_rgba(22,24,28,0.08),0_24px_60px_-32px_rgba(0,0,0,0.5)]"
@@ -298,7 +364,9 @@ export function FieldCardView({
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rail">{`Coatings Conductor ${mid} job card`}</p>
               <h2 className="mt-2 font-sans text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-3xl">
-                {card.product.name || "Unnamed product"}
+                <Editable path="product.name" label="Product name" value={card.product.name ?? ""}>
+                  {card.product.name || "Unnamed product"}
+                </Editable>
               </h2>
               <p className="mt-1 text-sm text-ink-muted">
                 {[card.product.manufacturer, card.product.productType, card.product.service].filter(Boolean).join(` ${mid} `) ||
@@ -310,6 +378,16 @@ export function FieldCardView({
               {mix ? <span className="font-mono text-xs text-ink-muted">{mix}</span> : null}
             </div>
           </header>
+
+          {draft ? (
+            <p
+              role="status"
+              data-testid="draft-banner"
+              className="mt-3 rounded-md bg-nogo-soft px-3 py-2 text-sm font-semibold text-nogo"
+            >
+              {DRAFT_BANNER}
+            </p>
+          ) : null}
 
           <dl className="print-only mt-3 space-y-1 border-b border-rail/80 pb-3 text-xs text-ink">
             <div>
@@ -345,7 +423,7 @@ export function FieldCardView({
           <div className="mt-4 space-y-1">
             <Attr label="Substrates" value={join(card.surfacePrep.substrates)} />
             <Attr label="Mix" value={mix} />
-            <Attr label="Film" value={card.installation.filmThickness} />
+            <Attr label="Film" value={card.installation.filmThickness} path="installation.filmThickness" />
             <Attr label="Recoat" value={recoat || null} />
           </div>
 
@@ -388,11 +466,15 @@ export function FieldCardView({
 
           <div className="print-only mt-4 border-t border-rail/80 pt-2">
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-muted">Full sheet</p>
-            <FullSheetDump card={card} />
+            {/* Print copy: plain text, never edit controls. */}
+            <CardEditContext.Provider value={null}>
+              <FullSheetDump card={card} />
+            </CardEditContext.Provider>
           </div>
         </div>
       </div>
     </article>
+    </CardEditContext.Provider>
   );
 }
 

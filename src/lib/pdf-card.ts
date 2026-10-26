@@ -1,5 +1,7 @@
+import { formatTempRange } from "./temp-range.ts";
 import { mitigationById, substrateById, type SiteContext } from "./mitigations";
 import type { DayWindow, FieldCardData, ForecastBundle } from "./types";
+import { DRAFT_BANNER, NO_FLAGS, showWindows, windowHeadline, type ExtractFlags } from "./extract-flags.ts";
 
 function wrap(doc: import("jspdf").jsPDF, text: string, maxWidth: number): string[] {
   const t = (text || "\u2014").replace(/\s+/g, " ").trim();
@@ -23,6 +25,7 @@ export async function downloadFieldCard(
   forecast: ForecastBundle | null,
   site?: SiteContext,
   jobZip?: string,
+  flags: ExtractFlags = NO_FLAGS,
 ) {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "letter", orientation: "portrait" });
@@ -53,6 +56,18 @@ export async function downloadFieldCard(
   doc.setFontSize(8);
   doc.text(card.product.revision || "Verify against current PDS", pageW - margin, y, { align: "right" });
 
+  if (flags.draft) {
+    // One banner line (FE-3): same red/amber alert colors as the screen card.
+    y += 10;
+    doc.setFillColor(237, 213, 210);
+    doc.rect(margin, y, width, 20, "F");
+    doc.setTextColor(163, 61, 53);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text(DRAFT_BANNER, margin + 8, y + 13.5);
+    y += 20;
+  }
+
   y += 22;
   doc.setTextColor(ink.r, ink.g, ink.b);
   doc.setFont("helvetica", "bold");
@@ -71,7 +86,7 @@ export async function downloadFieldCard(
   y += 18;
 
   const zipLine = (jobZip || forecast?.zip || "").trim() || "Not stated";
-  const headline = (forecast?.headline || "").trim() || "Not stated";
+  const headline = (windowHeadline(forecast?.headline, flags) || "").trim() || "Not stated";
   const mitLine = selectedMitigationLabels(site).join(", ") || "None selected";
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
@@ -89,10 +104,10 @@ export async function downloadFieldCard(
   const env = card.environmentals;
   const envBits = [
     env.ambientTempMinF != null || env.ambientTempMaxF != null
-      ? `Air ${env.ambientTempMinF ?? "\u2014"}\u2013${env.ambientTempMaxF ?? "\u2014"}\u00b0F`
+      ? `Air ${formatTempRange(env.ambientTempMinF, env.ambientTempMaxF)}`
       : "",
     env.substrateTempMinF != null || env.substrateTempMaxF != null
-      ? `Substrate ${env.substrateTempMinF ?? "\u2014"}\u2013${env.substrateTempMaxF ?? "\u2014"}\u00b0F`
+      ? `Substrate ${formatTempRange(env.substrateTempMinF, env.substrateTempMaxF)}`
       : "",
     env.dewPointSpreadMinF != null ? `Dew spread \u2265 ${env.dewPointSpreadMinF}\u00b0F` : "",
     env.relativeHumidityMax != null ? `RH \u2264 ${env.relativeHumidityMax}%` : "",
@@ -237,7 +252,7 @@ export async function downloadFieldCard(
 
   footer(doc, card, 1);
 
-  if (forecast) {
+  if (forecast && showWindows(true, flags)) {
     doc.addPage();
     doc.setFillColor(paper.r, paper.g, paper.b);
     doc.rect(0, 0, pageW, doc.internal.pageSize.getHeight(), "F");

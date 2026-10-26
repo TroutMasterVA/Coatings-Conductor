@@ -1,0 +1,10 @@
+{
+ "properties": {
+  "gridId": "HGX",
+  "gridX": 63,
+  "gridY": 95,
+  "forecastGridData": "https://api.weather.gov/gridpoints/HGX/63,95",
+  "observationStations": "https://api.weather.gov/gridpoints/HGX/63,95/stations",
+  "timeZone": "America/Chicago"
+ }
+}
