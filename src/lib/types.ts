@@ -133,6 +133,8 @@ export type HourWindow = {
   rh: number | null;
   dewpointF: number | null;
   spreadF: number | null;
+  /** What the spread used: air, or the (colder) surface estimate. */
+  spreadBasis?: "air" | "est. surface";
   pop: number | null;
   precipIn: number | null;
   windMph: number | null;
@@ -150,6 +152,8 @@ export type DayWindow = {
   goHours: number;
   cautionHours: number;
   nogoHours: number;
+  /** Scored work-window hours behind the day verdict (counts are out of this). */
+  workHours?: number;
   bestRange: string | null;
   limiting: string[];
   hours: HourWindow[];

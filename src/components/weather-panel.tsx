@@ -20,7 +20,7 @@ import {
   type SiteContext,
   type SubstrateId,
 } from "@/lib/mitigations";
-import { detectLimiters, goHourCount, unlockedGoHours } from "@/lib/score-windows";
+import { dayCountLabel, detectLimiters, goHourCount, unlockedGoHours } from "@/lib/score-windows";
 import { BACKUP_LABEL, type HourCheck, type LimitCheck, type SheetWindow } from "@/lib/noaa";
 import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -70,7 +70,7 @@ function SheetLimitChecks({ sheet, timezone, night }: { sheet: SheetWindow; time
           <li key={h.startIso}>
             <span className="font-mono text-fg">{hourText(h.startIso, timezone)}</span>{" "}
             <Badge variant={h.verdict === "go" ? "go" : h.verdict === "nogo" ? "nogo" : "default"}>{VERDICT_TEXT[h.verdict]}</Badge>{" "}
-            <span className="text-fg">{hourReadings(h.hour)}</span>
+            <span className="text-fg">{hourReadings(h.hour, h.checks.find((c) => c.name === "Dew-point spread"))}</span>
             {h.verdict === "outside" ? null : (
               <span className="text-muted">
                 {" · "}
@@ -135,7 +135,7 @@ function DayCard({ day, night }: { day: DayWindow; night?: boolean }) {
       </div>
       <p className="mt-2 font-mono text-sm text-fg">{day.bestRange ?? "No window"}</p>
       <p className="mt-0.5 text-xs text-muted">
-        {day.goHours}h go · {day.cautionHours}h caution
+        {dayCountLabel(day)}
       </p>
       {day.limiting[0] ? <p className="mt-1 line-clamp-2 text-xs text-muted">{day.limiting[0]}</p> : null}
       <div className="mt-3">

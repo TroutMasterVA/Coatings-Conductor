@@ -58,7 +58,9 @@ describe("hourly list label states the range actually shown", () => {
     assert.equal(shown.length, 16);
   });
   it("each line carries the fetched RH %, air temp and dew spread", () => {
-    assert.equal(hourReadings({ tempF: 62, rh: 71, dewpointF: 52.5 }), "Air 62°F · RH 71% · dew spread 9.5°F");
+    // Intended (Oct 26): the spread now names its basis.
+    assert.equal(hourReadings({ tempF: 62, rh: 71, dewpointF: 52.5 }), "Air 62°F · RH 71% · dew spread 9.5°F (air)");
     assert.equal(hourReadings({ tempF: null, rh: null, dewpointF: 50 }), "Air —°F · RH —% · dew spread —°F");
+    assert.equal(hourReadings({ tempF: 43, rh: 100, dewpointF: 43 }, { spreadF: 0, basis: "air" }), "Air 43°F · RH 100% · dew spread 0°F (air)");
   });
 });

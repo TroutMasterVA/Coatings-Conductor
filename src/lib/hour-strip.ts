@@ -50,12 +50,20 @@ export function hourListLabel(isos: string[], timeZone: string, night?: boolean)
   return `Showing ${hourText(isos[0]!, timeZone)}–${hourText(end, timeZone)} (${isos.length} h) · GO/NO-GO only inside the work window, ${win}`;
 }
 
-/** Readings already in the fetched forecast hour: air temp, RH %, air − dew-point spread. */
-export function hourReadings(h: { tempF: number | null; rh: number | null; dewpointF: number | null }): string {
-  const spread = h.tempF != null && h.dewpointF != null ? Math.round((h.tempF - h.dewpointF) * 10) / 10 : null;
+/**
+ * Readings already in the fetched forecast hour: air temp, RH %, and the dew-point spread the
+ * verdict USED with its basis (pass the dew check's spread/basis); else air − dew point.
+ */
+export function hourReadings(
+  h: { tempF: number | null; rh: number | null; dewpointF: number | null },
+  used?: { spreadF?: number; basis?: string },
+): string {
+  const air = h.tempF != null && h.dewpointF != null ? Math.round((h.tempF - h.dewpointF) * 10) / 10 : null;
+  const spread = used?.spreadF ?? air;
+  const basis = used?.spreadF != null ? used.basis ?? "air" : "air";
   return [
     `Air ${h.tempF ?? "—"}°F`,
     `RH ${h.rh ?? "—"}%`,
-    `dew spread ${spread ?? "—"}°F`,
+    `dew spread ${spread ?? "—"}°F${spread != null ? ` (${basis})` : ""}`,
   ].join(" · ");
 }

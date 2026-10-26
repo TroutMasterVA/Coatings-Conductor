@@ -12,7 +12,7 @@
 import { fetchWithTimeout, type FetchLike, WEATHER_TIMEOUT_MS } from "./forecast-sources.ts";
 import type { Environmentals, ForecastBundle } from "./types";
 import type { SiteContext } from "./mitigations";
-import { NOT_STATED_LIMIT_BLOCKS_GO, WIND_ADVISORY, notStatedFlag, workWindowCheck, type ScoreOptions } from "./score-windows.ts";
+import { NOT_STATED_LIMIT_BLOCKS_GO, WIND_ADVISORY, notStatedFlag, workWindowCheck, condensationRisk, type ScoreOptions } from "./score-windows.ts";
 
 /** Surface temperature for the checks: a gauge reading, or the sun-model estimate (always labelled). */
 export type SurfaceInput = { valueF: number; kind: "measured" | "estimate" };
@@ -54,7 +54,8 @@ export type WxNow = {
 };
 
 export type CheckStatus = "pass" | "fail" | "unavailable" | "not-stated";
-export type LimitCheck = { name: string; status: CheckStatus; reason: string };
+export type LimitCheck = { name: string; status: CheckStatus; reason: string; spreadF?: number; basis?: SpreadBasis };
+export type SpreadBasis = "air" | "est. surface" | "measured surface";
 export type HourVerdict = "go" | "nogo" | "unavailable" | "outside";
 export type HourCheck = { startIso: string; verdict: HourVerdict; checks: LimitCheck[]; hour: WxHour };
 
@@ -187,22 +188,44 @@ export function checkHour(
   } else if (surfaceTempF == null) {
     checks.push({ name: "Surface temp", status: "unavailable", reason: "Surface temp unknown: not measured, not assumed. Measure it on site." });
   } else {
-    range(`Surface temp (${SURFACE_LABEL[surface!.kind]})`, surfaceTempF, env.substrateTempMinF, env.substrateTempMaxF, "°F");
+    // An estimate may only make the verdict stricter: min vs the colder of air/estimate, max vs
+    // the warmer. A measured surface is used as-is.
+    const est = surface!.kind === "estimate" && hour.tempF != null;
+    const cold = est ? Math.min(hour.tempF!, surfaceTempF) : surfaceTempF;
+    const warm = est ? Math.max(hour.tempF!, surfaceTempF) : surfaceTempF;
+    const label = `Surface temp (${SURFACE_LABEL[surface!.kind]})`;
+    const lo = env.substrateTempMinF, hi = env.substrateTempMaxF;
+    if (lo != null && cold < lo) {
+      checks.push({ name: label, status: "fail", reason: `${label} ${cold}°F${est && cold !== surfaceTempF ? " (air, colder than estimate)" : ""} below sheet min ${lo}°F` });
+    } else if (hi != null && warm > hi) {
+      checks.push({ name: label, status: "fail", reason: `${label} ${warm}°F${est && warm !== surfaceTempF ? " (air, warmer than estimate)" : ""} above sheet max ${hi}°F` });
+    } else {
+      const lim = [lo != null ? `min ${lo}°F` : "", hi != null ? `max ${hi}°F` : ""].filter(Boolean).join(", ");
+      const shown = cold === warm ? `${cold}°F` : `${cold}–${warm}°F (air and estimate)`;
+      checks.push({ name: label, status: "pass", reason: `${label} ${shown} within sheet ${lim}` });
+    }
   }
   range("RH", hour.rh, null, env.relativeHumidityMax, "%");
   const stated = env.dewPointSpreadMinF != null;
   const margin = stated ? env.dewPointSpreadMinF! : SSPC_DEW_DEFAULT_F;
   const marginLabel = stated ? `sheet min ${margin}°F` : `${margin}°F ${SSPC_DEW_LABEL}`;
-  const surfaceOrAir = surfaceTempF ?? hour.tempF;
+  // Dew uses the colder of air and an estimated surface (the smaller spread); measured as-is.
+  const estimate = surface?.kind === "estimate";
+  const surfaceOrAir =
+    surfaceTempF == null ? hour.tempF : estimate && hour.tempF != null ? Math.min(hour.tempF, surfaceTempF) : surfaceTempF;
+  const basis: SpreadBasis =
+    surface == null || surfaceTempF == null ? "air" : surface.kind === "measured" ? "measured surface" : surfaceOrAir === surfaceTempF ? "est. surface" : "air";
   if (surfaceOrAir == null || hour.dewpointF == null) {
     checks.push({ name: "Dew-point spread", status: "unavailable", reason: "Dew-point spread: no forecast value" });
   } else {
     const spread = r1(surfaceOrAir - hour.dewpointF);
-    const basis = surface == null ? "air" : `surface, ${SURFACE_LABEL[surface.kind]}`;
+    const ok = spread >= margin;
     checks.push({
       name: "Dew-point spread",
-      status: spread >= margin ? "pass" : "fail",
-      reason: `Dew-point spread ${spread}°F (${basis} − dew point) ${spread >= margin ? "meets" : "below"} ${marginLabel}`,
+      status: ok ? "pass" : "fail",
+      reason: `${ok ? "" : `${condensationRisk(spread)} · `}Dew-point spread ${spread}°F (${basis} − dew point) ${ok ? "meets" : "below"} ${marginLabel}`,
+      spreadF: spread,
+      basis,
     });
   }
   if (env.windMaxMph == null) {

@@ -139,6 +139,18 @@ function underLimit(value: number, min: number, axis: number, unitSoft = 8): "ha
 }
 
 /** Why weather scoring is paused when a card's temperature limits have no verbatim quote. */
+/** Plain-words NO-GO reason when the spread used is under the dew margin. */
+export function condensationRisk(spreadF: number): string {
+  return `condensation risk: surface within ${Math.max(0, spreadF)}°F of dew point`;
+}
+
+/** Day card count line, from the same scored work-window hours as the day verdict. */
+export function dayCountLabel(day: Pick<DayWindow, "status" | "goHours" | "cautionHours" | "workHours">): string {
+  const work = day.workHours ?? 0;
+  const head = day.status === "nogo" ? "NO-GO · " : day.status === "go" ? "GO · " : "";
+  return `${head}${day.goHours} of ${work} work hours GO · ${day.cautionHours}h caution`;
+}
+
 export const TEMPS_UNVERIFIED_REASON = "temperature limits not verified on the sheet";
 
 
@@ -309,25 +321,30 @@ export function scoreHour(
     }
   }
 
-  if (substrateF != null && subMin != null) {
-    const hit = underLimit(substrateF, subMin, cal.thermal);
+  // Surface is an ESTIMATE here (never measured): it may only make a verdict stricter.
+  // Surface min uses the colder of air/estimate, surface max the warmer, dew the colder.
+  const surfCold = substrateF != null && air != null ? Math.min(air, substrateF) : substrateF;
+  const surfWarm = substrateF != null && air != null ? Math.max(air, substrateF) : substrateF;
+  const surfBasis = (v: number | null) => (v != null && v === air && v !== substrateF ? "air" : "est. surface");
+  if (surfCold != null && subMin != null) {
+    const hit = underLimit(surfCold, subMin, cal.thermal);
     if (hit === "hard") {
-      reasons.push(`${sub.label} ${substrateF}°F below min ${subMin}°F`);
+      reasons.push(`${sub.label} ${surfCold}°F (${surfBasis(surfCold)}) below min ${subMin}°F`);
       hard += 1;
     } else if (hit === "soft") {
-      reasons.push(`${sub.label} ${substrateF}°F near min`);
+      reasons.push(`${sub.label} ${surfCold}°F (${surfBasis(surfCold)}) near min`);
       soft += 1;
     }
   }
-  if (substrateF != null && subMax != null) {
-    const hit = overLimit(substrateF, subMax, cal.thermal);
+  if (surfWarm != null && subMax != null) {
+    const hit = overLimit(surfWarm, subMax, cal.thermal);
     if (hit === "hard") {
       reasons.push(
-        `${sub.label} ${substrateF}°F > max ${subMax}°F (air ${air ?? "—"}° + sun ${round1(Math.max(0, solarGain))}°)`,
+        `${sub.label} ${surfWarm}°F > max ${subMax}°F (air ${air ?? "—"}° + sun ${round1(Math.max(0, solarGain))}°)`,
       );
       hard += 1;
     } else if (hit === "soft") {
-      reasons.push(`${sub.label} ${substrateF}°F near max`);
+      reasons.push(`${sub.label} ${surfWarm}°F near max`);
       soft += 1;
     }
   }
@@ -349,12 +366,8 @@ export function scoreHour(
     }
   }
 
-  const spread =
-    substrateF != null && dew != null
-      ? round1(substrateF - dew)
-      : air != null && dew != null
-        ? round1(air - dew)
-        : null;
+  const spread = surfCold != null && dew != null ? round1(surfCold - dew) : air != null && dew != null ? round1(air - dew) : null;
+  const spreadBasis = surfCold != null ? surfBasis(surfCold) : "air";
   // Dew margin: the sheet's, else 5°F labelled as the SSPC industry default (not from the sheet).
   const dewMin = env.dewPointSpreadMinF ?? DEW_SPREAD_DEFAULT_F;
   const dewLabel = env.dewPointSpreadMinF != null ? `${dewMin}°F` : `${dewMin}°F (${DEW_SPREAD_DEFAULT_LABEL})`;
@@ -362,7 +375,7 @@ export function scoreHour(
   if (spread != null && !skipDew) {
     const softPad = lerp(4, 1.5, cal.moisture);
     if (spread < dewMin) {
-      reasons.push(`Dew spread ${spread}°F < ${dewLabel}`);
+      reasons.push(`${condensationRisk(spread)} · Dew spread ${spread}°F < ${dewLabel} (${spreadBasis})`);
       hard += 1;
     } else if (spread < dewMin + softPad) {
       reasons.push(`Dew spread ${spread}°F is thin`);
@@ -472,6 +485,7 @@ export function scoreHour(
     rh: raw.rh,
     dewpointF: raw.dewpointF,
     spreadF: spread,
+    spreadBasis: spread != null ? spreadBasis : undefined,
     pop: raw.pop,
     precipIn: raw.precipIn,
     windMph: raw.windMph,
@@ -555,13 +569,15 @@ export function bundleDays(
   const wrapNight = Boolean(site?.mitigations.includes("night_shift"));
   const days: DayWindow[] = [];
   for (const [date, list] of byDate) {
-    const goHours = list.filter((h) => h.status === "go" && inWorkWindow(h.hour, wrapNight)).length;
-    const cautionHours = list.filter((h) => h.status === "caution").length;
-    const nogoHours = list.filter((h) => h.status === "nogo").length;
+    // Counts come from the SAME scored work-window hours as the day verdict (QA: "NOGO · 13h go").
     // Strict day rule (QA critical): the scored hours are the work-shift hours. Any failed hour
     // makes the day NO-GO; any unavailable / Not stated or caution hour means not GO; GO only
     // when every scored hour passes.
     const scoredHours = list.filter((h) => h.inShift !== false && inWorkWindow(h.hour, wrapNight));
+    const goHours = scoredHours.filter((h) => h.status === "go").length;
+    const cautionHours = scoredHours.filter((h) => h.status === "caution").length;
+    const nogoHours = scoredHours.filter((h) => h.status === "nogo").length;
+    const workHours = scoredHours.length;
     let status: WindowStatus = "unknown";
     if (scoredHours.some((h) => h.status === "nogo")) status = "nogo";
     else if (scoredHours.length && scoredHours.every((h) => h.status === "go")) status = "go";
@@ -585,6 +601,7 @@ export function bundleDays(
       dateLabel: list[0]?.dateLabel ?? date,
       status,
       goHours,
+      workHours,
       cautionHours,
       nogoHours,
       bestRange: bestRange(list, wrapNight),
