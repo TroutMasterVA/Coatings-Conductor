@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   appVersionFromEnv,
+  buildIdFromEnv,
   checkHealth,
   extractProviderFromEnv,
   healthResponse,
@@ -30,6 +31,7 @@ describe("health check", () => {
     assert.deepEqual(res.body, {
       status: "ok",
       db: "ok",
+      build: "dev",
     });
   });
 
@@ -79,8 +81,10 @@ describe("health check", () => {
     assert.equal(extractProviderFromEnv(AZURE_ENV), "azure");
 
     const res = await checkHealth({ dbSource: "postgres", env: { ...AZURE_ENV, GITHUB_SHA: "deadbeef1234" }, ping: async () => {} });
-    // SEC: public body is status words only — no commit id, DB type or reader provider.
-    assert.deepEqual(Object.keys(res.body).sort(), ["db", "status"]);
+    // SEC: public body is status words plus a 7-char build id only — no full commit id, DB type
+    // or reader provider. (Intended: PO-approved short build id, Oct 26.)
+    assert.deepEqual(Object.keys(res.body).sort(), ["build", "db", "status"]);
+    assert.equal(res.body.build, "deadbee");
     const text = JSON.stringify(res.body);
     for (const value of Object.values(AZURE_ENV)) {
       assert.ok(!text.includes(value), `health body leaked ${value}`);
@@ -102,11 +106,23 @@ describe("health check", () => {
       body: {
         status: "degraded",
         db: "down",
+        build: "dev",
       },
     });
     assert.equal(res.status, 503);
     assert.equal(res.headers.get("cache-control"), "no-store");
     assert.match(res.headers.get("content-type") ?? "", /application\/json/);
     assert.equal((await res.json()).db, "down");
+  });
+
+  it("health includes a short build id from the deploy commit, else 'dev'", async () => {
+    const sha = "f8f6228b463ad48b3a655b69b6bc166b0199cde6";
+    const res = await checkHealth({ dbSource: "postgres", env: { VERCEL_GIT_COMMIT_SHA: sha }, ping: async () => {} });
+    assert.equal(res.body.build, "f8f6228");
+    assert.ok(!JSON.stringify(res.body).includes(sha));
+    assert.equal(buildIdFromEnv({}), "dev");
+    assert.equal(buildIdFromEnv({ VERCEL_GIT_COMMIT_SHA: "<script>" }), "dev");
+    const down = await checkHealth({ dbSource: "postgres", env: { GITHUB_SHA: sha }, ping: async () => { throw new Error("x"); } });
+    assert.equal(down.body.build, "f8f6228");
   });
 });

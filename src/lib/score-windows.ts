@@ -330,6 +330,11 @@ export function scoreHour(
     }
   }
 
+  if (env.relativeHumidityMax == null && !skipRhMax) {
+    // Middle path: an unstated RH limit doesn't block; GO carries the check-the-sheet flag.
+    if (notStatedBlocks) unavailable.push("Max RH: Not stated");
+    else notStatedNotes.push(notStatedFlag("max RH"));
+  }
   if (rh == null && env.relativeHumidityMax != null && !skipRhMax) unavailable.push("RH unavailable");
   if (rh != null && env.relativeHumidityMax != null && !skipRhMax) {
     const hit = overLimit(rh, env.relativeHumidityMax, cal.moisture, 6);

@@ -120,12 +120,13 @@ function hasNumber(haystack: string, forms: string[]): boolean {
 function hasTemperature(haystack: string, forms: string[]): boolean {
   const end = String.raw`(?:\s*(?:-|–|to)\s*-?\d+(?:\.\d+)?)?\s*(?:°|º|˚|deg|[FC]\b)`;
   const start = String.raw`(?:\d+(?:\.\d+)?\s*°?\s*[FC]?\s*(?:-|–|to)\s*)?`;
-  if (
-    forms.some((f) =>
-      new RegExp(String.raw`(^|[^\d.])${start}${f.replace(".", "\\.")}${end}`, "i").test(haystack),
-    )
-  )
-    return true;
+  for (const f of forms) {
+    const re = new RegExp(String.raw`(^|[^\d.])(${start})(${f.replace(".", "\\.")})${end}`, "gi");
+    for (const m of haystack.matchAll(re)) {
+      const at = m.index! + m[1]!.length + m[2]!.length;
+      if (!isHeaderTemp(haystack, at)) return true;
+    }
+  }
   // Table row under a unit column header: "˚F ˚C air and surface temp 20 to 120 -7 to 49".
   // The °F header, then the row label (words only), then the row's own °F cell, whole-number
   // matched. A header with no row label and cell after it never counts.
@@ -142,9 +143,53 @@ export function quoteCoversNumbers(path: string, value: string | number, quote: 
   // A temperature needs its number printed AS a temperature (unit after it or after its range end),
   // and a dew margin needs "dew" on the line: "DFT: 5-7 mils" never backs a 5°F dew margin.
   if (temp && /dewPointSpreadMinF$/.test(path) && !/dew/i.test(quote)) return false;
-  return numbersIn(value).every((n) =>
+  const nums = numbersIn(value);
+  // The quote must state the value as the same KIND of quantity: a % limit next to "%"/RH,
+  // a duration next to a time unit. "40°-95°F" never backs "RH ≤ 95%".
+  if (PERCENT_PATH.test(path) && !nums.every((n) => hasPercent(quote, n))) return false;
+  if (TIME_PATH.test(path) && nums.length && !hasTimeUnit(quote, nums[0]!)) return false;
+  return nums.every((n) =>
     temp ? hasTemperature(quote, numberForms(path, n)) : hasNumber(quote, numberForms(path, n)),
   );
+}
+
+const PERCENT_PATH = /relativeHumidity(Max|Min)$/;
+const TIME_PATH = /(potLife|recoatMin|recoatMax|inductionTime|\.touch|\.handle|mixedPotLife)$/;
+
+/** "85%", "85 %", "RH 85", "85% RH", "relative humidity: 85 maximum" (adjacent, same row). */
+function hasPercent(quote: string, n: string): boolean {
+  const f = n.replace(".", "\\.");
+  return (
+    new RegExp(String.raw`(?<![\d.])(?:\d+(?:\.\d+)?\s*(?:-|–|to)\s*)?${f}\s*%`).test(quote) ||
+    new RegExp(String.raw`\b(?:RH|relative\s+humidity)\b\s*[:≤<]?\s*(?:max(?:imum)?\.?\s*)?(?<![\d.])${f}(?![\d.]|\s*[°˚º]|\s*[FC]\b)`, "i").test(quote)
+  );
+}
+
+/** "4 hours", "2-4 hrs", "30 min", "7 days": the number (or its range) followed by a time unit. */
+function hasTimeUnit(quote: string, n: string): boolean {
+  const f = n.replace(".", "\\.");
+  return new RegExp(
+    String.raw`(?<![\d.])${f}[½¼¾]?(?:\s*(?:-|–|to)\s*\d+(?:\.\d+)?[½¼¾]?)?\s*(?:hours?|hrs?\.?|h\b|minutes?|mins?\.?|days?|d\b|weeks?|wks?|months?|years?|yrs?)`,
+    "i",
+  ).test(quote);
+}
+
+const T_TOKEN = String.raw`-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]?(?:\s*\(\s*-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]\s*\))?`;
+
+/**
+ * A temperature at `idx` that is a column header, not a limit: "@"-prefixed ("@50°F @77°F"),
+ * or inside a run of 2+ temperatures with no row label before the run.
+ */
+function isHeaderTemp(text: string, idx: number): boolean {
+  if (/@\s*$/.test(text.slice(Math.max(0, idx - 3), idx))) return true;
+  const run = new RegExp(String.raw`(?:${T_TOKEN}\s+)+${T_TOKEN}`, "gi");
+  for (const m of text.matchAll(run)) {
+    if (idx < m.index! || idx >= m.index! + m[0].length) continue;
+    const before = text.slice(0, m.index!).trimEnd();
+    // A row label (a word, optionally with ':' or '*') must sit right before the run.
+    return !/[A-Za-z][A-Za-z*)]*:?$/.test(before);
+  }
+  return false;
 }
 
 /** Spaces, dash styles and degree glyphs normalized before the number check. */

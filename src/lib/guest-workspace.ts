@@ -100,9 +100,14 @@ export function claimPromptText(n: number, names: string[] = []): string {
 export const CLAIM_DONT_ASK_KEY = "fieldcard.guestClaim.dontAsk.v1";
 export type ClaimChoice = "move" | "not-now" | "dont-ask";
 
-export function guestClaimSuppressed(): boolean {
+/** The flag is per account: one user's "don't ask again" never silences the prompt for another. */
+export function claimDontAskKey(accountId: string): string {
+  return `${CLAIM_DONT_ASK_KEY}:${accountId}`;
+}
+
+export function guestClaimSuppressed(accountId: string): boolean {
   try {
-    return typeof window !== "undefined" && localStorage.getItem(CLAIM_DONT_ASK_KEY) === "1";
+    return typeof window !== "undefined" && localStorage.getItem(claimDontAskKey(accountId)) === "1";
   } catch {
     return false;
   }
@@ -132,15 +137,16 @@ export type ClaimResult = { outcome: "declined" | "suppressed" | "empty" | "impo
 export async function claimGuestJobs(
   confirm: (n: number, names: string[]) => boolean | ClaimChoice | Promise<boolean | ClaimChoice>,
   importer: GuestImporter = importGuestWorkspace,
+  accountId = "",
 ): Promise<ClaimResult> {
   const dump = read();
   const n = dump.projects.length;
   if (n === 0) return { outcome: "empty", imported: 0, kept: 0 };
-  if (guestClaimSuppressed()) return { outcome: "suppressed", imported: 0, kept: n };
+  if (accountId && guestClaimSuppressed(accountId)) return { outcome: "suppressed", imported: 0, kept: n };
   const choice = await confirm(n, dump.projects.map((p) => p.name));
   if (choice === "dont-ask") {
     // Imports nothing; device jobs stay hidden while signed in; this device is not asked again.
-    localStorage.setItem(CLAIM_DONT_ASK_KEY, "1");
+    if (accountId) localStorage.setItem(claimDontAskKey(accountId), "1");
     return { outcome: "declined", imported: 0, kept: n };
   }
   if (choice !== true && choice !== "move") return { outcome: "declined", imported: 0, kept: n };

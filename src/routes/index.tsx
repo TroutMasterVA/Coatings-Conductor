@@ -316,6 +316,8 @@ function App({ user }: { user: AppUser | null }) {
               : window.confirm("Not now / don't ask again on this device? OK = don't ask again, Cancel = not now.")
                 ? "dont-ask"
                 : "not-now",
+            undefined,
+            user?.id ?? "",
           );
           if (cancelled) return;
           if (claim.outcome === "imported") toast.success(`Moved ${claim.imported} job(s) from this device into your account.`);

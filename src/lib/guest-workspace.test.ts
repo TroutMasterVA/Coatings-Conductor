@@ -61,20 +61,32 @@ describe("guest jobs vs a signed-in list (QA item 4 / SEC HIGH)", () => {
     );
     assert.match(gw.claimPromptText(5, ["a", "b", "c", "d", "e"]), /\(a, b, c, \+2 more\)/);
   });
-  it("'don't ask again' sets the device flag, imports nothing, and suppresses the prompt next time", async () => {
+  it("'don't ask again' sets the flag for THIS account, imports nothing, and suppresses the prompt next time", async () => {
     gw.guestCreateProject("Guest tank", "22202");
     let imported = 0;
     let asked = 0;
     const importer = async () => (imported++, { imported: 1, skipped: false, importedIds: [], customOk: true });
-    const r = await gw.claimGuestJobs(() => (asked++, "dont-ask" as const), importer);
+    // Intended: the flag is keyed per account (was one flag for the whole browser).
+    const r = await gw.claimGuestJobs(() => (asked++, "dont-ask" as const), importer, "user-a");
     assert.equal(r.outcome, "declined");
-    assert.equal(mem.get(gw.CLAIM_DONT_ASK_KEY), "1");
-    const again = await gw.claimGuestJobs(() => (asked++, "move" as const), importer);
+    assert.equal(mem.get(gw.claimDontAskKey("user-a")), "1");
+    assert.equal(mem.get(gw.CLAIM_DONT_ASK_KEY), undefined);
+    const again = await gw.claimGuestJobs(() => (asked++, "move" as const), importer, "user-a");
     assert.equal(again.outcome, "suppressed");
     assert.equal(asked, 1);
     assert.equal(imported, 0);
     assert.equal(gw.guestJobCount(), 1);
     assert.deepEqual(gw.signedInJobList([{ id: "srv" }]).map((p) => p.id), ["srv"]);
+  });
+  it("one account's 'don't ask again' never silences the prompt for another account", async () => {
+    gw.guestCreateProject("Guest tank", "22202");
+    await gw.claimGuestJobs(() => "dont-ask" as const, async () => ({ imported: 0, skipped: false, importedIds: [], customOk: true }), "user-a");
+    let askedB = 0;
+    const r = await gw.claimGuestJobs(() => (askedB++, "not-now" as const), async () => ({ imported: 0, skipped: false, importedIds: [], customOk: true }), "user-b");
+    assert.equal(askedB, 1);
+    assert.equal(r.outcome, "declined");
+    assert.equal(gw.guestClaimSuppressed("user-b"), false);
+    assert.equal(gw.guestClaimSuppressed("user-a"), true);
   });
   it("declining imports nothing and leaves the device copy", async () => {
     gw.guestCreateProject("Guest tank", "22202");

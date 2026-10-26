@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
 import { Check, CloudSun, Loader2, MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -84,7 +85,7 @@ function SheetLimitChecks({ sheet, timezone }: { sheet: SheetWindow; timezone: s
 }
 
 function HourStrip({ hours, night }: { hours: HourWindow[]; night?: boolean }) {
-  const usable = night ? hours : hours.filter((h) => h.hour >= 5 && h.hour <= 20);
+  const usable = stripHours(hours, night);
   const [tip, setTip] = useState<HourWindow | null>(null);
   return (
     <div className="relative">
@@ -106,7 +107,7 @@ function HourStrip({ hours, night }: { hours: HourWindow[]; night?: boolean }) {
       <div className="mt-1 flex justify-between font-mono text-xs text-muted">
         <span>{night ? "00" : "05"}</span>
         <span>12</span>
-        <span>{night ? "23" : "20"}</span>
+        <span>{night ? "24" : String(STRIP_LAST_HOUR + 1)}</span>
       </div>
       {tip ? (
         <p className="mt-1 font-mono text-xs text-fg">
@@ -626,7 +627,7 @@ export function WeatherPanel({
               <span className="inline-flex items-center gap-1.5">
                 <i className="size-2.5 rounded-sm bg-nogo" /> No-go
               </span>
-              <span>{night ? "Strip is 00:00–23:00 (night shift)" : "Strip is 05:00–20:00 local"}</span>
+              <span>{stripLabel(night)}</span>
             </div>
           </div>
           {forecast.sheet ? <SheetLimitChecks sheet={forecast.sheet} timezone={forecast.timezone} /> : null}

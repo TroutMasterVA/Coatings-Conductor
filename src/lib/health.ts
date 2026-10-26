@@ -16,11 +16,21 @@ export type ExtractProviderId = "azure" | "on-device";
 export interface HealthOk {
   status: "ok";
   db: "ok";
+  /** Short build id (7-char commit SHA) or "dev". Nothing else about the deploy. */
+  build: string;
 }
 
 export interface HealthDegraded {
   status: "degraded";
   db: "down";
+  build: string;
+}
+
+/** Short build id: first 7 hex chars of the deploy commit (Vercel, CI, or build-time), else "dev". */
+export function buildIdFromEnv(env: Record<string, string | undefined>): string {
+  const raw = env.VERCEL_GIT_COMMIT_SHA?.trim() || env.GITHUB_SHA?.trim() || env.SOURCE_COMMIT?.trim() || "";
+  const m = /^[0-9a-f]{7,40}$/i.exec(raw);
+  return m ? raw.slice(0, 7).toLowerCase() : "dev";
 }
 
 export type HealthBody = HealthOk | HealthDegraded;
@@ -78,9 +88,9 @@ export async function checkHealth(
 ): Promise<{ status: 200 | 503; body: HealthBody }> {
   try {
     await withTimeout(Promise.resolve().then(deps.ping), deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    return { status: 200, body: { status: "ok", db: "ok" } };
+    return { status: 200, body: { status: "ok", db: "ok", build: buildIdFromEnv(deps.env) } };
   } catch {
-    return { status: 503, body: { status: "degraded", db: "down" } };
+    return { status: 503, body: { status: "degraded", db: "down", build: buildIdFromEnv(deps.env) } };
   }
 }
 
