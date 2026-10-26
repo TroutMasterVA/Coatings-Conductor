@@ -12,7 +12,7 @@
 import { fetchWithTimeout, type FetchLike, WEATHER_TIMEOUT_MS } from "./forecast-sources.ts";
 import type { Environmentals, ForecastBundle } from "./types";
 import type { SiteContext } from "./mitigations";
-import { NOT_STATED_LIMIT_BLOCKS_GO, WIND_ADVISORY, notStatedFlag, type ScoreOptions } from "./score-windows.ts";
+import { NOT_STATED_LIMIT_BLOCKS_GO, WIND_ADVISORY, notStatedFlag, workWindowCheck, type ScoreOptions } from "./score-windows.ts";
 
 /** Surface temperature for the checks: a gauge reading, or the sun-model estimate (always labelled). */
 export type SurfaceInput = { valueF: number; kind: "measured" | "estimate" };
@@ -55,7 +55,7 @@ export type WxNow = {
 
 export type CheckStatus = "pass" | "fail" | "unavailable" | "not-stated";
 export type LimitCheck = { name: string; status: CheckStatus; reason: string };
-export type HourVerdict = "go" | "nogo" | "unavailable";
+export type HourVerdict = "go" | "nogo" | "unavailable" | "outside";
 export type HourCheck = { startIso: string; verdict: HourVerdict; checks: LimitCheck[]; hour: WxHour };
 
 export type SheetWindow = {
@@ -325,7 +325,7 @@ export async function sheetWindow(
     }
   }
   if (!hours.length) return null;
-  return { source: hours[0]!.source, timezone, backup, now, hours: hours.map((h) => checkHour(h, env, surfaceTempF)) };
+  return { source: hours[0]!.source, timezone, backup, now, hours: hours.map((h) => workWindowCheck(checkHour(h, env, surfaceTempF), timezone)) };
 }
 
 /**
@@ -348,7 +348,7 @@ export function applySheetSurface(forecast: ForecastBundle, env: Environmentals,
     const e = est.get(c.startIso);
     const surface: SurfaceInput | null =
       measured != null ? { valueF: measured, kind: "measured" } : e != null ? { valueF: e, kind: "estimate" } : null;
-    return checkHour(c.hour, env, surface);
+    return workWindowCheck(checkHour(c.hour, env, surface), sheet.timezone, site.mitigations.includes("night_shift"));
   });
   return { ...forecast, sheet: { ...sheet, hours } };
 }

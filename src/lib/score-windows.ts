@@ -9,6 +9,8 @@ import {
   type SiteContext,
 } from "./mitigations.ts";
 import { axes, DEFAULT_CALIBRATION, lerp } from "./learning.ts";
+import { inWorkWindow, localHour, OUTSIDE_WORK_WINDOW } from "./hour-strip.ts";
+import type { HourCheck } from "./noaa.ts";
 import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "./types.ts";
 
 export type RawHour = {
@@ -451,6 +453,13 @@ export function scoreHour(
     reasons.push(`Inside PDS window${extra}${dewNote}`);
   }
   reasons.push(...notStatedNotes);
+  // Work window (shared hour-strip helper): an hour outside it gets no verdict and can never
+  // count toward a day's GO, however good the weather.
+  const outside = !inWorkWindow(z.hour, mits.includes("night_shift"));
+  if (outside) {
+    status = "unknown";
+    reasons.splice(0, reasons.length, OUTSIDE_WORK_WINDOW);
+  }
 
   return {
     startIso: raw.startIso,
@@ -470,8 +479,13 @@ export function scoreHour(
     dateKey: z.dateKey,
     substrateF,
     solarGainF: round1(Math.max(0, solarGain)),
-    inShift: shiftOk,
+    inShift: shiftOk && !outside,
   };
+}
+
+/** Hourly sheet check with the work window applied: outside it, no GO/NO-GO verdict. */
+export function workWindowCheck(check: HourCheck, timeZone: string, night?: boolean): HourCheck {
+  return inWorkWindow(localHour(check.startIso, timeZone).hour, night) ? check : { ...check, verdict: "outside" };
 }
 
 function bestRange(hours: HourWindow[], wrapNight = false): string | null {
@@ -541,13 +555,13 @@ export function bundleDays(
   const wrapNight = Boolean(site?.mitigations.includes("night_shift"));
   const days: DayWindow[] = [];
   for (const [date, list] of byDate) {
-    const goHours = list.filter((h) => h.status === "go").length;
+    const goHours = list.filter((h) => h.status === "go" && inWorkWindow(h.hour, wrapNight)).length;
     const cautionHours = list.filter((h) => h.status === "caution").length;
     const nogoHours = list.filter((h) => h.status === "nogo").length;
     // Strict day rule (QA critical): the scored hours are the work-shift hours. Any failed hour
     // makes the day NO-GO; any unavailable / Not stated or caution hour means not GO; GO only
     // when every scored hour passes.
-    const scoredHours = list.filter((h) => h.inShift !== false);
+    const scoredHours = list.filter((h) => h.inShift !== false && inWorkWindow(h.hour, wrapNight));
     let status: WindowStatus = "unknown";
     if (scoredHours.some((h) => h.status === "nogo")) status = "nogo";
     else if (scoredHours.length && scoredHours.every((h) => h.status === "go")) status = "go";

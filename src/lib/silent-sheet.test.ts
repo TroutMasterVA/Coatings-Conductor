@@ -27,7 +27,7 @@ function env(partial: Partial<Environmentals>): Environmentals {
 
 function hour(partial: Partial<RawHour>): RawHour {
   return {
-    startIso: "2026-08-28T02:00:00Z",
+    startIso: "2026-08-28T06:00:00Z", // pre-sun hour inside the 05–21 work window (02:00 is now "Outside work window")
     tempF: 70,
     rh: 45,
     dewpointF: 50,

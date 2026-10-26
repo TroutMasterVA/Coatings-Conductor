@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
+import { hourListLabel, hourReadings, hourText, OUTSIDE_WORK_WINDOW, STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
 import { Check, CloudSun, Loader2, MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,7 +41,7 @@ function statusFill(s: WindowStatus) {
   return "bg-subtle";
 }
 
-const VERDICT_TEXT: Record<HourCheck["verdict"], string> = { go: "GO", nogo: "NO-GO", unavailable: "Unavailable" };
+const VERDICT_TEXT: Record<HourCheck["verdict"], string> = { go: "GO", nogo: "NO-GO", unavailable: "Unavailable", outside: OUTSIDE_WORK_WINDOW };
 const CHECK_TEXT: Record<LimitCheck["status"], string> = {
   pass: "pass",
   fail: "fail",
@@ -50,13 +50,12 @@ const CHECK_TEXT: Record<LimitCheck["status"], string> = {
 };
 
 /** NOAA hourly vs the sheet's limits: per-hour verdict, each check's reason, every value's source. */
-function SheetLimitChecks({ sheet, timezone }: { sheet: SheetWindow; timezone: string }) {
-  const fmt = (iso: string) =>
-    new Date(iso).toLocaleString("en-US", { timeZone: timezone, weekday: "short", hour: "numeric", hour12: false });
+function SheetLimitChecks({ sheet, timezone, night }: { sheet: SheetWindow; timezone: string; night?: boolean }) {
   const hours = sheet.hours.slice(0, 24);
   return (
     <div className="rounded-xl bg-surface p-4 text-xs shadow-[0_0_0_1px_rgba(255,255,255,0.08)] sm:p-5">
       <p className="text-sm font-medium text-fg">Hourly vs sheet limits (next 24 h)</p>
+      <p className="mt-1 text-muted">{hourListLabel(hours.map((h) => h.startIso), timezone, night)}</p>
       <p className="mt-1 text-muted">
         {sheet.backup ? <strong className="text-caution">{BACKUP_LABEL}. </strong> : null}
         Forecast: {sheet.source.label}
@@ -69,14 +68,18 @@ function SheetLimitChecks({ sheet, timezone }: { sheet: SheetWindow; timezone: s
       <ul className="mt-3 space-y-1.5">
         {hours.map((h) => (
           <li key={h.startIso}>
-            <span className="font-mono text-fg">{fmt(h.startIso)}:00</span>{" "}
+            <span className="font-mono text-fg">{hourText(h.startIso, timezone)}</span>{" "}
             <Badge variant={h.verdict === "go" ? "go" : h.verdict === "nogo" ? "nogo" : "default"}>{VERDICT_TEXT[h.verdict]}</Badge>{" "}
-            <span className="text-muted">
-              {h.checks
-                .filter((c) => c.status !== "pass" || h.verdict === "go")
-                .map((c) => `${CHECK_TEXT[c.status]}: ${c.reason}`)
-                .join(" · ")}
-            </span>
+            <span className="text-fg">{hourReadings(h.hour)}</span>
+            {h.verdict === "outside" ? null : (
+              <span className="text-muted">
+                {" · "}
+                {h.checks
+                  .filter((c) => c.status !== "pass" || h.verdict === "go")
+                  .map((c) => `${CHECK_TEXT[c.status]}: ${c.reason}`)
+                  .join(" · ")}
+              </span>
+            )}
           </li>
         ))}
       </ul>
@@ -630,7 +633,7 @@ export function WeatherPanel({
               <span>{stripLabel(night)}</span>
             </div>
           </div>
-          {forecast.sheet ? <SheetLimitChecks sheet={forecast.sheet} timezone={forecast.timezone} /> : null}
+          {forecast.sheet ? <SheetLimitChecks sheet={forecast.sheet} timezone={forecast.timezone} night={night} /> : null}
           <div className="grid gap-3 sm:grid-cols-2">
             {days.map((d) => (
               <DayCard key={d.date} day={d} night={night} />
