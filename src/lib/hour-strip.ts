@@ -69,6 +69,27 @@ export function hourReadings(
   ].join(" · ");
 }
 
+/**
+ * Range of the hours a day card counts, from that same list: first counted hour start to last
+ * counted hour end (end-exclusive). Wraps for night shift (the largest gap is the off period).
+ */
+export function countedRange(hours: Array<{ hour: number }>): string | null {
+  const hs = [...new Set(hours.map((h) => h.hour))].sort((a, b) => a - b);
+  if (!hs.length) return null;
+  let start = hs[0]!;
+  let end = hs.at(-1)! + 1;
+  let widest = 24 - end + start; // gap wrapping past midnight
+  for (let i = 1; i < hs.length; i++) {
+    const gap = hs[i]! - hs[i - 1]! - 1;
+    if (gap > widest) {
+      widest = gap;
+      start = hs[i]!;
+      end = hs[i - 1]! + 1;
+    }
+  }
+  return `${hh(start)}–${hh(end === 0 ? 24 : end)}`;
+}
+
 /** Index the day cards' per-hour classification by hour start (same instant key as the sheet list). */
 export function dayHourIndex(days: Array<{ hours?: HourWindow[] }>): Map<string, HourWindow> {
   const m = new Map<string, HourWindow>();

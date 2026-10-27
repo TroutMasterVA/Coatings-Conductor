@@ -154,6 +154,8 @@ export type DayWindow = {
   nogoHours: number;
   /** Scored work-window hours behind the day verdict (counts are out of this). */
   workHours?: number;
+  /** Range of those counted hours ("08:00–21:00"), from the same list. */
+  workRange?: string | null;
   bestRange: string | null;
   limiting: string[];
   hours: HourWindow[];

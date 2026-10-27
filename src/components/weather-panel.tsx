@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { UnstatedLimits } from "@/components/unstated-limits";
 import { dayHourIndex, hourLine, hourListLabel, hourReadings, hourText, STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
 import { Check, CloudSun, Loader2, MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -80,6 +81,7 @@ function SheetLimitChecks({ sheet, timezone, night, days }: { sheet: SheetWindow
                   .filter((c) => c.status !== "pass" || h.verdict === "go")
                   .map((c) => `${CHECK_TEXT[c.status]}: ${c.reason}`)
                   .join(" · ")}
+                {(h.flags ?? []).map((f) => ` · ${f}`).join("")}
               </span>
             )}
           </li>
@@ -140,6 +142,7 @@ function DayCard({ day, night }: { day: DayWindow; night?: boolean }) {
       <p className="mt-0.5 text-xs text-muted">
         {dayCountLabel(day)}
       </p>
+      {day.workRange ? <p className="mt-0.5 text-xs text-muted">Counted hours {day.workRange}</p> : null}
       {day.limiting[0] ? <p className="mt-1 line-clamp-2 text-xs text-muted">{day.limiting[0]}</p> : null}
       <div className="mt-3">
         <HourStrip hours={day.hours} night={night} />
@@ -552,6 +555,7 @@ export function WeatherPanel({
         {environmentals && onEnvironmentals ? (
           <div className="mt-5 border-t border-border pt-4">
             <p className="text-xs font-medium uppercase tracking-wide text-muted">Window limits (editable)</p>
+            <UnstatedLimits env={environmentals} />
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
               <Limit
                 label="Air min °F"

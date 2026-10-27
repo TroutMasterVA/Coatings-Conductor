@@ -9,7 +9,8 @@ import {
   type SiteContext,
 } from "./mitigations.ts";
 import { axes, DEFAULT_CALIBRATION, lerp } from "./learning.ts";
-import { inWorkWindow, localHour, OUTSIDE_WORK_WINDOW } from "./hour-strip.ts";
+import { inWorkWindow, localHour, OUTSIDE_WORK_WINDOW, countedRange } from "./hour-strip.ts";
+import { notStatedFlag, unstatedLimitFlags } from "./limit-fields.ts";
 import type { HourCheck } from "./noaa.ts";
 import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "./types.ts";
 
@@ -81,9 +82,7 @@ function zoned(iso: string, timeZone: string) {
 export const NOT_STATED_LIMIT_BLOCKS_GO = false;
 
 /** Visible flag on a GO hour/day whose sheet does not state a limit (Isaiah, Oct 23). */
-export function notStatedFlag(limit: string): string {
-  return `Not stated — check the sheet for ${limit}`;
-}
+export { notStatedFlag };
 
 /** Advisory only (never blocks) when the sheet states no wind limit. */
 export const WIND_ADVISORY = "Consider wind cover/screening; site lead makes the final call.";
@@ -465,6 +464,8 @@ export function scoreHour(
     const dewNote = env.dewPointSpreadMinF == null && !skipDew ? ` (dew margin ${DEW_SPREAD_DEFAULT_F}°F, ${DEW_SPREAD_DEFAULT_LABEL})` : "";
     reasons.push(`Inside PDS window${extra}${dewNote}`);
   }
+  // Central: every unstated limit field carries its flag (not only the ones scored below).
+  for (const f of unstatedLimitFlags(env)) if (!notStatedNotes.includes(f) && !reasons.includes(f)) notStatedNotes.push(f);
   reasons.push(...notStatedNotes);
   // Work window (shared hour-strip helper): an hour outside it gets no verdict and can never
   // count toward a day's GO, however good the weather.
@@ -578,6 +579,7 @@ export function bundleDays(
     const cautionHours = scoredHours.filter((h) => h.status === "caution").length;
     const nogoHours = scoredHours.filter((h) => h.status === "nogo").length;
     const workHours = scoredHours.length;
+    const workRange = countedRange(scoredHours);
     let status: WindowStatus = "unknown";
     if (scoredHours.some((h) => h.status === "nogo")) status = "nogo";
     else if (scoredHours.length && scoredHours.every((h) => h.status === "go")) status = "go";
@@ -602,6 +604,7 @@ export function bundleDays(
       status,
       goHours,
       workHours,
+      workRange,
       cautionHours,
       nogoHours,
       bestRange: bestRange(list, wrapNight),

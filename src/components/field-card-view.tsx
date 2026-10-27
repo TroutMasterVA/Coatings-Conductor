@@ -2,6 +2,7 @@ import { createContext, useContext, useState, type ReactNode } from "react";
 import type { FieldCardData, SubstratePrepGate } from "@/lib/types";
 import { STEP_RAIL } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
+import { UnstatedLimits } from "@/components/unstated-limits";
 import { cn } from "@/lib/utils";
 import { DRAFT_BANNER } from "@/lib/extract-flags";
 import { goGateChips } from "@/components/go-gate-chips";
@@ -234,6 +235,7 @@ function FullSheetDump({ card }: { card: FieldCardData }) {
         ) : (
           <p className="text-sm text-ink-muted">Not stated</p>
         )}
+        <UnstatedLimits env={env} />
         {env.notes ? <p className="text-sm text-ink-muted">{env.notes}</p> : null}
         {env.directSunNotes ? <p className="text-sm text-ink-muted">{env.directSunNotes}</p> : null}
       </Section>

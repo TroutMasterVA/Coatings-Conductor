@@ -12,7 +12,8 @@
 import { fetchWithTimeout, type FetchLike, WEATHER_TIMEOUT_MS } from "./forecast-sources.ts";
 import type { Environmentals, ForecastBundle } from "./types";
 import type { SiteContext } from "./mitigations";
-import { NOT_STATED_LIMIT_BLOCKS_GO, WIND_ADVISORY, notStatedFlag, workWindowCheck, condensationRisk, type ScoreOptions } from "./score-windows.ts";
+import { LIMIT_LABEL, notStatedFlag, unstatedLimitKeys, type LimitKey } from "./limit-fields.ts";
+import { NOT_STATED_LIMIT_BLOCKS_GO, WIND_ADVISORY, workWindowCheck, condensationRisk, type ScoreOptions } from "./score-windows.ts";
 
 /** Surface temperature for the checks: a gauge reading, or the sun-model estimate (always labelled). */
 export type SurfaceInput = { valueF: number; kind: "measured" | "estimate" };
@@ -57,7 +58,7 @@ export type CheckStatus = "pass" | "fail" | "unavailable" | "not-stated";
 export type LimitCheck = { name: string; status: CheckStatus; reason: string; spreadF?: number; basis?: SpreadBasis };
 export type SpreadBasis = "air" | "est. surface" | "measured surface";
 export type HourVerdict = "go" | "nogo" | "unavailable" | "outside";
-export type HourCheck = { startIso: string; verdict: HourVerdict; checks: LimitCheck[]; hour: WxHour };
+export type HourCheck = { startIso: string; verdict: HourVerdict; checks: LimitCheck[]; hour: WxHour; /** "Not stated — check the sheet for …" for unstated limits no check above already flags. */ flags?: string[] };
 
 export type SheetWindow = {
   source: WxSource;
@@ -255,7 +256,15 @@ export function checkHour(
     : scored.length && scored.every((c) => c.status === "pass")
       ? "go"
       : "unavailable";
-  return { startIso: hour.startIso, verdict, checks, hour };
+  // Central: any unstated limit field not already flagged by a check above gets its flag here.
+  const covered = new Set<LimitKey>();
+  const flagged = (name: string) => checks.some((c) => c.name === name && c.status === "not-stated");
+  if (flagged("Air temp")) covered.add("ambientTempMinF").add("ambientTempMaxF");
+  if (flagged("Surface temp")) covered.add("substrateTempMinF").add("substrateTempMaxF");
+  if (flagged("RH")) covered.add("relativeHumidityMax");
+  if (flagged("Spray wind")) covered.add("windMaxMph");
+  const flags = unstatedLimitKeys(env).filter((k) => !covered.has(k)).map((k) => notStatedFlag(LIMIT_LABEL[k]));
+  return { startIso: hour.startIso, verdict, checks, hour, flags };
 }
 
 type Deps = { fetch?: FetchLike; timeoutMs?: number; now?: () => Date };

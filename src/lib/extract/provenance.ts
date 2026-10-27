@@ -143,6 +143,9 @@ export function quoteCoversNumbers(path: string, value: string | number, quote: 
   // A temperature needs its number printed AS a temperature (unit after it or after its range end),
   // and a dew margin needs "dew" on the line: "DFT: 5-7 mils" never backs a 5°F dew margin.
   if (temp && /dewPointSpreadMinF$/.test(path) && !/dew/i.test(quote)) return false;
+  // A temperature in a cure/storage statement ("Low temperature cure down to 0°F") is not an
+  // application limit: those spans are removed before the quote is checked.
+  if (TEMP_PATH.test(path)) quote = quote.replace(CURE_STORAGE_TEMP, " ").replace(TEMP_ROW_LABEL_OF_TIMES, " ");
   const nums = numbersIn(value);
   // The quote must state the value as the same KIND of quantity: a % limit next to "%"/RH,
   // a duration next to a time unit. "40°-95°F" never backs "RH ≤ 95%".
@@ -197,6 +200,14 @@ export function rowHeadingUnit(path: string, value: string | number, quote: stri
   }
   return false;
 }
+
+const CURE_STORAGE_TEMP =
+  /\b(?:cur(?:e|es|ed|ing)|stor(?:e|es|ed|age)|shelf)\b[^.;\d]{0,40}?-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]?(?:\s*\(\s*-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]\s*\)?)?/gi;
+
+// A temperature that is the row label of a cure-time table ("0 °F (-18 °C) 4 Hours 7 Days") is a
+// schedule entry, not a limit.
+const TEMP_ROW_LABEL_OF_TIMES =
+  /-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]?(?:\s*\(\s*-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]\s*\)?)?\s+\d+(?:\.\d+)?(?:\s*(?:-|–|to)\s*\d+(?:\.\d+)?)?\s*(?:hours?|hrs?|minutes?|mins?|days?|weeks?)\b/gi;
 
 const PERCENT_PATH = /relativeHumidity(Max|Min)$/;
 const TIME_PATH = /(potLife|recoatMin|recoatMax|inductionTime|\.touch|\.handle|mixedPotLife)$/;
