@@ -1,3 +1,4 @@
+import type { HourCheck } from "./noaa.ts";
 import type { HourWindow } from "./types.ts";
 
 /**
@@ -66,4 +67,28 @@ export function hourReadings(
     `RH ${h.rh ?? "—"}%`,
     `dew spread ${spread ?? "—"}°F${spread != null ? ` (${basis})` : ""}`,
   ].join(" · ");
+}
+
+/** Index the day cards' per-hour classification by hour start (same instant key as the sheet list). */
+export function dayHourIndex(days: Array<{ hours?: HourWindow[] }>): Map<string, HourWindow> {
+  const m = new Map<string, HourWindow>();
+  for (const d of days) for (const h of d.hours ?? []) m.set(new Date(h.startIso).toISOString(), h);
+  return m;
+}
+
+export type HourLine = { text: string; variant: "go" | "caution" | "nogo" | "default"; caution: boolean };
+
+const LINE_TEXT: Record<HourCheck["verdict"], string> = { go: "GO", nogo: "NO-GO", unavailable: "Unavailable", outside: OUTSIDE_WORK_WINDOW };
+
+/**
+ * Label for one hourly line. A line the day card counts as caution never reads plain GO: it shows
+ * "GO · CAUTION — <reason>", the reason coming from the same per-hour classification the card used.
+ */
+export function hourLine(check: HourCheck, dayHour: HourWindow | undefined): HourLine {
+  if (check.verdict === "go" && dayHour?.status === "caution") {
+    const reason = dayHour.reasons[0];
+    return { text: `GO · CAUTION${reason ? ` — ${reason}` : ""}`, variant: "caution", caution: true };
+  }
+  const variant = check.verdict === "go" ? "go" : check.verdict === "nogo" ? "nogo" : "default";
+  return { text: LINE_TEXT[check.verdict], variant, caution: false };
 }
