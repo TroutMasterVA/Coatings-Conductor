@@ -21,9 +21,11 @@ import {
   extractUpload,
   savedExtractState,
   extractForSave,
+  needsAzureReader,
   type ExtractState,
   type SavedExtract,
 } from "@/lib/extract-client";
+import { gatedForecast, sheetGate } from "@/lib/sheet-gate";
 import { JOB_CLOSED_MESSAGE } from "@/lib/job-close";
 import { uploadOutcome, type UploadOutcome } from "@/lib/upload-sheet";
 import {
@@ -441,10 +443,14 @@ function App({ user }: { user: AppUser | null }) {
     [site, calibration, custom],
   );
 
+  /** No verdict anywhere unless a sheet loaded: never scored against default or empty limits. */
+  const readFailed = extractState.kind === "error" || (extractState.kind === "done" && needsAzureReader(extractState.result));
+  const gate = useMemo(() => sheetGate(card, readFailed), [card, readFailed]);
   const scored = useMemo(() => {
-    if (!forecast || !card) return forecast;
-    return applySheetSurface(rescoreForecast(forecast, card.environmentals, scoringSite), card.environmentals, scoringSite);
-  }, [forecast, card, scoringSite]);
+    const open = gatedForecast(gate, forecast);
+    if (!open || !card) return null;
+    return applySheetSurface(rescoreForecast(open, card.environmentals, scoringSite), card.environmentals, scoringSite);
+  }, [gate, forecast, card, scoringSite]);
 
   function remember(next: FieldCardData, nextZip: string) {
     const entry: SavedCard = {
@@ -503,7 +509,7 @@ function App({ user }: { user: AppUser | null }) {
         applyCard(next, flagsForResult(state.result));
         remember(next, zip);
         toast.success("Review every field.");
-        if (zip.length === 5) void handleForecast(next, zip);
+        if (zip.length === 5 && sheetGate(next, needsAzureReader(state.result)).ok) void handleForecast(next, zip);
       } else if (state.kind === "error") {
         toast.error(state.message);
       }
@@ -891,7 +897,7 @@ function App({ user }: { user: AppUser | null }) {
               <FieldCardView
                 card={card}
                 zip={zip}
-                headline={windowHeadline(scored?.headline, flags)}
+                headline={gate.ok ? windowHeadline(scored?.headline, flags) : gate.message}
                 mitigations={selectedMitigationLabels(scoringSite)}
                 draft={flags.draft}
                 onEditField={
@@ -921,7 +927,8 @@ function App({ user }: { user: AppUser | null }) {
               loading={wxLoading}
               error={wxError}
               onLoad={() => void handleForecast()}
-              disabled={!card}
+              disabled={!gate.ok}
+              blocked={gate.ok ? undefined : gate.message}
               environmentals={card?.environmentals}
               onEnvironmentals={
                 card
