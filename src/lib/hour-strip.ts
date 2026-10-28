@@ -1,3 +1,4 @@
+import type { HourCheck } from "./noaa.ts";
 import type { HourWindow } from "./types.ts";
 
 /**
@@ -66,4 +67,57 @@ export function hourReadings(
     `RH ${h.rh ?? "—"}%`,
     `dew spread ${spread ?? "—"}°F${spread != null ? ` (${basis})` : ""}`,
   ].join(" · ");
+}
+
+/**
+ * Range of the hours a day card counts, from that same list: first counted hour start to last
+ * counted hour end (end-exclusive). Wraps for night shift (the largest gap is the off period).
+ */
+export function countedRange(hours: Array<{ hour: number }>): string | null {
+  const hs = [...new Set(hours.map((h) => h.hour))].sort((a, b) => a - b);
+  if (!hs.length) return null;
+  let start = hs[0]!;
+  let end = hs.at(-1)! + 1;
+  let widest = 24 - end + start; // gap wrapping past midnight
+  for (let i = 1; i < hs.length; i++) {
+    const gap = hs[i]! - hs[i - 1]! - 1;
+    if (gap > widest) {
+      widest = gap;
+      start = hs[i]!;
+      end = hs[i - 1]! + 1;
+    }
+  }
+  return `${hh(start)}–${hh(end === 0 ? 24 : end)}`;
+}
+
+/** Index the day cards' per-hour classification by hour start (same instant key as the sheet list). */
+export function dayHourIndex(days: Array<{ hours?: HourWindow[] }>): Map<string, HourWindow> {
+  const m = new Map<string, HourWindow>();
+  for (const d of days) for (const h of d.hours ?? []) m.set(new Date(h.startIso).toISOString(), h);
+  return m;
+}
+
+export type HourLine = { text: string; variant: "go" | "caution" | "nogo" | "default"; caution: boolean };
+
+const LINE_TEXT: Record<HourCheck["verdict"], string> = { go: "GO", nogo: "NO-GO", unavailable: "Unavailable", outside: OUTSIDE_WORK_WINDOW };
+
+/**
+ * Label for one hourly line. A line the day card counts as caution never reads plain GO: it shows
+ * "GO · CAUTION — <reason>", the reason coming from the same per-hour classification the card used.
+ */
+export function hourLine(check: HourCheck, dayHour: HourWindow | undefined): HourLine {
+  if (check.verdict === "go" && dayHour?.status === "caution") {
+    const reason = dayHour.reasons[0];
+    return { text: `GO · CAUTION${reason ? ` — ${reason}` : ""}`, variant: "caution", caution: true };
+  }
+  const variant = check.verdict === "go" ? "go" : check.verdict === "nogo" ? "nogo" : "default";
+  return { text: LINE_TEXT[check.verdict], variant, caution: false };
+}
+
+/** Top line of a day card: the best stretch, labelled as such (distinct from "Counted hours"). */
+export function bestStretchLabel(day: { bestRange: string | null; hours?: Array<{ status: string }> }): string {
+  if (!day.bestRange) return "No GO stretch";
+  const anyGo = (day.hours ?? []).some((h) => h.status === "go");
+  const what = anyGo || !day.hours?.length ? "Best GO stretch" : "Best caution stretch";
+  return day.bestRange === "All day" ? `${what}: all day` : `${what} ${day.bestRange}`;
 }

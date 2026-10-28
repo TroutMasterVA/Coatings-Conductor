@@ -143,15 +143,71 @@ export function quoteCoversNumbers(path: string, value: string | number, quote: 
   // A temperature needs its number printed AS a temperature (unit after it or after its range end),
   // and a dew margin needs "dew" on the line: "DFT: 5-7 mils" never backs a 5°F dew margin.
   if (temp && /dewPointSpreadMinF$/.test(path) && !/dew/i.test(quote)) return false;
+  // A temperature in a cure/storage statement ("Low temperature cure down to 0°F") is not an
+  // application limit: those spans are removed before the quote is checked.
+  if (TEMP_PATH.test(path)) quote = quote.replace(CURE_STORAGE_TEMP, " ").replace(TEMP_ROW_LABEL_OF_TIMES, " ");
   const nums = numbersIn(value);
   // The quote must state the value as the same KIND of quantity: a % limit next to "%"/RH,
   // a duration next to a time unit. "40°-95°F" never backs "RH ≤ 95%".
   if (PERCENT_PATH.test(path) && !nums.every((n) => hasPercent(quote, n))) return false;
-  if (TIME_PATH.test(path) && nums.length && !hasTimeUnit(quote, nums[0]!)) return false;
+  if (TIME_PATH.test(path) && nums.length && !hasTimeUnit(quote, nums[0]!) && !rowHeadingUnit(path, value, quote)) return false;
   return nums.every((n) =>
     temp ? hasTemperature(quote, numberForms(path, n)) : hasNumber(quote, numberForms(path, n)),
   );
 }
+
+/** Words a row label must carry to be the row for a given duration field. */
+const ROW_LABEL: Array<[RegExp, RegExp]> = [
+  [/(potLife|mixedPotLife)$/, /pot\s*life|working\s*time/i],
+  [/recoatMin$/, /\bmin/i],
+  [/recoatMax$/, /\bmax/i],
+  [/\.touch$/, /touch|dry/i],
+  [/\.handle$/, /handl/i],
+  [/inductionTime$/, /induction|sweat/i],
+];
+const UNIT_HEADING = /\(\s*(?:hours?|hrs?|minutes?|mins?|days?)\s*\)/gi;
+// Column-header junk that may sit between a row heading and its cells: "F˚/C˚", "90/32", "@50°F", "70 °F".
+const HEADER_TOKEN = /^\s*(?:[°˚º]?[FC]\s*[°˚º]?\s*\/\s*[°˚º]?[FC]\s*[°˚º]?|@?\s*\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?|@?\s*-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]?)/;
+
+/**
+ * Unit from the table ROW's own heading: "Pot life (hours) [F˚/C˚ 90/32 70/21] 2 4 6" gives the unit
+ * for that row's cells. Strict: the "(unit)" must sit in the row label that names this field, and
+ * every duration in the value must be one of that row's cells. A unit in a column header, another
+ * row, or an "@50°F @77°F" header run never counts.
+ */
+export function rowHeadingUnit(path: string, value: string | number, quote: string): boolean {
+  const label = ROW_LABEL.find(([p]) => p.test(path))?.[1];
+  if (!label || typeof value !== "string") return false;
+  const durs = [...value.matchAll(/(\d+(?:\.\d+)?(?:\s*(?:-|–|to)\s*\d+(?:\.\d+)?)?)\s*[½¼¾]?\s*(?:hours?|hrs?|minutes?|mins?|days?)\b/gi)]
+    .flatMap((m) => numbersIn(m[1]!));
+  if (!durs.length) return false;
+  for (const m of quote.matchAll(UNIT_HEADING)) {
+    // Row label = the words just before "(unit)", back to the previous cell/sentence.
+    const before = quote.slice(Math.max(0, m.index! - 40), m.index!).replace(/^.*[\d.)*•]\s+/s, "");
+    if (!label.test(before)) continue;
+    let rest = quote.slice(m.index! + m[0].length);
+    for (;;) {
+      const h = HEADER_TOKEN.exec(rest);
+      if (!h) break;
+      rest = rest.slice(h[0].length);
+    }
+    const cells = new Set<string>();
+    for (const t of rest.trimStart().split(/\s+/)) {
+      if (/^\d+(?:\.\d+)?$/.test(t)) cells.add(t);
+      else if (t !== "⁄" && t !== "/") break;
+    }
+    if (durs.every((d) => cells.has(d))) return true;
+  }
+  return false;
+}
+
+const CURE_STORAGE_TEMP =
+  /\b(?:cur(?:e|es|ed|ing)|stor(?:e|es|ed|age)|shelf)\b[^.;\d]{0,40}?-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]?(?:\s*\(\s*-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]\s*\)?)?/gi;
+
+// A temperature that is the row label of a cure-time table ("0 °F (-18 °C) 4 Hours 7 Days") is a
+// schedule entry, not a limit.
+const TEMP_ROW_LABEL_OF_TIMES =
+  /-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]?(?:\s*\(\s*-?\d+(?:\.\d+)?\s*[°˚º]\s*[FC]\s*\)?)?\s+\d+(?:\.\d+)?(?:\s*(?:-|–|to)\s*\d+(?:\.\d+)?)?\s*(?:hours?|hrs?|minutes?|mins?|days?|weeks?)\b/gi;
 
 const PERCENT_PATH = /relativeHumidity(Max|Min)$/;
 const TIME_PATH = /(potLife|recoatMin|recoatMax|inductionTime|\.touch|\.handle|mixedPotLife)$/;

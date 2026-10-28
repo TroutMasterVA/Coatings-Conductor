@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { hourListLabel, hourReadings, hourText, OUTSIDE_WORK_WINDOW, STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
+import { UnstatedLimits } from "@/components/unstated-limits";
+import { bestStretchLabel, dayHourIndex, hourLine, hourListLabel, hourReadings, hourText, STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
 import { Check, CloudSun, Loader2, MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +22,7 @@ import {
   type SubstrateId,
 } from "@/lib/mitigations";
 import { dayCountLabel, detectLimiters, goHourCount, unlockedGoHours } from "@/lib/score-windows";
-import { BACKUP_LABEL, type HourCheck, type LimitCheck, type SheetWindow } from "@/lib/noaa";
+import { BACKUP_LABEL, type LimitCheck, type SheetWindow } from "@/lib/noaa";
 import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { WINDOWS_PAUSED } from "@/lib/extract-flags";
@@ -41,7 +42,6 @@ function statusFill(s: WindowStatus) {
   return "bg-subtle";
 }
 
-const VERDICT_TEXT: Record<HourCheck["verdict"], string> = { go: "GO", nogo: "NO-GO", unavailable: "Unavailable", outside: OUTSIDE_WORK_WINDOW };
 const CHECK_TEXT: Record<LimitCheck["status"], string> = {
   pass: "pass",
   fail: "fail",
@@ -50,8 +50,9 @@ const CHECK_TEXT: Record<LimitCheck["status"], string> = {
 };
 
 /** NOAA hourly vs the sheet's limits: per-hour verdict, each check's reason, every value's source. */
-function SheetLimitChecks({ sheet, timezone, night }: { sheet: SheetWindow; timezone: string; night?: boolean }) {
+function SheetLimitChecks({ sheet, timezone, night, days }: { sheet: SheetWindow; timezone: string; night?: boolean; days: DayWindow[] }) {
   const hours = sheet.hours.slice(0, 24);
+  const dayHours = useMemo(() => dayHourIndex(days), [days]);
   return (
     <div className="rounded-xl bg-surface p-4 text-xs shadow-[0_0_0_1px_rgba(255,255,255,0.08)] sm:p-5">
       <p className="text-sm font-medium text-fg">Hourly vs sheet limits (next 24 h)</p>
@@ -66,10 +67,12 @@ function SheetLimitChecks({ sheet, timezone, night }: { sheet: SheetWindow; time
           : "Now: no station observation available."}
       </p>
       <ul className="mt-3 space-y-1.5">
-        {hours.map((h) => (
+        {hours.map((h) => {
+          const line = hourLine(h, dayHours.get(new Date(h.startIso).toISOString()));
+          return (
           <li key={h.startIso}>
             <span className="font-mono text-fg">{hourText(h.startIso, timezone)}</span>{" "}
-            <Badge variant={h.verdict === "go" ? "go" : h.verdict === "nogo" ? "nogo" : "default"}>{VERDICT_TEXT[h.verdict]}</Badge>{" "}
+            <Badge variant={line.variant}>{line.text}</Badge>{" "}
             <span className="text-fg">{hourReadings(h.hour, h.checks.find((c) => c.name === "Dew-point spread"))}</span>
             {h.verdict === "outside" ? null : (
               <span className="text-muted">
@@ -78,10 +81,12 @@ function SheetLimitChecks({ sheet, timezone, night }: { sheet: SheetWindow; time
                   .filter((c) => c.status !== "pass" || h.verdict === "go")
                   .map((c) => `${CHECK_TEXT[c.status]}: ${c.reason}`)
                   .join(" · ")}
+                {(h.flags ?? []).map((f) => ` · ${f}`).join("")}
               </span>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );
@@ -133,10 +138,11 @@ function DayCard({ day, night }: { day: DayWindow; night?: boolean }) {
         </div>
         <Badge variant={statusVariant(day.status)}>{day.status}</Badge>
       </div>
-      <p className="mt-2 font-mono text-sm text-fg">{day.bestRange ?? "No window"}</p>
+      <p className="mt-2 font-mono text-sm text-fg">{bestStretchLabel(day)}</p>
       <p className="mt-0.5 text-xs text-muted">
         {dayCountLabel(day)}
       </p>
+      {day.workRange ? <p className="mt-0.5 text-xs text-muted">Counted hours {day.workRange}</p> : null}
       {day.limiting[0] ? <p className="mt-1 line-clamp-2 text-xs text-muted">{day.limiting[0]}</p> : null}
       <div className="mt-3">
         <HourStrip hours={day.hours} night={night} />
@@ -549,6 +555,7 @@ export function WeatherPanel({
         {environmentals && onEnvironmentals ? (
           <div className="mt-5 border-t border-border pt-4">
             <p className="text-xs font-medium uppercase tracking-wide text-muted">Window limits (editable)</p>
+            <UnstatedLimits env={environmentals} />
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
               <Limit
                 label="Air min °F"
@@ -633,7 +640,7 @@ export function WeatherPanel({
               <span>{stripLabel(night)}</span>
             </div>
           </div>
-          {forecast.sheet ? <SheetLimitChecks sheet={forecast.sheet} timezone={forecast.timezone} night={night} /> : null}
+          {forecast.sheet ? <SheetLimitChecks sheet={forecast.sheet} timezone={forecast.timezone} night={night} days={days} /> : null}
           <div className="grid gap-3 sm:grid-cols-2">
             {days.map((d) => (
               <DayCard key={d.date} day={d} night={night} />

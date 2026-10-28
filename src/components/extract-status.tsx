@@ -112,7 +112,7 @@ export function ProvenancePanel({ state, card }: { state: ExtractState; card?: u
                   {r.label}
                 </dt>
                 <dd className={r.edited ? "text-accent" : r.stated ? "text-fg" : "text-subtle"}>
-                  {r.text}
+                  {r.flag ?? r.text}
                   {r.sheetQuote ? (
                     <span className="mt-0.5 block text-xs text-muted">
                       {SHEET_QUOTE_LABEL}: {r.sheetQuote}

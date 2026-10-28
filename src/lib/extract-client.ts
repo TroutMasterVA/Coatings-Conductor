@@ -28,6 +28,7 @@
  *           `edited` into a saved extract: saves send a fresh read once (replace) and otherwise
  *           omit `extract` so the server keeps what it stored (and its stamps).
  */
+import { LIMIT_LABEL, notStatedFlag, type LimitKey } from "./limit-fields.ts";
 import { parseSavedExtract } from "./job-extract.ts";
 import { toSavedExtract as buildSavedExtract } from "./extract/provider.ts";
 import { JOB_CLOSED_MESSAGE } from "./job-status.ts";
@@ -574,6 +575,8 @@ export type ProvenanceRow = {
   text: string;
   /** Server stamp with a kept sheet quote: "p. N — “…”", shown beneath under SHEET_QUOTE_LABEL. */
   sheetQuote?: string;
+  /** Unstated sheet limit: "Not stated — check the sheet for …" (from limit-fields.ts), shown instead of `text`. */
+  flag?: string;
 };
 
 function labelFor(path: string): string {
@@ -656,6 +659,8 @@ export function provenanceRows(
         edited: serverEdited || sessionEdited,
         text: sessionEdited ? SESSION_EDIT_TEXT : describeProvenance(entry),
       };
+      const limit = /^environmentals\.(\w+)$/.exec(fieldPath)?.[1];
+      if (!row.stated && limit && limit in LIMIT_LABEL) row.flag = notStatedFlag(LIMIT_LABEL[limit as LimitKey]);
       if (!sessionEdited && isEditedEntry(entry) && entry.sheetQuote) {
         row.sheetQuote = describeQuote(entry.sheetQuote);
       }

@@ -154,6 +154,7 @@ function Home() {
 
 function App({ user }: { user: AppUser | null }) {
   const signedIn = Boolean(user);
+  const userId = user?.id ?? "";
   const api = useMemo(() => workspaceApi(signedIn), [signedIn]);
   const [mode, setMode] = useState<"boot" | "home" | "job">("boot");
   const [projects, setProjects] = useState<JobSummary[]>([]);
@@ -317,7 +318,7 @@ function App({ user }: { user: AppUser | null }) {
                 ? "dont-ask"
                 : "not-now",
             undefined,
-            user?.id ?? "",
+            userId,
           );
           if (cancelled) return;
           if (claim.outcome === "imported") toast.success(`Moved ${claim.imported} job(s) from this device into your account.`);
@@ -397,7 +398,7 @@ function App({ user }: { user: AppUser | null }) {
     return () => {
       cancelled = true;
     };
-  }, [api, applyFull, signedIn]);
+  }, [api, applyFull, signedIn, userId]);
 
   const persist = useCallback(() => {
     void flushSave();
@@ -424,13 +425,14 @@ function App({ user }: { user: AppUser | null }) {
     persist,
   ]);
 
+  const cardId = card?.id;
   useEffect(() => {
-    if (!card) return;
+    if (!cardId) return;
     const node = document.getElementById("field-card-print");
     if (!node) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     node.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
-  }, [card?.id]);
+  }, [cardId]);
 
   const scoringSite = useMemo(
     () => ({ ...site, calibration, customMitigations: custom }),
