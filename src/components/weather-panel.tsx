@@ -238,7 +238,7 @@ function MitPickGrid({
 export function WeatherPanel({
   zip,
   onZip,
-  forecast,
+  forecast: forecastProp,
   loading,
   error,
   onLoad,
@@ -252,6 +252,7 @@ export function WeatherPanel({
   site,
   onSite,
   paused,
+  blocked,
 }: {
   zip: string;
   onZip: (v: string) => void;
@@ -272,7 +273,10 @@ export function WeatherPanel({
   onSite: (site: SiteContext) => void;
   /** Temperature limits not verified on the sheet: no windows are shown (FE-3). */
   paused?: boolean;
+  /** No sheet, or the sheet couldn't be read: this message replaces every verdict (no GO/CAUTION/NO-GO). */
+  blocked?: string;
 }) {
+  const forecast = blocked ? null : forecastProp;
   const days = forecast?.days ?? [];
   const night = site.mitigations.includes("night_shift");
   const sub = substrateById(site.substrate);
@@ -553,7 +557,18 @@ export function WeatherPanel({
         ) : null}
       </div>
 
-      {paused ? (
+      {blocked ? (
+        <div
+          role="status"
+          data-testid="sheet-blocked"
+          className="rounded-xl bg-surface px-4 py-6 text-center text-sm font-semibold text-fg shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+        >
+          {blocked}
+          <span className="mt-1 block text-xs font-normal text-muted">
+            No verdict until a data sheet loads with its application limits.
+          </span>
+        </div>
+      ) : paused ? (
         <div
           role="status"
           data-testid="windows-paused"
