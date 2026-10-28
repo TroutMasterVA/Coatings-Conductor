@@ -8,3 +8,7 @@ node_modules/
 .vercel/
 .output/
 dist/
+
+# Playwright smoke output
+/playwright-report/
+/test-results/
