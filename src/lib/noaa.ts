@@ -206,7 +206,7 @@ export function checkHour(
       checks.push({ name: label, status: "pass", reason: `${label} ${shown} within sheet ${lim}` });
     }
   }
-  range("RH", hour.rh, null, env.relativeHumidityMax, "%");
+  range("RH", hour.rh, env.relativeHumidityMin, env.relativeHumidityMax, "%");
   const stated = env.dewPointSpreadMinF != null;
   const margin = stated ? env.dewPointSpreadMinF! : SSPC_DEW_DEFAULT_F;
   const marginLabel = stated ? `sheet min ${margin}°F` : `${margin}°F ${SSPC_DEW_LABEL}`;

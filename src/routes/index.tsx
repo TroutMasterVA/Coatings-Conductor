@@ -915,6 +915,14 @@ function App({ user }: { user: AppUser | null }) {
                     }
                   : undefined
               }
+              limitCard={card ?? undefined}
+              limitAsRead={extractState.kind === "done" ? extractState.result.card : undefined}
+              limitProvenance={extractState.kind === "done" ? extractState.result.provenance : null}
+              onEditField={
+                card && !closed
+                  ? (path, value) => setCard((prev) => (prev ? setCardValue(prev, path, value) : prev))
+                  : undefined
+              }
               site={scoringSite}
               onSite={setSite}
               paused={flags.unverifiedTemps}

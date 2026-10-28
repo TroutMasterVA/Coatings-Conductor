@@ -607,7 +607,7 @@ export function formatEditedAt(at: unknown): string {
   });
 }
 
-function describeQuote(entry: SheetQuote): string {
+export function describeQuote(entry: SheetQuote): string {
   if (!entry.quote.trim()) return UNPINNED_TEXT;
   const q = `“${entry.quote}”`;
   return typeof entry.page === "number" ? `p. ${entry.page} — ${q}` : q;
