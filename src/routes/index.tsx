@@ -24,6 +24,8 @@ import {
   type ExtractState,
   type SavedExtract,
 } from "@/lib/extract-client";
+import { JOB_CLOSED_MESSAGE } from "@/lib/job-close";
+import { uploadOutcome, type UploadOutcome } from "@/lib/upload-sheet";
 import {
   flagsForResult,
   flagsForSaved,
@@ -463,8 +465,8 @@ function App({ user }: { user: AppUser | null }) {
     setSite((prev) => siteFromCard(next, prev));
   }
 
-  async function runExtract(source: { file: File | null; text: string; pages?: string[] }) {
-    if (jobRef.current.closed) return;
+  async function runExtract(source: { file: File | null; text: string; pages?: string[] }): Promise<ExtractState | null> {
+    if (jobRef.current.closed) return { kind: "error", message: JOB_CLOSED_MESSAGE };
     const gen = ++extractGen.current;
     const file = source.file;
     const savedPrev = extractState;
@@ -483,17 +485,17 @@ function App({ user }: { user: AppUser | null }) {
             maxUploadBytes: uploadLimit ?? undefined,
           })
         : await extractPasted(source.text, (input) => onDeviceProvider.extract(input));
-      if (gen !== extractGen.current) return;
+      if (gen !== extractGen.current) return null;
       if (state.kind === "unauthenticated") {
         returnToLogin();
-        return;
+        return state;
       }
       if (state.kind === "error" && state.issue === "JOB_CLOSED") {
         // Keep the stored read on screen; the job is a record now.
         setExtractState(savedPrev);
         markClosed({ closedAt: null, closedBy: null });
         toast.error(state.message);
-        return;
+        return state;
       }
       setExtractState(state);
       if (state.kind === "done") {
@@ -505,6 +507,18 @@ function App({ user }: { user: AppUser | null }) {
       } else if (state.kind === "error") {
         toast.error(state.message);
       }
+      return state;
+    } catch (err) {
+      // Never silent: a thrown read becomes a visible error.
+      const failed: ExtractState = {
+        kind: "error",
+        message: err instanceof Error && err.message ? err.message : "Could not read this sheet.",
+      };
+      if (gen === extractGen.current) {
+        setExtractState(failed);
+        toast.error(failed.message);
+      }
+      return failed;
     } finally {
       if (gen === extractGen.current) setExtracting(false);
     }
@@ -516,10 +530,10 @@ function App({ user }: { user: AppUser | null }) {
     void runExtract({ file: fromUpload, text, pages: fromUpload ? upload?.pages : undefined });
   }
 
-  function handleUpload(file: File, pdfText: string, pages?: string[]) {
+  async function handleUpload(file: File, pdfText: string, pages?: string[]): Promise<UploadOutcome> {
     uploadRef.current = { file, text: pdfText, pages };
     if (pdfText) setText(pdfText);
-    void runExtract({ file, text: pdfText, pages });
+    return uploadOutcome(await runExtract({ file, text: pdfText, pages }), signedIn);
   }
 
   async function handleForecast(active: FieldCardData | null = card, nextZip = zip) {
@@ -846,6 +860,7 @@ function App({ user }: { user: AppUser | null }) {
                 onText={setText}
                 onExtract={() => handleExtract()}
                 onUpload={(file, pdfText, pages) => handleUpload(file, pdfText, pages)}
+                onSignIn={signedIn ? undefined : () => returnToLogin()}
                 onSample={(next, raw) => {
                   extractGen.current += 1;
                   setExtracting(false);

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SAMPLE_PDS_TEXT, SAMPLES } from "@/lib/samples";
-import { ACCEPT_ATTR, isPdf } from "@/lib/extract-client";
+import { processPick, takePickedFile, statusText, PICKER_ACCEPT, type UploadOutcome, type UploadStatus } from "@/lib/upload-sheet";
 import { joinPages } from "@/lib/pdf-lines";
 import { extractPdfPages } from "@/lib/pdf-text";
 import type { FieldCardData, SavedCard } from "@/lib/types";
@@ -19,54 +19,35 @@ export function PdsIntake({
   loading,
   recents,
   onOpenRecent,
+  onSignIn,
 }: {
   text: string;
   onText: (v: string) => void;
   onExtract: () => void;
   /** PDF, photo/scan, or Word file picked: hand the file (for the server reader) plus any on-device text. */
-  onUpload: (file: File, text: string, pages?: string[]) => void;
+  onUpload: (file: File, text: string, pages?: string[]) => Promise<UploadOutcome> | UploadOutcome | void;
+  /** Guests only: where the Failed line's "Sign in" button goes. */
+  onSignIn?: () => void;
   onSample: (card: FieldCardData, raw: string) => void;
   loading: boolean;
   recents: SavedCard[];
   onOpenRecent: (card: FieldCardData) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [fileNote, setFileNote] = useState<string | null>(null);
+  const [upload, setUpload] = useState<UploadStatus>({ kind: "idle" });
+  const busy = upload.kind === "uploading";
 
-  async function onFile(file: File | undefined) {
-    if (!file) return;
-    setFileNote(null);
-    const lower = file.name.toLowerCase();
-    if (lower.endsWith(".txt") || lower.endsWith(".md") || file.type === "text/plain") {
-      const raw = await file.text();
-      onText(raw);
-      setFileNote(`Loaded ${file.name}.`);
-      return;
-    }
-    let extracted = "";
-    let pages: string[] | undefined;
-    if (isPdf(file)) {
-      try {
-        const read = await extractPdfPages(file);
-        // FE-2 per-page text → contract's `pages: string[]` (index 0 = page 1).
-        pages = read.map((p) => p.text);
-        extracted = joinPages(read);
-      } catch {
-        extracted = "";
-      }
-      // Little or no text on-device is fine to send: the server decides how to read it.
-      if (extracted.replace(/\s/g, "").length < 80) {
-        extracted = "";
-        pages = undefined;
-      }
-      if (extracted) onText(extracted);
-    }
-    setFileNote(
-      extracted
-        ? `Loaded ${file.name} (${extracted.length.toLocaleString()} characters).`
-        : `Loaded ${file.name}.`,
-    );
-    onUpload(file, extracted, pages);
+  async function onPick(input: HTMLInputElement) {
+    const file = takePickedFile(input);
+    await processPick(file, {
+      setStatus: setUpload,
+      onText,
+      readPdf: async (f) => {
+        const read = await extractPdfPages(f);
+        return { pages: read.map((p) => p.text), text: joinPages(read) };
+      },
+      onUpload,
+    });
   }
 
   return (
@@ -82,21 +63,24 @@ export function PdsIntake({
           <input
             ref={fileRef}
             type="file"
-            accept={`${ACCEPT_ATTR},.txt,.md`}
+            accept={PICKER_ACCEPT}
             className="sr-only"
-            onChange={(e) => void onFile(e.target.files?.[0])}
+            data-testid="sheet-file"
+            onChange={(e) => void onPick(e.currentTarget)}
           />
           <Button
             type="button"
             variant="outline"
             size="sm"
+            disabled={busy}
             onClick={() => fileRef.current?.click()}
           >
-            <Upload />
-            Upload sheet
+            {busy ? <Loader2 className="animate-spin" /> : <Upload />}
+            {busy ? "Uploading…" : "Upload sheet"}
           </Button>
         </div>
       </div>
+      <UploadStatusLine status={upload} onSignIn={onSignIn} />
 
       <Textarea
         id="pds"
@@ -106,7 +90,7 @@ export function PdsIntake({
         className="mt-3 min-h-44 font-mono text-[13px] leading-relaxed"
       />
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-        <span>{fileNote ?? `${text.length.toLocaleString()} / 40,000`}</span>
+        <span>{`${text.length.toLocaleString()} / 40,000`}</span>
         <Button type="button" onClick={onExtract} disabled={loading || text.trim().length < 40}>
           {loading ? <Loader2 className="animate-spin" /> : <FileText />}
           Build job card
@@ -157,5 +141,31 @@ export function PdsIntake({
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** Uploading (spinner) · Loaded (file name) · Failed (plain reason). Exported for tests. */
+export function UploadStatusLine({ status, onSignIn }: { status: UploadStatus; onSignIn?: () => void }) {
+  const line = statusText(status);
+  if (!line) return null;
+  return (
+    <div
+      role={status.kind === "failed" ? "alert" : "status"}
+      aria-live="polite"
+      data-testid="upload-status"
+      data-state={status.kind}
+      className={cn(
+        "mt-3 flex flex-wrap items-center gap-2 rounded-md px-3 py-2 text-sm",
+        status.kind === "failed" ? "bg-nogo/10 text-nogo" : "bg-surface-2 text-fg",
+      )}
+    >
+      {status.kind === "uploading" ? <Loader2 className="size-4 animate-spin" /> : null}
+      <span>{line}</span>
+      {status.kind === "failed" && status.signIn && onSignIn ? (
+        <Button type="button" size="sm" variant="outline" onClick={onSignIn}>
+          Sign in to upload
+        </Button>
+      ) : null}
+    </div>
   );
 }
