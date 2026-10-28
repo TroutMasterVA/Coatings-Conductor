@@ -2,7 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
 import { closeJob, deleteOpenProject, GUEST_CLOSED_BY, statusFields, throwWriteRefused, type JobStatus } from "@/lib/job-close";
-import { listProjectRows, openProjectRow, readProjectRow, toRowSummary, type ProjectRow } from "@/lib/project-rows";
+import { listProjectRows, toRowSummary, type ProjectRow } from "@/lib/project-rows";
+import { openOwnedProject, readOwnedProject, throwProjectNotFound, type SetStatus } from "@/lib/project-access";
 import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
@@ -54,6 +55,12 @@ function parseJson<T>(raw: string | null | undefined, fallback: T): T {
 
 export function defaultSite(): SiteContext {
   return { substrate: "bare_steel", mitigations: [], customMitigationIds: [] };
+}
+
+/** Server-only: sets the HTTP status of the current server-function response (loaded lazily, never shipped to the browser). */
+async function responseStatusSetter(): Promise<SetStatus> {
+  const { setResponseStatus } = await import("@tanstack/react-start/server");
+  return (status) => setResponseStatus(status);
 }
 
 function toSummary(row: ProjectRow): ProjectSummary {
@@ -173,8 +180,8 @@ export const openProject = createServerFn({ method: "POST" })
   .handler(async ({ context, data: id }): Promise<ProjectFull> => {
     const sql = await getSql();
     const now = new Date().toISOString();
-    const row = await openProjectRow(sql, context.userId, id, now);
-    if (!row) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    // One lookup scoped by id AND user_id: another user's project and a missing one both get the same 404.
+    const row = await openOwnedProject(sql, context.userId, id, now, await responseStatusSetter());
     await sql`
       insert into user_prefs (user_id, last_project_id) values (${context.userId}, ${id})
       on conflict (user_id) do update set last_project_id = ${id}
@@ -201,8 +208,8 @@ export const saveProject = createServerFn({ method: "POST" })
   )
   .handler(async ({ context, data }): Promise<ProjectSummary> => {
     const sql = await getSql();
-    const row = await readProjectRow(sql, context.userId, data.id);
-    if (!row) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    const setStatus = await responseStatusSetter();
+    const row = await readOwnedProject(sql, context.userId, data.id, setStatus);
     // Closed jobs are read-only. The write below re-checks status in its WHERE clause (race-safe).
     if (row.status === "closed") return throwWriteRefused(sql, context.userId, data.id);
     const name = data.name?.trim() || row.name;
@@ -225,9 +232,8 @@ export const saveProject = createServerFn({ method: "POST" })
       recentsJson: JSON.stringify(recents),
       outcomesJson: JSON.stringify(outcomes),
     });
-    if (!saved) throw new Error(NOT_YOUR_JOB_MESSAGE);
-    const updated = await readProjectRow(sql, context.userId, data.id);
-    if (!updated) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    if (!saved) throwProjectNotFound(setStatus);
+    const updated = await readOwnedProject(sql, context.userId, data.id, setStatus);
     return toSummary(updated);
   });
 
@@ -241,7 +247,7 @@ export const archiveProject = createServerFn({ method: "POST" })
       where id = ${data.id} and user_id = ${context.userId}
       returning id
     `;
-    if (!rows[0]) throw new Error(NOT_YOUR_JOB_MESSAGE);
+    if (!rows[0]) throwProjectNotFound(await responseStatusSetter());
     if (data.archived) {
       await sql`
         update user_prefs set last_project_id = null
