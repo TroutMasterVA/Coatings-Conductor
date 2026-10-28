@@ -113,3 +113,11 @@ export function hourLine(check: HourCheck, dayHour: HourWindow | undefined): Hou
   const variant = check.verdict === "go" ? "go" : check.verdict === "nogo" ? "nogo" : "default";
   return { text: LINE_TEXT[check.verdict], variant, caution: false };
 }
+
+/** Top line of a day card: the best stretch, labelled as such (distinct from "Counted hours"). */
+export function bestStretchLabel(day: { bestRange: string | null; hours?: Array<{ status: string }> }): string {
+  if (!day.bestRange) return "No GO stretch";
+  const anyGo = (day.hours ?? []).some((h) => h.status === "go");
+  const what = anyGo || !day.hours?.length ? "Best GO stretch" : "Best caution stretch";
+  return day.bestRange === "All day" ? `${what}: all day` : `${what} ${day.bestRange}`;
+}

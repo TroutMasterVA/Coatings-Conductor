@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { UnstatedLimits } from "@/components/unstated-limits";
 import { cn } from "@/lib/utils";
 import { DRAFT_BANNER } from "@/lib/extract-flags";
-import { goGateChips } from "@/components/go-gate-chips";
+import { goGateChips, jobCardGateLine } from "@/components/go-gate-chips";
 
 function join(items: string[] | undefined) {
   return (items ?? []).filter(Boolean).join(" · ");
@@ -345,7 +345,8 @@ export function FieldCardView({
   draft?: boolean;
 }) {
   const mid = "·";
-  const envGates = goGateChips(card);
+  const envGates = jobCardGateLine(card);
+  const potLife = card.mixing.potLife || card.shelfLife.mixedPotLife;
   const prepLines = prepGateLines(card);
   const mix = card.product.mixRatio || card.mixing.ratio;
   const recoat = [card.cure.recoatMin && `min ${card.cure.recoatMin}`, card.cure.recoatMax && `max ${card.cure.recoatMax}`]
@@ -426,6 +427,7 @@ export function FieldCardView({
             <Attr label="Substrates" value={join(card.surfacePrep.substrates)} />
             <Attr label="Mix" value={mix} />
             <Attr label="Film" value={card.installation.filmThickness} path="installation.filmThickness" />
+            <Attr label="Pot life" value={potLife} path={card.mixing.potLife ? "mixing.potLife" : "shelfLife.mixedPotLife"} />
             <Attr label="Recoat" value={recoat || null} />
           </div>
 

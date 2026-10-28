@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { UnstatedLimits } from "@/components/unstated-limits";
-import { dayHourIndex, hourLine, hourListLabel, hourReadings, hourText, STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
+import { bestStretchLabel, dayHourIndex, hourLine, hourListLabel, hourReadings, hourText, STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
 import { Check, CloudSun, Loader2, MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -138,7 +138,7 @@ function DayCard({ day, night }: { day: DayWindow; night?: boolean }) {
         </div>
         <Badge variant={statusVariant(day.status)}>{day.status}</Badge>
       </div>
-      <p className="mt-2 font-mono text-sm text-fg">{day.bestRange ?? "No window"}</p>
+      <p className="mt-2 font-mono text-sm text-fg">{bestStretchLabel(day)}</p>
       <p className="mt-0.5 text-xs text-muted">
         {dayCountLabel(day)}
       </p>

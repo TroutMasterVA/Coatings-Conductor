@@ -48,7 +48,29 @@ export function productTitleFromText(text: string): string {
     if (/^(?:a|an|the|this)\s/i.test(seg) || seg.split(/\s+/).length > 12) continue; // a sentence, not a title
     return seg.slice(0, 80);
   }
-  return "";
+  return subjectProductName(text);
+}
+
+/**
+ * Fallback when the title is not at the top of the text layer (big title type is often emitted
+ * last by pdf.js): the brand + model code the sheet uses as the subject of its own sentences
+ * ("Xyz 450H can be used as…", "Xyz 450H is not recommended…"), repeated at least 3 times.
+ */
+function subjectProductName(text: string): string {
+  const t = text.replace(/[®™©]/g, " ").replace(/\s+/g, " ");
+  const counts = new Map<string, number>();
+  const re = /\b([A-Z][A-Za-z]{2,}(?:\s+(?=[A-Za-z-]*\d)[A-Z0-9][\w-]{1,12}))\s+(?:can\s+be\s+used|is\s+(?:a|an|not|designed|recommended|suitable|formulated|intended))\b/g;
+  for (const m of t.matchAll(re)) counts.set(m[1]!, (counts.get(m[1]!) ?? 0) + 1);
+  let best = "";
+  let bestN = 0;
+  for (const name of counts.keys()) {
+    const n = t.split(name).length - 1;
+    if (n >= 3 && n > bestN) {
+      best = name;
+      bestN = n;
+    }
+  }
+  return best;
 }
 
 function clean(s: string): string {

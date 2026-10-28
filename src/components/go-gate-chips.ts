@@ -1,5 +1,6 @@
 import type { FieldCardData } from "../lib/types.ts";
 import { formatTempRange } from "../lib/temp-range.ts";
+import { unstatedLimitFlags } from "../lib/limit-fields.ts";
 
 /**
  * Go-gate chips for the field card. Temperatures go through BE's shared
@@ -25,4 +26,13 @@ export function goGateChips(card: FieldCardData): string[] {
   if (env.precipitationAllowed === false) chips.push("No precipitation");
   if (env.windMaxMph != null) chips.push(`Wind ≤ ${env.windMaxMph} mph`);
   return chips;
+}
+
+/**
+ * The job card's Go gates line: stated gates plus a "Not stated — check the sheet for …" item for
+ * every unstated limit, from the single list in limit-fields.ts (replaces the bare dew chip).
+ */
+export function jobCardGateLine(card: FieldCardData): string[] {
+  const flags = unstatedLimitFlags(card.environmentals);
+  return [...goGateChips(card).filter((c) => c !== "Dew spread not stated"), ...flags];
 }

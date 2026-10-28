@@ -89,3 +89,49 @@ describe("a cure or schedule temperature is never an application limit (generic 
     assert.equal(quoteBacksValue(p, 40, "Surface Ambient Normal 40 ° -95 ° F Minimum 40 ° F 40 ° F"), true);
   });
 });
+
+// Extension (Oct 28): the job card gates line and the sources list read the same typed list.
+import { jobCardGateLine } from "../components/go-gate-chips.ts";
+import { provenanceRows } from "./extract-client.ts";
+import { bestStretchLabel } from "./hour-strip.ts";
+
+describe("job card gates line and sources list flag every unstated limit", () => {
+  for (const key of numericKeys) {
+    it(`${key}: job card gates line and sources list show the check-the-sheet flag`, () => {
+      const env = envWith(key);
+      const flag = notStatedFlag(LIMIT_LABEL[key as LimitKey]);
+      const card = { ...heuristicExtract(" "), environmentals: env };
+      const line = jobCardGateLine(card);
+      assert.ok(line.includes(flag), `${key}: ${line.join(" | ")}`);
+      assert.equal(line.filter((x) => x.startsWith("Not stated — check the sheet")).length, 1);
+      const rows = provenanceRows({ [`environmentals.${key}`]: "not-stated", "product.name": { quote: "x" } } as never);
+      const row = rows.find((r) => r.fieldPath === `environmentals.${key}`)!;
+      assert.equal(row.flag, flag);
+    });
+  }
+  it("all stated: no flag items; a stated row carries no flag", () => {
+    const card = { ...heuristicExtract(" "), environmentals: envWith() };
+    assert.ok(!jobCardGateLine(card).some((x) => /check the sheet/.test(x)));
+    const rows = provenanceRows({ "environmentals.windMaxMph": { quote: "Wind 25 mph max" } } as never);
+    assert.equal(rows[0]!.flag, undefined);
+  });
+});
+
+describe("day card top line names the best GO stretch, distinct from counted hours", () => {
+  it("labels the best run", () => {
+    assert.equal(bestStretchLabel({ bestRange: "10:00–21:00", hours: [{ status: "go" }] }), "Best GO stretch 10:00–21:00");
+    assert.equal(bestStretchLabel({ bestRange: "All day", hours: [{ status: "go" }] }), "Best GO stretch: all day");
+    assert.equal(bestStretchLabel({ bestRange: "08:00–10:00", hours: [{ status: "caution" }] }), "Best caution stretch 08:00–10:00");
+    assert.equal(bestStretchLabel({ bestRange: null, hours: [] }), "No GO stretch");
+  });
+  it("on a real bundle the best stretch and the counted range are separate, labelled values", () => {
+    const meta = { zip: "00000", city: "X", state: "VA", source: "t", timezone: "UTC" } as never;
+    const env = envWith();
+    const hours = Array.from({ length: 16 }, (_, i) =>
+      scoreHour({ ...raw, startIso: `2026-10-27T${String(8 + i).padStart(2, "0")}:00:00Z`, tempF: i < 2 ? 38 : 70 }, env, "UTC"));
+    const day = bundleDays(hours, meta, env).days[0]!;
+    assert.equal(day.workRange, "08:00–21:00");
+    assert.equal(bestStretchLabel(day), `Best GO stretch ${day.bestRange}`);
+    assert.notEqual(day.bestRange, day.workRange);
+  });
+});
