@@ -365,6 +365,18 @@ export function scoreHour(
     }
   }
 
+  // Sheet RH minimum (moisture-cure products): under it is a hard NO-GO, near it a caution.
+  if (rh != null && env.relativeHumidityMin != null) {
+    const hit = underLimit(rh, env.relativeHumidityMin, cal.moisture, 6);
+    if (hit === "hard") {
+      reasons.push(`RH ${rh}% below min ${env.relativeHumidityMin}%`);
+      hard += 1;
+    } else if (hit === "soft") {
+      reasons.push(`RH ${rh}% near min`);
+      soft += 1;
+    }
+  }
+
   const spread = surfCold != null && dew != null ? round1(surfCold - dew) : air != null && dew != null ? round1(air - dew) : null;
   const spreadBasis = surfCold != null ? surfBasis(surfCold) : "air";
   // Dew margin: the sheet's, else 5°F labelled as the SSPC industry default (not from the sheet).

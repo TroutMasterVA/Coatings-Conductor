@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { LimitsPanel } from "@/components/limits-panel";
+import type { ClientProvenance } from "@/lib/extract-client";
 import { UnstatedLimits } from "@/components/unstated-limits";
 import { bestStretchLabel, dayHourIndex, hourLine, hourListLabel, hourReadings, hourText, STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
 import { Check, CloudSun, Loader2, MapPin } from "lucide-react";
@@ -23,7 +25,7 @@ import {
 } from "@/lib/mitigations";
 import { dayCountLabel, detectLimiters, goHourCount, unlockedGoHours } from "@/lib/score-windows";
 import { BACKUP_LABEL, type LimitCheck, type SheetWindow } from "@/lib/noaa";
-import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "@/lib/types";
+import type { DayWindow, Environmentals, FieldCardData, ForecastBundle, HourWindow, WindowStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { WINDOWS_PAUSED } from "@/lib/extract-flags";
 
@@ -151,34 +153,6 @@ function DayCard({ day, night }: { day: DayWindow; night?: boolean }) {
   );
 }
 
-function numOrNull(v: string): number | null {
-  if (v.trim() === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function Limit({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number | null;
-  onChange: (n: number | null) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="text-xs font-medium text-muted">{label}</span>
-      <Input
-        inputMode="decimal"
-        className="mt-1 h-9 font-mono"
-        value={value ?? ""}
-        onChange={(e) => onChange(numOrNull(e.target.value))}
-      />
-    </label>
-  );
-}
-
 function MitPickGrid({
   title,
   blurb,
@@ -271,6 +245,10 @@ export function WeatherPanel({
   disabled,
   environmentals,
   onEnvironmentals,
+  limitCard,
+  limitAsRead,
+  limitProvenance,
+  onEditField,
   site,
   onSite,
   paused,
@@ -285,6 +263,12 @@ export function WeatherPanel({
   disabled?: boolean;
   environmentals?: Environmentals;
   onEnvironmentals?: (env: Environmentals) => void;
+  /** Card behind the limits panel (its environmentals are `environmentals`). */
+  limitCard?: FieldCardData;
+  /** Card as the sheet was read, and that read's sources: "from sheet" vs "user-edited". */
+  limitAsRead?: FieldCardData;
+  limitProvenance?: ClientProvenance | null;
+  onEditField?: (path: string, value: string) => void;
   site: SiteContext;
   onSite: (site: SiteContext) => void;
   /** Temperature limits not verified on the sheet: no windows are shown (FE-3). */
@@ -560,49 +544,15 @@ export function WeatherPanel({
           <div className="mt-5 border-t border-border pt-4">
             <p className="text-xs font-medium uppercase tracking-wide text-muted">Window limits (editable)</p>
             <UnstatedLimits env={environmentals} />
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <Limit
-                label="Air min °F"
-                value={environmentals.ambientTempMinF}
-                onChange={(n) => onEnvironmentals({ ...environmentals, ambientTempMinF: n })}
+            {limitCard ? (
+              <LimitsPanel
+                card={{ ...limitCard, environmentals }}
+                asRead={limitAsRead}
+                provenance={limitProvenance}
+                onEnvironmentals={onEnvironmentals}
+                onEditField={onEditField}
               />
-              <Limit
-                label="Air max °F"
-                value={environmentals.ambientTempMaxF}
-                onChange={(n) => onEnvironmentals({ ...environmentals, ambientTempMaxF: n })}
-              />
-              <Limit
-                label="Substrate max °F"
-                value={environmentals.substrateTempMaxF}
-                onChange={(n) => onEnvironmentals({ ...environmentals, substrateTempMaxF: n })}
-              />
-              <Limit
-                label="Dew spread °F"
-                value={environmentals.dewPointSpreadMinF}
-                onChange={(n) => onEnvironmentals({ ...environmentals, dewPointSpreadMinF: n })}
-              />
-              <Limit
-                label="RH max %"
-                value={environmentals.relativeHumidityMax}
-                onChange={(n) => onEnvironmentals({ ...environmentals, relativeHumidityMax: n })}
-              />
-              <Limit
-                label="Wind max mph"
-                value={environmentals.windMaxMph}
-                onChange={(n) => onEnvironmentals({ ...environmentals, windMaxMph: n })}
-              />
-              <label className="flex items-end gap-2 pb-1 text-sm text-fg">
-                <input
-                  type="checkbox"
-                  className="size-4 accent-go"
-                  checked={!environmentals.precipitationAllowed}
-                  onChange={(e) =>
-                    onEnvironmentals({ ...environmentals, precipitationAllowed: !e.target.checked })
-                  }
-                />
-                Dry only
-              </label>
-            </div>
+            ) : null}
           </div>
         ) : null}
       </div>

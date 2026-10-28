@@ -607,7 +607,7 @@ export function formatEditedAt(at: unknown): string {
   });
 }
 
-function describeQuote(entry: SheetQuote): string {
+export function describeQuote(entry: SheetQuote): string {
   if (!entry.quote.trim()) return UNPINNED_TEXT;
   const q = `“${entry.quote}”`;
   return typeof entry.page === "number" ? `p. ${entry.page} — ${q}` : q;
@@ -711,6 +711,23 @@ export function extractForSave(
     return toSavedExtract(state);
   }
   return opts.cardReplaced ? null : undefined;
+}
+
+/**
+ * The save calls for one autosave. A fresh read is stored as it was read (the read's own card), and
+ * any hand edit made before that first save follows as a plain card save, so it is stamped like
+ * every other edit. Sent together, the edit would be stored as part of the read (guests: as the
+ * sheet's value, with no edit stamp).
+ */
+export function readThenEdits<T extends { card?: FieldCardData | null; extract?: SavedExtract | null }>(
+  data: T,
+  readCard: FieldCardData | null | undefined,
+): T[] {
+  if (!data.extract || !readCard || !data.card || data.card === readCard) return [data];
+  if (JSON.stringify(data.card) === JSON.stringify(readCard)) return [data];
+  const { extract: _sent, ...edits } = data;
+  void _sent;
+  return [{ ...data, card: readCard }, edits as T];
 }
 
 /** Reopen: rebuild the panel from the saved record. Missing or malformed → idle, never throws. */

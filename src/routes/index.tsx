@@ -21,6 +21,7 @@ import {
   extractUpload,
   savedExtractState,
   extractForSave,
+  readThenEdits,
   needsAzureReader,
   type ExtractState,
   type SavedExtract,
@@ -216,6 +217,7 @@ function App({ user }: { user: AppUser | null }) {
     outcomes: [] as FieldOutcome[],
     extract: null as SavedExtract | null | undefined,
     extractResult: null as object | null,
+    readCard: null as FieldCardData | null,
     replaceToken: 0,
     closed: false,
   });
@@ -240,6 +242,7 @@ function App({ user }: { user: AppUser | null }) {
     }),
     replaceToken: cardReplaced.current,
     extractResult: extractState.kind === "done" ? extractState.result : null,
+    readCard: extractState.kind === "done" ? extractState.result.card : null,
     closed,
   };
 
@@ -275,7 +278,7 @@ function App({ user }: { user: AppUser | null }) {
     window.clearTimeout(persistTimer.current);
     const gen = saveGen.current;
     try {
-      const summary = await api.save({
+      const data = {
         id: snap.projectId,
         name: snap.projectName,
         zip: snap.zip,
@@ -286,7 +289,11 @@ function App({ user }: { user: AppUser | null }) {
         recents: snap.recents,
         outcomes: snap.outcomes,
         extract: snap.extract,
-      });
+      };
+      // An edit made before a fresh read's first save goes in after the read, so it is stamped.
+      let summary: Awaited<ReturnType<typeof api.save>> | undefined;
+      for (const step of readThenEdits(data, snap.readCard)) summary = await api.save(step);
+      if (!summary) return;
       if (snap.extract && snap.extractResult) storedReads.current.add(snap.extractResult);
       // A clear or a replace both satisfy a pending card replacement.
       if (snap.extract !== undefined) clearedSent.current = snap.replaceToken;
@@ -935,6 +942,14 @@ function App({ user }: { user: AppUser | null }) {
                   ? (env) => {
                       setCard({ ...card, environmentals: env });
                     }
+                  : undefined
+              }
+              limitCard={card ?? undefined}
+              limitAsRead={extractState.kind === "done" ? extractState.result.card : undefined}
+              limitProvenance={extractState.kind === "done" ? extractState.result.provenance : null}
+              onEditField={
+                card && !closed
+                  ? (path, value) => setCard((prev) => (prev ? setCardValue(prev, path, value) : prev))
                   : undefined
               }
               site={scoringSite}
