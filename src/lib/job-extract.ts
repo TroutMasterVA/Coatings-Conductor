@@ -159,11 +159,24 @@ const UNTRUSTED: TrustRead = () => ({ meta: false, fields: new Set() });
 /**
  * Guest workspace only (no server, no secret; everything is on this device anyway): a different
  * `extractedAt` from the stored one counts as a new read. Never used on the server.
+ * The stored extract's `extractedAt` is the device save time (see planExtractSave), so the read's
+ * own time is the stored card's `extractedAt`: the same read sent again is not a new read, and
+ * its quotes never replace the guest's edit stamps.
  */
-export const guestTrust: TrustRead = (incoming, card, stored) =>
-  stored && stored.extractedAt === incoming.extractedAt
+export function guestTrust(
+  incoming: SavedExtract,
+  card: FieldCardData | null | undefined,
+  stored: SavedExtract | null,
+  storedCard?: FieldCardData | null,
+): ReadTrust {
+  const sameRead =
+    !!stored &&
+    (stored.extractedAt === incoming.extractedAt ||
+      (typeof storedCard?.extractedAt === "string" && storedCard.extractedAt === incoming.extractedAt));
+  return sameRead
     ? { meta: false, fields: new Set() }
     : { meta: true, fields: new Set(card ? leaves(card).map((l) => l.path) : []) };
+}
 
 function stripServerRead(e: SavedExtract): SavedExtract {
   const { serverRead: _drop, ...rest } = e;

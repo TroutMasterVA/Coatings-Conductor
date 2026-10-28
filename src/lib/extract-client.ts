@@ -713,6 +713,23 @@ export function extractForSave(
   return opts.cardReplaced ? null : undefined;
 }
 
+/**
+ * The save calls for one autosave. A fresh read is stored as it was read (the read's own card), and
+ * any hand edit made before that first save follows as a plain card save, so it is stamped like
+ * every other edit. Sent together, the edit would be stored as part of the read (guests: as the
+ * sheet's value, with no edit stamp).
+ */
+export function readThenEdits<T extends { card?: FieldCardData | null; extract?: SavedExtract | null }>(
+  data: T,
+  readCard: FieldCardData | null | undefined,
+): T[] {
+  if (!data.extract || !readCard || !data.card || data.card === readCard) return [data];
+  if (JSON.stringify(data.card) === JSON.stringify(readCard)) return [data];
+  const { extract: _sent, ...edits } = data;
+  void _sent;
+  return [{ ...data, card: readCard }, edits as T];
+}
+
 /** Reopen: rebuild the panel from the saved record. Missing or malformed → idle, never throws. */
 export function savedExtractState(record: {
   card: FieldCardData | null;

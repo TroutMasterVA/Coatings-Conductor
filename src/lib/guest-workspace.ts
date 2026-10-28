@@ -245,7 +245,7 @@ export function guestSaveProject(input: {
     card: input.card,
     extract: input.extract,
     editor: { by: GUEST_EDITOR, at: now },
-    trust: guestTrust,
+    trust: (incoming, card, stored) => guestTrust(incoming, card, stored, found.card),
   });
   const next: ProjectFull = {
     ...found,
