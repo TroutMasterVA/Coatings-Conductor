@@ -1,0 +1,94 @@
+name: Smoke
+
+# Real-browser smoke tests (iPhone WebKit, Android Chromium, desktop Chrome) against the
+# PR's own Vercel preview. No secrets beyond the default GITHUB_TOKEN.
+on:
+  pull_request:
+    branches: [release/beta-azure]
+  # Run by hand against any preview, e.g. another PR's.
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Preview URL to test (https://<preview>.vercel.app)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: read
+
+concurrency:
+  group: smoke-${{ github.event.pull_request.number || inputs.base_url }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Find the preview URL for this commit
+        id: preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_URL: ${{ inputs.base_url }}
+        run: |
+          url="${INPUT_URL%/}"
+          # Poll the deployments API (up to ~15 min) for Vercel's preview of this SHA.
+          for i in $(seq 1 60); do
+            [ -n "$url" ] && break
+            for id in $(gh api "repos/$REPO/deployments?sha=$SHA&per_page=10" --jq '.[] | select(.environment != "Production") | .id'); do
+              url=$(gh api "repos/$REPO/deployments/$id/statuses" --jq '[.[] | select(.state == "success")][0] | (.environment_url // .target_url // empty)')
+              [ -n "$url" ] && break
+            done
+            [ -n "$url" ] || sleep 15
+          done
+          if [ -z "$url" ]; then echo "::error::No successful Vercel preview found for $SHA"; exit 1; fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Preview: $url"
+          code=$(curl -s -o /tmp/health.json -w '%{http_code}' "$url/api/health")
+          echo "health: $code $(cat /tmp/health.json)"
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::Preview is protected (HTTP $code). Smoke needs a public preview; no bypass secret is configured."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Install browsers
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Smoke tests
+        env:
+          BASE_URL: ${{ steps.preview.outputs.url }}
+          CI: "true"
+        run: npx playwright test
+
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: playwright-report
+          retention-days: 14
+
+      - name: Upload screenshots and videos
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: test-results
+          retention-days: 14
