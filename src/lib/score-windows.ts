@@ -11,6 +11,7 @@ import {
 import { axes, DEFAULT_CALIBRATION, lerp } from "./learning.ts";
 import { inWorkWindow, localHour, OUTSIDE_WORK_WINDOW, countedRange } from "./hour-strip.ts";
 import { notStatedFlag, unstatedLimitFlags } from "./limit-fields.ts";
+import { AIR_OUTSIDE_MATERIAL_LINE, materialHour, MEASURE_MATERIAL_LINE, readingFromSite } from "./material-temp.ts";
 import type { HourCheck } from "./noaa.ts";
 import type { DayWindow, Environmentals, ForecastBundle, HourWindow, WindowStatus } from "./types.ts";
 
@@ -90,6 +91,8 @@ export type ScoreOptions = {
   notStatedBlocksGo?: boolean;
   /** `extract.unverifiedTemps` (#32): when true, no hour or day is scored go/caution/no-go. */
   unverifiedTemps?: boolean;
+  /** Scoring clock: which site date is "today" and whether a material reading is still fresh. Default: now. */
+  now?: Date;
 };
 
 /** Used only when the sheet does not state a dew-point margin, and always labelled as such. */
@@ -441,6 +444,24 @@ export function scoreHour(
     }
   }
 
+  // Material (product) temperature: only a fresh on-site reading is scored; never air or surface.
+  const material = materialHour({
+    env,
+    reading: readingFromSite(site),
+    hourDateKey: z.dateKey,
+    timeZone,
+    now: opts.now ?? new Date(),
+    airF: raw.tempF,
+  });
+  if (material.effect === "nogo") {
+    reasons.push(...material.reasons);
+    hard += 1;
+  } else if (material.effect === "caution") {
+    reasons.push(...material.reasons);
+    soft += 1;
+  }
+  notStatedNotes.push(...material.notes);
+
   if (fogged) {
     if (discipline === "cementitious" || site?.moistureTolerant) {
       reasons.push("Fog/mist cooldown — confirm SSD or dry per PDS before placing");
@@ -609,7 +630,14 @@ export function bundleDays(
       .slice(0, 2)
       .map(([k]) => k);
 
+    // A stated material limit with no valid reading: the day says so, whatever its verdict.
+    const materialLine = scoredHours.some((h) => h.reasons.includes(MEASURE_MATERIAL_LINE)) ? MEASURE_MATERIAL_LINE : null;
+    // The air line too, whatever reason ranks first (QA D2).
+    const airMaterialLine = scoredHours.some((h) => h.reasons.includes(AIR_OUTSIDE_MATERIAL_LINE)) ? AIR_OUTSIDE_MATERIAL_LINE : null;
+
     days.push({
+      ...(materialLine ? { materialLine } : {}),
+      ...(airMaterialLine ? { airMaterialLine } : {}),
       date,
       weekday: list[0]?.weekday ?? "",
       dateLabel: list[0]?.dateLabel ?? date,

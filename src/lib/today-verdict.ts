@@ -1,4 +1,5 @@
 import { unstatedLimitFlags } from "./limit-fields.ts";
+import { materialUnstatedFlags } from "./material-temp.ts";
 import type { SheetGate } from "./sheet-gate.ts";
 import type { DayWindow, Environmentals, ForecastBundle } from "./types.ts";
 
@@ -22,7 +23,7 @@ export type TodayVerdict =
       label: (typeof TODAY_LABEL)[keyof typeof TODAY_LABEL];
       /** Today's day row: the verdict is its status, never recomputed. */
       day: DayWindow;
-      /** "Not stated — check the sheet for …" for every limit the sheet doesn't state. */
+      /** "Not stated — check the sheet for …" for every limit the sheet doesn't state (material temp included). */
       notStated: string[];
     }
   | { kind: "none"; reason: string };
@@ -65,6 +66,6 @@ export function todayVerdict(args: {
     status: day.status,
     label: TODAY_LABEL[day.status],
     day,
-    notStated: args.env ? unstatedLimitFlags(args.env) : [],
+    notStated: args.env ? [...unstatedLimitFlags(args.env), ...materialUnstatedFlags(args.env)] : [],
   };
 }

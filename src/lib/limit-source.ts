@@ -1,4 +1,5 @@
 import type { LimitKey } from "./limit-fields.ts";
+import type { MaterialLimitKey } from "./material-temp.ts";
 import type { Environmentals } from "./types.ts";
 import { DEW_SPREAD_DEFAULT_F } from "./score-windows.ts";
 import { describeQuote, isEditedEntry, valueAt, type ClientProvenance } from "./extract-client.ts";
@@ -48,5 +49,10 @@ function numOrNull(raw: string): number | null {
 
 /** One numeric panel edit → the card's new environmentals (what every verdict then reads). */
 export function editLimit(env: Environmentals, key: LimitKey, raw: string): Environmentals {
+  return { ...env, [key]: numOrNull(raw) };
+}
+
+/** One material-limit panel edit (min or max); blank = Not stated. */
+export function editMaterialLimit(env: Environmentals, key: MaterialLimitKey, raw: string): Environmentals {
   return { ...env, [key]: numOrNull(raw) };
 }

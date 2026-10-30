@@ -50,6 +50,16 @@ export function TodayVerdictLine({
         {v.label}
       </p>
       {reason ? <p className="mt-1 break-words text-sm text-fg">{reason}</p> : null}
+      {v.day.airMaterialLine && v.day.airMaterialLine !== reason ? (
+        <p className="mt-1 text-sm font-medium text-caution" data-testid="today-air-material-line">
+          {v.day.airMaterialLine}
+        </p>
+      ) : null}
+      {v.day.materialLine ? (
+        <p className="mt-1 text-sm font-medium text-caution" data-testid="today-material-line">
+          {v.day.materialLine}
+        </p>
+      ) : null}
       {v.notStated.length ? (
         <ul className="mt-2 space-y-0.5 text-xs text-caution" data-testid="today-verdict-unstated">
           {v.notStated.map((f) => (
