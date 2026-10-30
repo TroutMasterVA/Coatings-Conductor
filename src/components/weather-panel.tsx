@@ -339,7 +339,8 @@ export function WeatherPanel({
   /** Clock for the "today" line (tests); defaults to now. */
   now?: Date;
 }) {
-  const forecast = blocked ? null : forecastProp;
+  // D4: a failed load never sits next to an older verdict; the error replaces it.
+  const forecast = blocked || error ? null : forecastProp;
   const days = forecast?.days ?? [];
   const night = site.mitigations.includes("night_shift");
   const sub = substrateById(site.substrate);
