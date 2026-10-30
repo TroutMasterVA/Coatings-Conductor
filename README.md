@@ -144,7 +144,7 @@ The image has a Docker `HEALTHCHECK` on this path. On Azure, point the probes at
 - Store `BETTER_AUTH_SECRET` and `DATABASE_URL` as secrets (Container Apps secrets or Key Vault references), not plain settings.
 - The sheet reader's rate limit (10 extracts per user per minute) is kept in memory per container. With more than one replica, each replica counts separately. For the beta, run **one replica**.
 - Uploads are capped by `MAX_UPLOAD_MB` (default 10 MB). If a proxy or gateway sits in front of the container, let it accept request bodies at least that large.
-- Allow outbound HTTPS to your Postgres server, your Azure AI endpoints, and `api.weather.gov` / `api.open-meteo.com` (weather forecasts).
+- Allow outbound HTTPS to your Postgres server, your Azure AI endpoints, `api.weather.gov` / `api.open-meteo.com` (weather forecasts), and `api.zippopotam.us` (ZIP code to location lookup).
 
 ### Rolling back a bad release
 
