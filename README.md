@@ -112,7 +112,7 @@ Copy [`.env.example`](.env.example) for a commented template.
 | `PORT` | No | Port inside the container. Default `3000`. |
 | `APP_VERSION` | No | Version label in `/api/health`. Set by `--build-arg APP_VERSION`. |
 | `RUN_MIGRATIONS` | No | `false` skips migrations at container start. Default runs them. |
-| `MAX_UPLOAD_MB` | No | Largest sheet upload accepted, in MB. Default `10` (container / PAVE, what employees use). Set `3` on the Vercel practice copy (Vercel caps request bodies at about 4.5 MB). |
+| `MAX_UPLOAD_MB` | No | Largest sheet upload accepted, in MB. Default `10` (container / PAVE, what employees use). On Vercel the app never goes above `3`, whatever this says (see *Upload size limit* below); a lower value still wins. |
 | `AZURE_DOCINTEL_ENDPOINT` | For Azure | Document Intelligence endpoint |
 | `AZURE_DOCINTEL_MODEL` | No | Document Intelligence model. Default `prebuilt-layout`. |
 | `AZURE_OPENAI_ENDPOINT` | For Azure | Azure OpenAI / Foundry endpoint |
@@ -143,7 +143,15 @@ The image has a Docker `HEALTHCHECK` on this path. On Azure, point the probes at
 - Give the container app a **system-assigned managed identity**. That is how it signs in to Azure AI without keys (see the next section).
 - Store `BETTER_AUTH_SECRET` and `DATABASE_URL` as secrets (Container Apps secrets or Key Vault references), not plain settings.
 - The sheet reader's rate limit (10 extracts per user per minute) is kept in memory per container. With more than one replica, each replica counts separately. For the beta, run **one replica**.
-- Uploads are capped by `MAX_UPLOAD_MB` (default 10 MB). If a proxy or gateway sits in front of the container, let it accept request bodies at least that large.
+- Uploads are capped by `MAX_UPLOAD_MB` (default 10 MB). If a proxy or gateway sits in front of the container, let it accept request bodies at least that large (see the next section).
+
+### Upload size limit
+
+The browser sends the sheet to the server as base64 text, so the request is about **4/3 of the file size**, plus up to 80,000 characters of PDF text and some framing. The real limit is whichever is lower: `MAX_UPLOAD_MB`, or what the host lets through.
+
+- **Vercel practice copy: 3 MB.** Vercel caps a function's whole request at 4.5 MB. Measured on the practice preview on Oct 30, 2026: a 4,493,994-byte request body went through, and one byte more got `413 FUNCTION_PAYLOAD_TOO_LARGE` before the app ran. A 3 MB file is about 4.19 MB as base64, which leaves room for the text. A 3.4 MB file sits right at the edge (it passes only when little text comes with it), and anything bigger fails. That is why QA saw 3.4 MB pass and larger files fail. On Vercel the server lowers any higher `MAX_UPLOAD_MB` (including the default 10) to 3, logs that it did, and reports 3 to the screen.
+- **Container / PAVE: `MAX_UPLOAD_MB`, default 10 MB.** Node itself has no lower cap. Anything in front of the container (Azure Front Door, App Gateway, nginx, an API gateway) must accept a request of about `MAX_UPLOAD_MB × 1.34 + 0.2` MB: about **14 MB for 10 MB** (nginx: `client_max_body_size 15m`). If the proxy's cap is lower, set `MAX_UPLOAD_MB` to `(proxy cap − 0.2 MB) × 0.75` or less, or people get a size refusal for files the screen says are fine.
+- What people see: a file over the limit is refused in the browser with "File is over N MB, the upload limit on this copy." and "This file is too large for the reader. Use a smaller file." If a proxy still answers `413`, the app shows the same refusal. It never falls back to an empty draft.
 - Allow outbound HTTPS to your Postgres server, your Azure AI endpoints, `api.weather.gov` / `api.open-meteo.com` (weather forecasts), and `api.zippopotam.us` (ZIP code to location lookup).
 
 ### Rolling back a bad release
@@ -154,7 +162,7 @@ The image has a Docker `HEALTHCHECK` on this path. On Azure, point the probes at
 
 ### Vercel (practice copy)
 
-Vercel remains the default build (`npm run build`, Nitro `vercel` preset). Import the GitHub repo into a Vercel project, and set `DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` and `VITE_AUTH_ENABLED=true` in the project's environment settings. `DATABASE_URL` and `BETTER_AUTH_SECRET` are **required** for any copy people share, including a practice copy used for testing: without them, accounts and jobs disappear between requests. Make `DATABASE_URL` available at build time too, so the build applies the migrations. Also set `MAX_UPLOAD_MB=3` there, because Vercel rejects request bodies over about 4.5 MB. Pull-request previews without `DATABASE_URL` use the in-memory database.
+Vercel remains the default build (`npm run build`, Nitro `vercel` preset). Import the GitHub repo into a Vercel project, and set `DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` and `VITE_AUTH_ENABLED=true` in the project's environment settings. `DATABASE_URL` and `BETTER_AUTH_SECRET` are **required** for any copy people share, including a practice copy used for testing: without them, accounts and jobs disappear between requests. Make `DATABASE_URL` available at build time too, so the build applies the migrations. The upload limit there is 3 MB on its own (Vercel rejects request bodies over 4.5 MB; see *Upload size limit*), so `MAX_UPLOAD_MB` is only needed to go lower. Pull-request previews without `DATABASE_URL` use the in-memory database.
 
 ---
 

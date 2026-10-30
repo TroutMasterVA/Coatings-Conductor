@@ -46,7 +46,7 @@ type ExtractRequest = {
 
 - `fileBase64` / `mimeType` are optional so the **paste-text path** still works (`{ text }` only). Neither a file nor text → `EXTRACT_FAILED`.
 - Accepted `mimeType`: `application/pdf`, `image/png`, `image/jpeg`, `image/tiff`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document` (DOCX). The server checks the file's own bytes (`%PDF-`, PNG signature, `FF D8 FF`, `II*\0` / `MM\0*`, zip containing `word/document.xml`). Another type, or bytes that do not match the claimed type → `UNSUPPORTED_FILE_TYPE`.
-- File size: decoded bytes ≤ `MAX_UPLOAD_MB` (env, default **10**; practice on Vercel sets **3**). The base64 string is rejected before decoding when longer than `ceil(maxBytes * 4 / 3) + 4`.
+- File size: decoded bytes ≤ `MAX_UPLOAD_MB` (env, default **10**; on Vercel never above **3**, see `src/lib/extract/upload-limit.ts`). The base64 string is rejected before decoding when longer than `ceil(maxBytes * 4 / 3) + 4`.
 - If `text` is omitted (FE omits it when pdf.js text is over 40k chars), the server reads the file itself: Azure when configured, else pdf.js (legacy Node build) for PDF and `mammoth` for DOCX. Server-read text is capped at 200,000 chars; the 40k cap applies only to client-sent `text`.
 - **The server, never the browser, decides when a sheet is image-only** (photo/scan, or a PDF with little or no text layer).
 
@@ -81,7 +81,7 @@ type ExtractResponse =
 
 | Code | Meaning | UI |
 |---|---|---|
-| `AZURE_NOT_CONFIGURED` | No Azure env; on-device ran as designed | Quiet "on-device reader" note |
+| `AZURE_NOT_CONFIGURED` | No Azure env; on-device ran as designed. Internal only: replies carry `SERVER_READER_OFF` ("The server reader is off on this copy; showing the on-device read."); the original goes to the server log | Quiet "on-device reader" note |
 | `AZURE_FALLBACK` | Azure set up but failed / timed out; on-device ran | "Used on-device fallback" state |
 | `IMAGE_ONLY_NEEDS_AZURE` | Little or no text layer and Azure not available (not set up, or failed) | "This sheet needs the Azure reader. Showing what could be read on-device." |
 | `VALUES_DROPPED_UNQUOTED` | Values containing a number had no verbatim source line and were set to Not stated (all providers) | Informational |
@@ -156,7 +156,7 @@ interface ExtractProvider {
 | `AZURE_OPENAI_API_VERSION` | API version (must support json_schema + image input) |
 | `AZURE_DOCINTEL_KEY` | Optional — key auth fallback |
 | `AZURE_OPENAI_API_KEY` | Optional — key auth fallback |
-| `MAX_UPLOAD_MB` | Upload cap in MB (decoded file). Default 10; practice on Vercel sets 3. Exposed to the UI via `getExtractLimits()` |
+| `MAX_UPLOAD_MB` | Upload cap in MB (decoded file). Default 10; on Vercel capped at 3 by the server (measured 4.5 MB request cap). Exposed to the UI via `getExtractLimits()` |
 
 - **Auth order**: managed identity **first**, fetched directly from Azure's documented token endpoints (IMDS `http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01` with `Metadata: true`, or App Service / Functions `IDENTITY_ENDPOINT` + `IDENTITY_HEADER`, which must be https or http on localhost/127.0.0.1). No redirects are followed (`redirect: "error"`), 5 s timeout, in-memory token cache capped at 24 h; managed identity is skipped for 5 min only after a network error or our own timeout. API-key env vars are the fallback only if set (logged once, no secrets). `AZURE_AUTH_MODE=identity` (optional; default `auto`) never uses a key. `@azure/identity` is not used for now: every release pins `@azure/msal-node` ^6, vulnerable to GHSA-xcx6-jx8p-x3h5; go back to `DefaultAzureCredential` once `@azure/identity` supports `@azure/msal-node` >= 7.1.0.
 - Azure is used when endpoints + deployment + API version are set. Otherwise → on-device fallback.

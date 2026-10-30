@@ -3,6 +3,8 @@ import type { ExtractRequest, ExtractResponse } from "./provider.ts";
 import { EXTRACT_DEFAULT_MAX_FILE_MB, runExtract, type RateStore } from "./extract-core.ts";
 import { onDeviceProvider } from "./on-device-provider.ts";
 import { publicErrors } from "../errors/server-fn-middleware.ts";
+import { uploadLimit } from "./upload-limit.ts";
+import { withPublicWarnings } from "./public-warnings.ts";
 
 /**
  * Like `authMiddleware`, but a missing session becomes `userId: null` so the handler can return
@@ -34,10 +36,20 @@ function rateStore(): RateStore {
   return g.__ccExtractRate__;
 }
 
-/** Env MAX_UPLOAD_MB (decoded file size; default 10, practice on Vercel sets 3). */
+let clampLogged = false;
+/**
+ * Env MAX_UPLOAD_MB (decoded file size; default 10), never above the host's own ceiling
+ * (Vercel: 3 MB, see upload-limit.ts), so the number the UI shows is the one that works.
+ */
 export function maxUploadMb(): number {
-  const mb = Number(process.env.MAX_UPLOAD_MB);
-  return Number.isFinite(mb) && mb > 0 ? mb : EXTRACT_DEFAULT_MAX_FILE_MB;
+  const lim = uploadLimit(process.env, EXTRACT_DEFAULT_MAX_FILE_MB);
+  if (lim.clamped && !clampLogged) {
+    clampLogged = true;
+    console.warn(
+      `[extract] upload limit lowered to ${lim.mb} MB: MAX_UPLOAD_MB=${lim.configuredMb ?? `unset (default ${EXTRACT_DEFAULT_MAX_FILE_MB})`} is above this host's request body cap`,
+    );
+  }
+  return lim.mb;
 }
 
 function maxFileBytes(): number {
@@ -68,7 +80,7 @@ export const extractSheet = createServerFn({ method: "POST" })
   })
   .handler(async ({ data, context }): Promise<ExtractResponse> => {
     const { azureFromEnv } = await import("./azure-provider.ts");
-    const res = await runExtract({
+    const res = withPublicWarnings(await runExtract({
       userId: context.userId,
       input: data,
       azure: azureFromEnv(),
@@ -83,7 +95,7 @@ export const extractSheet = createServerFn({ method: "POST" })
         const [{ getSql }, { isJobClosed }] = await Promise.all([import("../db"), import("../job-close.ts")]);
         return isJobClosed(await getSql(), userId, jobId);
       },
-    });
+    }));
     if (!res.ok || !context.userId) return res;
     // Sign the read for this user so a save can prove which values came from it (server-only).
     const { authSecret } = await import("../auth/secret.server");

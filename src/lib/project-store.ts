@@ -11,6 +11,8 @@ import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput 
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
 import { decodeSavedExtract, saveJobCard, encodeSavedExtract, parseSavedExtract } from "@/lib/job-extract";
 import type { SavedExtract } from "@/lib/extract/provider";
+import { withPublicWarnings } from "@/lib/extract/public-warnings";
+import { impossibleZip } from "@/lib/zip-check";
 import type { Calibration, CustomMitigation, FieldCardData, FieldOutcome, SavedCard } from "@/lib/types";
 
 export type ProjectSummary = {
@@ -83,7 +85,7 @@ function toFull(row: ProjectRow): ProjectFull {
       bodies: site.bodies,
     },
     card: parseJson<FieldCardData | null>(row.card_json, null),
-    extract: decodeSavedExtract(row.extract_json),
+    extract: withPublicWarnings(decodeSavedExtract(row.extract_json), () => {}),
     pdsText: row.pds_text ?? "",
     recents: parseJson<SavedCard[]>(row.recents_json, []),
     outcomes: parseJson<FieldOutcome[]>(row.outcomes_json, []),
@@ -127,6 +129,8 @@ export const createProject = createServerFn({ method: "POST" })
     const zip = input.zip.replace(/\D/g, "").slice(0, 5);
     if (!name) throw new Error("Project name is required.");
     if (zip.length !== 5) throw new Error("Enter a 5-digit US ZIP.");
+    const bad = impossibleZip(zip);
+    if (bad) throw new Error(bad);
     return { name, zip, seed: input.seed };
   })
   .handler(async ({ context, data }): Promise<ProjectFull> => {
@@ -169,7 +173,7 @@ export const createProject = createServerFn({ method: "POST" })
       calibration: cal,
       site,
       card,
-      extract,
+      extract: withPublicWarnings(extract, () => {}),
       pdsText,
       recents,
       outcomes,

@@ -57,6 +57,8 @@ export const PUBLIC_MESSAGES: ReadonlySet<string> = new Set([
   // project-store.ts / guest-workspace.ts validators
   "Project name is required.",
   "Enter a 5-digit US ZIP.",
+  // zip-check.ts ZIP_00000_MESSAGE (project create)
+  "00000 isn't a US ZIP. Enter the job site's 5-digit ZIP.",
   // forecast.ts / forecast-cap.ts / forecast-sources.ts
   "ZIP not found. Use a 5-digit US ZIP.",
   "ZIP not found.",

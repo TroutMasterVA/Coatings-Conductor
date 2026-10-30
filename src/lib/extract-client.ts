@@ -32,6 +32,7 @@ import { LIMIT_LABEL, notStatedFlag, type LimitKey } from "./limit-fields.ts";
 import { parseSavedExtract } from "./job-extract.ts";
 import { toSavedExtract as buildSavedExtract } from "./extract/provider.ts";
 import { JOB_CLOSED_MESSAGE } from "./job-status.ts";
+import { isHostTooLarge } from "./extract/upload-limit.ts";
 import type {
   ExtractRequest,
   SavedExtract,
@@ -72,6 +73,8 @@ export const ALLOWED_MIME_TYPES = [...new Set(Object.values(MIME_BY_EXT))];
 
 /** Warning codes, typed against BE-1's ExtractWarningCode union. */
 export const WARNING_AZURE_NOT_CONFIGURED: ExtractWarningCode = "AZURE_NOT_CONFIGURED";
+/** Network form of AZURE_NOT_CONFIGURED (server swaps it; see extract/public-warnings.ts). Same quiet note. */
+export const WARNING_SERVER_READER_OFF: ExtractWarningCode = "SERVER_READER_OFF";
 export const WARNING_AZURE_FALLBACK: ExtractWarningCode = "AZURE_FALLBACK";
 export const WARNING_IMAGE_ONLY_NEEDS_AZURE: ExtractWarningCode = "IMAGE_ONLY_NEEDS_AZURE";
 export const WARNING_VALUES_DROPPED_UNQUOTED: ExtractWarningCode = "VALUES_DROPPED_UNQUOTED";
@@ -348,6 +351,10 @@ export function mapServerResponse(res: unknown): ServerOutcome {
     const result = parseExtractResult(res);
     return result ? { ok: true, result } : { ok: false, code: "EXTRACT_FAILED" };
   }
+  // The host refused the body before our server ran (Vercel JSON reply
+  // `{ error: { code: "413", message: "Request Entity Too Large" } }`): a size refusal, never a
+  // reader failure, so the browser must not fall back to an empty on-device draft.
+  if (!isErrorCode(r.error?.code) && isHostTooLarge(r.error)) return { ok: false, code: "FILE_TOO_LARGE" };
   // Main path (CONTRACT 438a63b): `{ ok:false, error:{ code, message } }`, incl. JOB_CLOSED.
   if (!isErrorCode(r.error?.code) && r.code === "JOB_CLOSED") {
     const msg = typeof r.message === "string" && r.message.trim() ? r.message : undefined;
@@ -369,6 +376,8 @@ export function mapServerResponse(res: unknown): ServerOutcome {
 export function mapThrown(err: unknown): ServerIssue {
   if (err && typeof err === "object" && (err as { message?: unknown }).message === "Unauthorized")
     return "UNAUTHENTICATED";
+  // The host refused the request body (Vercel: plain-text 413 FUNCTION_PAYLOAD_TOO_LARGE).
+  if (isHostTooLarge(err)) return "FILE_TOO_LARGE";
   return "SERVER_UNAVAILABLE";
 }
 
@@ -509,10 +518,42 @@ export async function extractUpload(input: {
   const out = await callServer(input.server, payload);
   if (out.ok) return { kind: "done", result: out.result, source: "server" };
   if (out.code === "UNAUTHENTICATED") return { kind: "unauthenticated" };
+  if (out.code === "FILE_TOO_LARGE" && !out.message) {
+    // Host 413 (no server message): name this copy's limit when known.
+    return errorState(out.code, undefined, input.maxUploadBytes ? fileTooLargeMessage(input.maxUploadBytes) : undefined);
+  }
   if (pdf && CLIENT_FALLBACK_CODES.has(out.code)) {
-    return onDeviceRead(input, input.onDevice, "client-fallback", out.code, out.retryAfterSec);
+    const read = await onDeviceRead(input, input.onDevice, "client-fallback", out.code, out.retryAfterSec);
+    // Never a silent empty draft: the server failed and the browser found nothing either.
+    if (read.kind === "done" && nothingRead(read.result)) {
+      return {
+        kind: "error",
+        message: `${ISSUE_COPY[out.code]} ${NOTHING_READ_NOTE}`,
+        issue: out.code,
+        ...(out.retryAfterSec ? { retryAfterSec: out.retryAfterSec } : {}),
+      };
+    }
+    return read;
   }
   return errorState(out.code, out.retryAfterSec, out.message);
+}
+
+/** Shown with the server issue when the fallback read found nothing (no draft is made). */
+export const NOTHING_READ_NOTE =
+  "The on-device reader found nothing on this file either, so no draft was made. Try again, or use a smaller or text-based PDF.";
+
+/** True when a read has no stated value at all (every provenance entry is "not-stated", or none). */
+export function nothingRead(result: ExtractResult): boolean {
+  return Object.values(result.provenance).every((v) => v === "not-stated");
+}
+
+/**
+ * Second line under a size refusal that names the limit ("File is over 3 MB, the upload limit on
+ * this copy."): what to do about it. Null when the message already is that advice.
+ */
+export function sizeRefusalHint(state: ExtractState): string | null {
+  if (state.kind !== "error" || state.issue !== "FILE_TOO_LARGE") return null;
+  return state.message === ISSUE_COPY.FILE_TOO_LARGE ? null : ISSUE_COPY.FILE_TOO_LARGE;
 }
 
 /** Pasted text: always on-device (the server takes a file). */
@@ -535,11 +576,12 @@ export function usedOnDeviceFallback(state: DoneState): boolean {
 }
 
 export function azureNotConfigured(state: DoneState): boolean {
-  return hasWarning(state.result, WARNING_AZURE_NOT_CONFIGURED);
+  return hasWarning(state.result, WARNING_AZURE_NOT_CONFIGURED) || hasWarning(state.result, WARNING_SERVER_READER_OFF);
 }
 
 const HANDLED_CODES = new Set([
   WARNING_AZURE_NOT_CONFIGURED,
+  WARNING_SERVER_READER_OFF,
   WARNING_AZURE_FALLBACK,
   WARNING_IMAGE_ONLY_NEEDS_AZURE,
   WARNING_VALUES_DROPPED_UNQUOTED,

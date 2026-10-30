@@ -29,8 +29,10 @@ export type ProviderLabel = "azure" | "on-device";
 export type ExtractWarningCode =
   /** Azure failed, timed out, or returned unusable JSON; on-device result shown. */
   | "AZURE_FALLBACK"
-  /** Azure env is not set; on-device result shown. */
+  /** Azure env is not set; on-device result shown. Internal: sent over the network as SERVER_READER_OFF. */
   | "AZURE_NOT_CONFIGURED"
+  /** Network form of AZURE_NOT_CONFIGURED (no provider name in replies; public-warnings.ts). */
+  | "SERVER_READER_OFF"
   /** Little or no text layer and Azure is off: "This sheet needs the Azure reader." */
   | "IMAGE_ONLY_NEEDS_AZURE"
   /** The reader returned values with no verbatim quote; they were set to Not stated. */
