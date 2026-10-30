@@ -171,6 +171,12 @@ export type DayWindow = {
   hours: HourWindow[];
   /** "Measure material temp before mixing": set only when the sheet states a material limit and the day has no valid reading. */
   materialLine?: string;
+  /**
+   * "Air is outside the material range. Measure and condition material.": set whenever any counted
+   * hour has it (no valid reading, forecast air outside the material range), so it shows alongside
+   * the first reason instead of hiding behind it (QA D2, Oct 30).
+   */
+  airMaterialLine?: string;
 };
 
 export type ForecastBundle = {

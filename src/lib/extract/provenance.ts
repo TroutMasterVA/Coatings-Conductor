@@ -378,7 +378,7 @@ function keywordFor(path: string): RegExp | null {
   if (/dewPoint/.test(path)) return /dew/i;
   if (/windMax/.test(path)) return /wind|mph/i;
   // Material (product) temperature: its own label only, never a bare "Temperature:" heading.
-  if (/environmentals\.material/.test(path)) return /material|product/i;
+  if (/environmentals\.material/.test(path)) return /material|product|paint/i;
   return null;
 }
 

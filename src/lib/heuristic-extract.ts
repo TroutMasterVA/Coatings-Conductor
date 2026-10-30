@@ -225,6 +225,14 @@ const PRE_Q_RE = new RegExp(
 );
 const POST_Q_RE = new RegExp(String.raw`^\s*(${MIN_Q}|${MAX_Q})(?![a-z])`, "i");
 
+/** "… 59°F or above" / "or higher" (min), "… or below" / "or lower" (max), as a POST_Q_RE-shaped match. */
+const OR_POST_RE = /^\s*or\s+(above|higher|more|greater|warmer|below|lower|less|colder)(?![a-z])/i;
+function orPostQualifier(gapAfter: string): [string, string] | null {
+  const m = gapAfter.match(OR_POST_RE);
+  if (!m) return null;
+  return [m[0], /^(above|higher|more|greater|warmer)$/i.test(m[1]) ? "above" : "below"];
+}
+
 type Qual = "min" | "max";
 function qualKind(q: string): Qual {
   return new RegExp(String.raw`^(?:${MIN_Q})$`, "i").test(q.trim()) ? "min" : "max";
@@ -364,6 +372,8 @@ function scanClauseGates<T extends string>(
   t: string,
   pick: (g: LabelHit, clause: string) => T[],
   skipHit?: (clause: string, start: number, end: number) => boolean,
+  /** Also read a trailing "or above" / "or below" ("15°C/59°F or above") as the qualifier. */
+  orQualifiers = false,
 ): ClauseGate<T>[] {
   const out: ClauseGate<T>[] = [];
   for (const c of clauses(t)) {
@@ -379,7 +389,7 @@ function scanClauseGates<T extends string>(
       const gapBefore = c.slice(gapBeforeStart, tp.start);
       const gapAfter = c.slice(tp.end, i + 1 < temps.length ? temps[i + 1].start : c.length);
       const pre = prevConsumedPost ? null : gapBefore.slice(-28).match(PRE_Q_RE);
-      const post = pre ? null : gapAfter.match(POST_Q_RE);
+      const post = pre ? null : (gapAfter.match(POST_Q_RE) ?? (orQualifiers ? orPostQualifier(gapAfter) : null));
       prevConsumedPost = !!post;
 
       // A dew-point margin is a difference, handled by dewPointSpreadFromText.
@@ -675,8 +685,13 @@ function applyTempGates(env: Environmentals, gates: TempGate[]): void {
 /* Material (product) temperature                                      */
 /* ------------------------------------------------------------------ */
 
-/** "temperature of (the) product" / "product temperature": the product itself, not "this product should…". */
-const PRODUCT_TEMP_LABEL = /\btemperature\s+of\s+(?:the\s+)?(?:mixed\s+)?product\b|\bproduct\s+temperatures?\b/i;
+/**
+ * The temperature OF the product itself: "temperature of (the) (mixed) paint/material/product (itself)",
+ * "paint/product/material temperature". Bare "paint" or "this product should not be applied below…"
+ * is not a material label (that is the application, not the product's own temperature).
+ */
+const MATERIAL_TEMP_LABEL =
+  /\btemperatures?\s+of\s+(?:the\s+)?(?:mixed\s+)?(?:paint|material|product)(?:\s+itself)?\b|\b(?:paint|product|material)\s+temperatures?\b/gi;
 /**
  * Advice, storage or spray-setup numbers near a material label are not application limits
  * ("Condition material to 65–75°F … for best workability", "Store at 40–90°F", "Pressure is for a
@@ -695,7 +710,11 @@ export type MaterialTemp = {
 
 function materialPick(g: LabelHit, clause: string): "material"[] {
   if (g.words.some((w) => /^material$/i.test(w))) return ["material"];
-  if (g.words.some((w) => /^product$/i.test(w)) && PRODUCT_TEMP_LABEL.test(clause)) return ["material"];
+  if (!g.words.some((w) => /^(?:product|paint)$/i.test(w))) return [];
+  // "product" / "paint" counts only inside a "temperature of the paint (itself)" / "paint temperature" phrase.
+  for (const m of clause.matchAll(MATERIAL_TEMP_LABEL)) {
+    if (m.index! <= g.start && g.end <= m.index! + m[0].length) return ["material"];
+  }
   return [];
 }
 
@@ -710,8 +729,14 @@ export function materialTempFromText(raw: string): MaterialTemp {
   const out: MaterialTemp = { minF: null, maxF: null, normalMinF: null, normalMaxF: null };
   const t = normalizeTempText(maskStandards(raw ?? ""));
   const sane = (n: number) => n >= -60 && n <= 400;
-  const gates = scanClauseGates(t, materialPick, (c, start, end) =>
-    MATERIAL_ADVICE.test(c.slice(Math.max(0, start - 40), Math.min(c.length, end + 30))),
+  const gates = scanClauseGates(
+    t,
+    materialPick,
+    (c, start, end) =>
+      MATERIAL_ADVICE.test(c.slice(Math.max(0, start - 40), Math.min(c.length, end + 30))) ||
+      // "If the temperature of the paint itself is 50°F or below, …" is a condition, not the limit.
+      /\b(?:if|unless)\b/i.test(c.slice(Math.max(0, start - 40), start)),
+    true,
   ).filter((g) => sane(g.lo) && (g.hi === null || sane(g.hi)));
   for (const { cols, rows } of conditionTables(normalizeTempText(raw ?? ""))) {
     const i = cols.findIndex((c) => c.word === "material");

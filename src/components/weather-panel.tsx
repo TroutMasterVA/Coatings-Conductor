@@ -148,6 +148,11 @@ function DayCard({ day, night }: { day: DayWindow; night?: boolean }) {
       </p>
       {day.workRange ? <p className="mt-0.5 text-xs text-muted">Counted hours {day.workRange}</p> : null}
       {day.limiting[0] ? <p className="mt-1 line-clamp-2 text-xs text-muted">{day.limiting[0]}</p> : null}
+      {day.airMaterialLine && day.airMaterialLine !== day.limiting[0] ? (
+        <p className="mt-1 text-xs font-medium text-caution" data-testid="day-air-material-line">
+          {day.airMaterialLine}
+        </p>
+      ) : null}
       {day.materialLine ? (
         <p className="mt-1 text-xs font-medium text-caution" data-testid="day-material-line">
           {day.materialLine}
