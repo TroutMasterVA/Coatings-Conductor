@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
+import { publicErrors } from "@/lib/errors/server-fn-middleware";
 import { getSql } from "@/lib/db";
 import { closeJob, deleteOpenProject, throwWriteRefused, type JobStatus } from "@/lib/job-close";
 import { listProjectRows, toRowSummary, type ProjectRow } from "@/lib/project-rows";
@@ -104,7 +105,7 @@ async function loadCustom(userId: string) {
 }
 
 export const loadWorkspace = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
+  .middleware([publicErrors, authMiddleware])
   .handler(async ({ context }): Promise<WorkspacePayload> => {
     const sql = await getSql();
     const [projects, custom, prefs] = await Promise.all([
@@ -120,7 +121,7 @@ export const loadWorkspace = createServerFn({ method: "GET" })
   });
 
 export const createProject = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([publicErrors, authMiddleware])
   .validator((input: { name: string; zip: string; seed?: Partial<ProjectFull> }) => {
     const name = input.name.trim();
     const zip = input.zip.replace(/\D/g, "").slice(0, 5);
@@ -176,7 +177,7 @@ export const createProject = createServerFn({ method: "POST" })
   });
 
 export const openProject = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([publicErrors, authMiddleware])
   .validator((id: string) => id)
   .handler(async ({ context, data: id }): Promise<ProjectFull> => {
     const sql = await getSql();
@@ -191,7 +192,7 @@ export const openProject = createServerFn({ method: "POST" })
   });
 
 export const saveProject = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([publicErrors, authMiddleware])
   .validator(
     (input: {
       id: string;
@@ -239,7 +240,7 @@ export const saveProject = createServerFn({ method: "POST" })
   });
 
 export const archiveProject = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([publicErrors, authMiddleware])
   .validator((input: { id: string; archived: boolean }) => input)
   .handler(async ({ context, data }) => {
     const sql = await getSql();
@@ -263,7 +264,7 @@ export const archiveProject = createServerFn({ method: "POST" })
  * (non-owner throws NOT_YOUR_JOB_MESSAGE), idempotent, no reopen in this release.
  */
 export const closeProject = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([publicErrors, authMiddleware])
   .validator((input: { id: string }) => {
     const id = typeof input?.id === "string" ? input.id : "";
     if (!id) throw new Error(NOT_YOUR_JOB_MESSAGE);
@@ -275,7 +276,7 @@ export const closeProject = createServerFn({ method: "POST" })
   });
 
 export const deleteProject = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([publicErrors, authMiddleware])
   .validator((id: string) => id)
   .handler(async ({ context, data: id }) => {
     const sql = await getSql();
@@ -289,7 +290,7 @@ export const deleteProject = createServerFn({ method: "POST" })
   });
 
 export const saveCustomMitigation = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([publicErrors, authMiddleware])
   .validator((input: CustomMitigationInput) => input)
   .handler(async ({ context, data }): Promise<CustomMitigation> => {
     const list = await loadCustom(context.userId);
@@ -315,7 +316,7 @@ export const saveCustomMitigation = createServerFn({ method: "POST" })
  * exactly the jobs that failed.
  */
 export const importGuestWorkspace = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([publicErrors, authMiddleware])
   .validator((input: { projects: ProjectFull[]; custom: CustomMitigation[]; lastProjectId?: string | null; claim?: boolean }) => {
     const projects = Array.isArray(input.projects) ? input.projects.slice(0, 50) : [];
     const custom = Array.isArray(input.custom) ? input.custom.slice(0, 40) : [];

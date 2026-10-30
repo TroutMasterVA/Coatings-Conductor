@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { checkHealth, healthResponse } from "@/lib/health";
+import { withPublicErrors } from "@/lib/errors/public-error";
 
 /**
  * `GET /api/health` — liveness/readiness probe for Docker HEALTHCHECK and
@@ -24,11 +25,12 @@ async function handle(): Promise<Response> {
 export const Route = createFileRoute("/api/health")({
   server: {
     handlers: {
-      GET: handle,
-      HEAD: async () => {
+      // The 200/503 bodies above are unchanged; only an unexpected throw becomes a plain 500 + ref id.
+      GET: withPublicErrors("GET /api/health", handle),
+      HEAD: withPublicErrors("HEAD /api/health", async () => {
         const res = await handle();
         return new Response(null, { status: res.status, headers: res.headers });
-      },
+      }),
     },
   },
 });

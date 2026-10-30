@@ -1,9 +1,13 @@
 import type { ErrorComponentProps } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
+import { routeErrorMessage } from "@/lib/errors/public-error";
 
+/**
+ * Route/SSR error screen. In production only an allowlisted or already-sanitized message (one with a
+ * ref id) is shown; anything else gets the plain fallback (see `routeErrorMessage`).
+ */
 export function AppErrorComponent({ error }: ErrorComponentProps) {
-  // Router 1.170.42+ types `error` as `unknown` (anything can be thrown).
-  const message = error instanceof Error ? error.message : "";
+  const message = routeErrorMessage(error);
   return (
     <main
       className={
@@ -15,9 +19,7 @@ export function AppErrorComponent({ error }: ErrorComponentProps) {
         <TriangleAlert className="size-10" strokeWidth={2} />
       </span>
       <h1 className="text-lg font-semibold">Something went wrong</h1>
-      <p className="max-w-md text-sm break-words text-zinc-500 dark:text-zinc-400">
-        {message || "An unexpected error occurred. Try reloading the page."}
-      </p>
+      <p className="max-w-md text-sm break-words text-zinc-500 dark:text-zinc-400">{message}</p>
     </main>
   );
 }

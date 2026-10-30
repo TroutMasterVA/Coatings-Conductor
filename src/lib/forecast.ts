@@ -8,6 +8,8 @@ import {
 import type { Environmentals, ForecastBundle } from "./types";
 import { ForecastUnavailableError, MIN_USABLE_HOURS, fetchWithTimeout } from "./forecast-sources";
 import { sheetWindow, type WxHour } from "./noaa";
+import { publicErrors } from "@/lib/errors/server-fn-middleware";
+import { GENERIC_FORECAST_ERROR_MESSAGE, publicMessageOr } from "@/lib/errors/public-error";
 
 
 type ForecastMem = {
@@ -74,6 +76,7 @@ function toRawHour(h: WxHour): RawHour {
 }
 
 export const loadForecast = createServerFn({ method: "POST" })
+  .middleware([publicErrors])
   .validator((input: { zip: string; environmentals: Environmentals }) => {
     const zip = (input?.zip ?? "").replace(/\D/g, "").slice(0, 5);
     if (zip.length !== 5) throw new Error("Enter a 5-digit US ZIP.");
@@ -84,8 +87,8 @@ export const loadForecast = createServerFn({ method: "POST" })
       const { assertSameSiteRequest } = await import("@/lib/auth/isolation.server");
       assertSameSiteRequest();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Forbidden";
-      return { ok: false, error: message };
+      // CrossSiteRequestError keeps its message; anything unexpected becomes plain text + ref id.
+      return { ok: false, error: publicMessageOr(err, { where: "serverFn:loadForecast", fallback: GENERIC_FORECAST_ERROR_MESSAGE }) };
     }
 
     const now = Date.now();
@@ -128,6 +131,7 @@ export const loadForecast = createServerFn({ method: "POST" })
       store.cache.set(data.zip, { at: now, forecast });
       return { ok: true, forecast };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : "Forecast failed" };
+      // Coded forecast messages (ZIP not found, Forecast unavailable, ...) pass; anything else -> plain + ref.
+      return { ok: false, error: publicMessageOr(err, { where: "serverFn:loadForecast", fallback: GENERIC_FORECAST_ERROR_MESSAGE }) };
     }
   });

@@ -1,5 +1,6 @@
 import { cleanBase64, isImageMime, maxBase64Length, normalizeMime, sniffFileType, DOCX_MIME } from "./file-type.ts";
 import { JOB_CLOSED_MESSAGE } from "../job-close.ts";
+import { GENERIC_EXTRACT_ERROR_MESSAGE, publicMessageOr } from "../errors/public-error.ts";
 import { readDocxText, readPdfText, type ReadText } from "./server-read.ts";
 import { gateNumbers, isEmpty, isStructural, leaves, quoteCoversNumbers, quoteIsVerbatim, sourceOf, unverifiedTempsFromGate, type SourceDoc } from "./provenance.ts";
 import type {
@@ -348,7 +349,8 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
       const blank = await deps.onDevice.extract({ ...input, text: "", pages: undefined });
       return done({ ok: true, ...withWarnings(blank, [...warnings, ...blank.warnings]) }, blank.provider, azure ? "fallback" : "ok");
     }
-    const message = err instanceof Error && err.message ? err.message : "Could not read this sheet.";
+    // Reader messages ("Could not read this sheet.", ...) pass; in production anything else -> plain + ref.
+    const message = publicMessageOr(err, { where: "extract:onDevice", fallback: GENERIC_EXTRACT_ERROR_MESSAGE });
     return done(fail("EXTRACT_FAILED", message), "none", "EXTRACT_FAILED");
   }
 }
