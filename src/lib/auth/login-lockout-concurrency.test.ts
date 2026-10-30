@@ -117,7 +117,7 @@ for (const [name, open] of backends) {
       console.log(`[concurrency ${name}] ${N} parallel, 1 IP -> invalid=${t.invalid} locked=${t.locked} 429=${t.rateLimited} other=${t.other.length}`);
       assert.deepEqual(t.other, []);
       assert.ok(t.invalid <= LOGIN_FAIL_MAX);
-      assert.equal(t.rateLimited, N - LOGIN_RATE_MAX);
+      assert.equal(t.rateLimited, Math.max(0, N - LOGIN_RATE_MAX));
       const right = await signIn(auth, email, PASSWORD, "203.0.113.201");
       assert.equal(right.status, 403);
     });

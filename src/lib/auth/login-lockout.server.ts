@@ -10,6 +10,7 @@ import {
   LOGIN_LOCK_MS,
   LOGIN_RATE_MAX,
   LOGIN_RATE_WINDOW_MS,
+  NETWORK_PAUSED,
   RATE_LIMITED,
   SIGNIN_UNAVAILABLE,
   normalizeLoginEmail,
@@ -20,21 +21,27 @@ import {
   warnNoClientIpOnce,
   type ClientIpConfig,
 } from "../rate-limit/client-ip";
-import { clear, refund, take } from "../rate-limit/limiter";
+import { reserve, settle, take, type SettleOutcome } from "../rate-limit/limiter";
 
 /**
  * Login rate limit + lockout in the SHARED database (item 3). Every replica sees the same counts.
  *
  * The race fix: an attempt is RESERVED before Better Auth checks the password (one atomic SQL
- * statement per bucket), not recorded afterwards. However many tries arrive at once, at most
- * LOGIN_FAIL_MAX of them per email reach the password check in the lock window.
+ * statement per bucket) and SETTLED afterwards. At most LOGIN_FAIL_MAX password checks per email
+ * run in a window, however many tries arrive at once.
+ *
+ * BUG-52-1 (QA, burst of 20 with the right password at #10): a success used to DELETE the email
+ * row, lock included, while other tries of the same burst were still in flight, so the count
+ * restarted mid-attack (6 checks) and the account ended up unlocked. Now a success gives nothing
+ * back unless it was the last reservation in flight and the key is not locked; once the cap is
+ * full, the lock is sticky until it expires (see `reserve`/`settle` in ../rate-limit/limiter).
  *
  * Buckets:
- * - login-ip       LOGIN_RATE_MAX / minute per IP, sign-in + sign-up.
- * - login-ip-fail  LOGIN_IP_FAIL_MAX sign-in attempts per IP per 15 min, then the IP is locked 15 min.
- *                  A successful or malformed attempt is given back, so only failures add up.
- * - login-email    LOGIN_FAIL_MAX sign-in attempts per email per 15 min, then locked 15 min.
- *                  A success clears it; a malformed request (BAD_REQUEST) is given back.
+ * - login-ip       LOGIN_RATE_MAX / minute per IP, sign-in + sign-up (429 RATE_LIMITED).
+ * - login-ip-fail  LOGIN_IP_FAIL_MAX unsuccessful sign-ins per IP per 15 min, then that network is
+ *                  paused 15 min (429 NETWORK_PAUSED). Successes and malformed tries are given back.
+ * - login-email    LOGIN_FAIL_MAX sign-in attempts per email per 15 min, then locked 15 min
+ *                  (403 ACCOUNT_LOCKED). Unknown emails are counted exactly like real ones.
  *
  * No usable client IP -> the per-IP buckets are skipped for that request (never one shared bucket);
  * the per-email lockout still applies. Database errors -> 503 SIGNIN_UNAVAILABLE (fail closed).
@@ -83,7 +90,15 @@ const sec = (ms: number) => Math.round(ms / 1000);
 function rateLimited(retryAfterSec: number): APIError {
   return new APIError(
     "TOO_MANY_REQUESTS",
-    { message: RATE_LIMITED.message, code: RATE_LIMITED.code },
+    { message: RATE_LIMITED.message, code: RATE_LIMITED.code, retryAfterSec },
+    { "Retry-After": String(retryAfterSec) },
+  );
+}
+
+function networkPaused(retryAfterSec: number): APIError {
+  return new APIError(
+    "TOO_MANY_REQUESTS",
+    { message: NETWORK_PAUSED.message, code: NETWORK_PAUSED.code, retryAfterSec },
     { "Retry-After": String(retryAfterSec) },
   );
 }
@@ -91,7 +106,7 @@ function rateLimited(retryAfterSec: number): APIError {
 function accountLocked(retryAfterSec: number): APIError {
   return new APIError(
     "FORBIDDEN",
-    { message: ACCOUNT_LOCKED.message, code: ACCOUNT_LOCKED.code },
+    { message: ACCOUNT_LOCKED.message, code: ACCOUNT_LOCKED.code, retryAfterSec },
     { "Retry-After": String(retryAfterSec) },
   );
 }
@@ -126,6 +141,8 @@ export function loginLockout(deps: LoginLockoutDeps = {}): BetterAuthPlugin {
     return res.ip;
   }
 
+  const emailRule = { max: LOGIN_FAIL_MAX, windowSec: sec(LOGIN_LOCK_MS), lockSec: sec(LOGIN_LOCK_MS) };
+
   return {
     id: "login-lockout",
     hooks: {
@@ -144,7 +161,8 @@ export function loginLockout(deps: LoginLockoutDeps = {}): BetterAuthPlugin {
               log("[rate-limit] login: database unavailable (fail closed)");
               throw unavailable();
             }
-            let ipFailTaken = false;
+            const ipFailRule = { max: LOGIN_IP_FAIL_MAX, windowSec: sec(LOGIN_IP_FAIL_WINDOW_MS), lockSec: sec(LOGIN_IP_LOCK_MS) };
+            let ipFailReserved = false;
             try {
               if (ip) {
                 const r = await take(sql, LOGIN_BUCKETS.ip, ip, {
@@ -155,23 +173,15 @@ export function loginLockout(deps: LoginLockoutDeps = {}): BetterAuthPlugin {
               }
               if (!signIn) return;
               if (ip) {
-                const f = await take(sql, LOGIN_BUCKETS.ipFail, ip, {
-                  max: LOGIN_IP_FAIL_MAX,
-                  windowSec: sec(LOGIN_IP_FAIL_WINDOW_MS),
-                  lockSec: sec(LOGIN_IP_LOCK_MS),
-                });
-                if (!f.allowed) throw rateLimited(f.retryAfterSec);
-                ipFailTaken = true;
+                const f = await reserve(sql, LOGIN_BUCKETS.ipFail, ip, ipFailRule);
+                if (!f.allowed) throw networkPaused(f.retryAfterSec);
+                ipFailReserved = true;
               }
               if (!email) return;
-              const e = await take(sql, LOGIN_BUCKETS.email, email, {
-                max: LOGIN_FAIL_MAX,
-                windowSec: sec(LOGIN_LOCK_MS),
-                lockSec: sec(LOGIN_LOCK_MS),
-              });
+              const e = await reserve(sql, LOGIN_BUCKETS.email, email, emailRule);
               if (!e.allowed) {
-                // The password is never checked, so this try does not count against the IP.
-                if (ipFailTaken && ip) await refund(sql, LOGIN_BUCKETS.ipFail, ip, LOGIN_IP_FAIL_MAX);
+                // The password is never checked, so this try does not count against the network.
+                if (ipFailReserved && ip) await settle(sql, LOGIN_BUCKETS.ipFail, ip, "refund", ipFailRule);
                 throw accountLocked(e.retryAfterSec);
               }
             } catch (err) {
@@ -186,22 +196,25 @@ export function loginLockout(deps: LoginLockoutDeps = {}): BetterAuthPlugin {
         {
           matcher: (ctx: { path?: string }) => ctx.path === "/sign-in/email",
           handler: createAuthMiddleware(async (ctx) => {
-            // The attempt was reserved before the password check; here we only give it back when
-            // it succeeded or never checked a password. Errors here never undo a sign-in, and a
-            // reservation that is not given back stays counted (safe side).
+            // Runs only when the before hook let the try through (a throw there skips after hooks),
+            // so every reservation it made is settled exactly once here. Errors here never undo a
+            // sign-in; a reservation that is never settled stays counted and in flight (safe side).
             const email = bodyEmail(ctx.body);
             const returned = ctx.context.returned as { status?: string } | undefined;
             const success = Boolean(ctx.context.newSession);
             const malformed = !success && returned != null && String(returned.status) === "BAD_REQUEST";
-            if (!success && !malformed) return;
+            // Email: a success resets only when nothing else is in flight and the key isn't locked.
+            const emailOutcome: SettleOutcome = success ? "success" : malformed ? "refund" : "failure";
+            // Network: only failures add up, so a success is given back like a malformed try.
+            const ipOutcome: SettleOutcome = success || malformed ? "refund" : "failure";
             try {
               const ip = await clientIp(ctx);
               const sql = await getSql();
-              if (email) {
-                if (success) await clear(sql, LOGIN_BUCKETS.email, email);
-                else await refund(sql, LOGIN_BUCKETS.email, email, LOGIN_FAIL_MAX);
-              }
-              if (ip) await refund(sql, LOGIN_BUCKETS.ipFail, ip, LOGIN_IP_FAIL_MAX);
+              if (email) await settle(sql, LOGIN_BUCKETS.email, email, emailOutcome, emailRule);
+              if (ip) await settle(sql, LOGIN_BUCKETS.ipFail, ip, ipOutcome, {
+                max: LOGIN_IP_FAIL_MAX,
+                lockSec: sec(LOGIN_IP_LOCK_MS),
+              });
             } catch {
               log("[rate-limit] login: could not settle an attempt");
             }

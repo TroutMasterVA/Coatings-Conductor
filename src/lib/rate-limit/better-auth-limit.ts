@@ -1,7 +1,7 @@
 /**
  * Settings for Better Auth's OWN rate limiter (on by default in production), item 3.
  *
- * - Sign-in and sign-up are skipped there: our login-lockout plugin owns them (one IP parser, one
+ * - /sign-in/email and /sign-up/email (exactly) are skipped there: our login-lockout plugin owns them (one IP parser, one
  *   store, one message), and Better Auth's 429 used to fire before our hooks so those tries were
  *   never counted.
  * - When Better Auth could not find a client IP it would put every user in one shared
@@ -18,7 +18,17 @@ import { take } from "./limiter";
 type Rule = { window: number; max: number };
 type ConsumeResult = { allowed: boolean; retryAfter: number | null };
 
-const OWNED_BY_LOGIN_LOCKOUT = /\/(sign-in|sign-up)(\/|$)/;
+/**
+ * SEC (PR #52): skip Better Auth's limiter for EXACTLY the two endpoints our lockout owns. Any other
+ * sign-in/sign-up path (social, anonymous, magic link, if ever enabled) keeps Better Auth's limiter.
+ */
+export const AUTH_BASE_PATH = "/api/auth";
+export const OWNED_BY_LOGIN_LOCKOUT: ReadonlySet<string> = new Set(["/sign-in/email", "/sign-up/email"]);
+
+export function ownedByLoginLockout(pathname: string): boolean {
+  const rel = pathname.startsWith(`${AUTH_BASE_PATH}/`) ? pathname.slice(AUTH_BASE_PATH.length) : pathname;
+  return OWNED_BY_LOGIN_LOCKOUT.has(rel);
+}
 const SHARED_PATHS = [
   "/change-password",
   "/change-email",
@@ -77,7 +87,7 @@ export function betterAuthRateLimit(deps: BetterAuthLimitDeps) {
         } catch {
           path = "";
         }
-        if (OWNED_BY_LOGIN_LOCKOUT.test(path)) return false;
+        if (ownedByLoginLockout(path)) return false;
         if (betterAuthWouldShareBucket(request.headers, production)) {
           warnNoClientIpOnce("better-auth-no-single-xff");
           return false;
