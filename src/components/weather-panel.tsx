@@ -82,7 +82,7 @@ function SheetLimitChecks({ sheet, timezone, night, days }: { sheet: SheetWindow
                 {" · "}
                 {h.checks
                   .filter((c) => c.status !== "pass" || h.verdict === "go")
-                  .map((c) => `${CHECK_TEXT[c.status]}: ${c.reason}`)
+                  .map((c) => (c.status === "not-stated" ? c.reason : `${CHECK_TEXT[c.status]}: ${c.reason}`))
                   .join(" · ")}
                 {(h.flags ?? []).map((f) => ` · ${f}`).join("")}
               </span>
@@ -139,7 +139,7 @@ function DayCard({ day, night }: { day: DayWindow; night?: boolean }) {
           <p className="text-xs font-medium uppercase tracking-wide text-muted">{day.weekday}</p>
           <p className="font-mono text-sm text-fg">{day.dateLabel}</p>
         </div>
-        <Badge variant={statusVariant(day.status)}>{day.status}</Badge>
+        <Badge variant={statusVariant(day.status)}>{day.status === "nogo" ? "no-go" : day.status}</Badge>
       </div>
       <p className="mt-2 font-mono text-sm text-fg">{bestStretchLabel(day)}</p>
       <p className="mt-0.5 text-xs text-muted">
