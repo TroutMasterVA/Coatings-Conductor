@@ -1,7 +1,7 @@
 // BUG-52-2 and F-52-4 (PR #52), end to end through Better Auth's real handler. PGLite always; real
 // Postgres too when TEST_DATABASE_URL is set.
 // - Per-IP RATE is LOGIN_RATE_MAX (30) a minute: a shift start on one site Wi-Fi gets through.
-// - Per-IP FAILED cap is LOGIN_IP_FAIL_MAX (100, proposed, SEC to confirm) per 15 min; past it the
+// - Per-IP FAILED cap is LOGIN_IP_FAIL_MAX (50, SEC's ruling) per 15 min; past it the
 //   whole network is paused with its own message, "Sign-in is paused on this network for up to 15
 //   minutes.", not "wait a minute".
 // - One person mistyping can't trip it for the crew: a locked account's further tries are given
@@ -82,7 +82,7 @@ for (const [name, open] of backends) {
     });
 
     it(`BUG-52-2: after ${LOGIN_IP_FAIL_MAX} failed sign-ins from one IP the network is paused, with the right message`, async () => {
-      assert.equal(LOGIN_IP_FAIL_MAX, 100);
+      assert.equal(LOGIN_IP_FAIL_MAX, 50);
       const auth = makeAuth(db);
       const ip = "198.51.100.32";
       const crew = mail("crew");

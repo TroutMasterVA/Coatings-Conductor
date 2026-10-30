@@ -20,12 +20,13 @@ export const ACCOUNT_LOCKED = {
 
 /**
  * Per-IP cap on sign-in attempts that did not succeed, per 15 min, then that network is paused 15 min.
- * BUG-52-2: 100 (was 30). PROPOSED, SEC TO CONFIRM. Each account already stops at LOGIN_FAIL_MAX (5)
- * wrong passwords, so one person mistyping adds at most 5 per account; pausing a whole crew's Wi-Fi
- * now takes 20 accounts' worth of full lockouts from that one network in 15 min. That still stops
- * a password spray across many emails (100 guesses / 15 min / IP instead of unlimited).
+ * BUG-52-2: 50 (was 30), SEC's ruling on PR #52. Each account already stops at LOGIN_FAIL_MAX (5)
+ * wrong passwords, and tries against a locked account are given back to the network, so one person
+ * mistyping adds at most 5; pausing a whole crew's Wi-Fi takes 10 accounts' worth of full lockouts
+ * from that one network in 15 min. It still stops a password spray across many emails
+ * (50 guesses / 15 min / IP).
  */
-export const LOGIN_IP_FAIL_MAX = 100;
+export const LOGIN_IP_FAIL_MAX = 50;
 export const LOGIN_IP_FAIL_WINDOW_MS = 15 * 60 * 1000;
 export const LOGIN_IP_LOCK_MS = 15 * 60 * 1000;
 
