@@ -229,10 +229,36 @@ export function toBrowserError(err: unknown, opts: SanitizeOptions): unknown {
   if (isControlFlow(err)) return err;
   const production = opts.production ?? isProduction();
   const s = sanitize(err, opts);
-  if (s.public || !production) return err;
-  const safe = new Error(s.message);
-  delete (safe as { stack?: string }).stack;
+  if (!production) return err;
+  if (s.public) return rebuildPublicError(err, s.message);
+  return stackless(new Error(s.message));
+}
+
+/** Public fields copied onto a rebuilt error. Nothing else (no stack, cause, query text, rows). */
+const PUBLIC_FIELDS = ["code", "status", "statusCode", "publicError"] as const;
+
+/**
+ * A fresh `Error` with the same message and name plus the public fields (`code`, `status`, ...),
+ * and no stack or cause. Used in production so even allowlisted errors never carry a server stack.
+ * (The browser only receives `message` through TanStack Start; server-side `instanceof` checks run
+ * inside the chain, before this middleware, so they still see the original class.)
+ */
+export function rebuildPublicError(err: unknown, message: string): Error {
+  const safe = stackless(new Error(message));
+  const src = (err && typeof err === "object" ? err : {}) as Record<string, unknown>;
+  if (typeof src.name === "string" && src.name) safe.name = src.name;
+  for (const k of PUBLIC_FIELDS) {
+    const v = src[k];
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+      Object.defineProperty(safe, k, { value: v, enumerable: true, writable: false, configurable: true });
+    }
+  }
   return safe;
+}
+
+function stackless<E extends Error>(e: E): E {
+  delete (e as { stack?: string }).stack;
+  return e;
 }
 
 /** For errors turned into a returned message (`{ ok: false, error }` shapes). */

@@ -10,9 +10,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
+import { toCrossJSONAsync } from "seroval";
 import type { Sql } from "../db.ts";
 import { publicErrors } from "./server-fn-middleware.ts";
-import { GENERIC_ERROR_MESSAGE, withPublicErrors, type ServerErrorLog } from "./public-error.ts";
+import { GENERIC_ERROR_MESSAGE, PublicError, withPublicErrors, type ServerErrorLog } from "./public-error.ts";
 import { closeJob, deleteOpenProject, JOB_CLOSED_DELETE_MESSAGE } from "../job-close.ts";
 import { NOT_YOUR_JOB_MESSAGE } from "../guest-import.ts";
 import { checkHealth, healthResponse } from "../health.ts";
@@ -139,6 +140,98 @@ describe("server functions through publicErrors (production)", () => {
       values ('job-b', 'alice', 'Tank 2', '22030', false, '{}', '{}', null, '', '[]', '[]', now(), now(), now())`;
     const res = await callServerFn("deleteProject", () => deleteOpenProject(sql, "alice", "job-b"));
     assert.ok(res.ok);
+  });
+});
+
+/** Same check as project-access.test.ts (#47): the error serialized the way TanStack Start does (seroval cross-JSON). */
+async function body(err: unknown): Promise<string> {
+  return JSON.stringify(await toCrossJSONAsync(err, { refs: new Map() }));
+}
+
+function assertNoStack(text: string) {
+  assert.ok(!text.includes("stack"), `body has a stack field: ${text}`);
+  assert.ok(!text.includes(".ts:") && !text.includes(".mjs:"), `body has a source location: ${text}`);
+  assert.ok(!/\bat [^\s]+ \(|\n\s+at /.test(text) && !text.includes("    at "), `body has a stack frame: ${text}`);
+}
+
+/** Same shape as verify.server.ts's UnauthorizedError (that module builds Better Auth on import). */
+class UnauthorizedError extends Error {
+  readonly status = 401;
+  constructor() {
+    super("Unauthorized");
+    this.name = "UnauthorizedError";
+  }
+}
+
+describe("allowlisted errors through publicErrors carry no server stack (production)", () => {
+  it("closeJob not-found: message survives, no stack / .ts: / at-frames in the serialized body", async () => {
+    const sql = await db();
+    // The original really has a server stack with a source path; the body must not.
+    let original: Error | undefined;
+    try {
+      await closeJob(sql, "alice", "nope");
+    } catch (err) {
+      original = err as Error;
+    }
+    assert.ok(original?.stack?.includes(".ts:"), "precondition: the original error has a server stack");
+    const res = await callServerFn("closeProject", () => closeJob(sql, "alice", "nope"));
+    assert.ok(!res.ok);
+    assert.equal(res.error.message, NOT_YOUR_JOB_MESSAGE);
+    assert.equal(res.error.name, "Error");
+    assert.notEqual(res.error, original);
+    const text = await body(res.error);
+    assert.ok(text.includes(NOT_YOUR_JOB_MESSAGE), text);
+    assertNoStack(text);
+  });
+
+  it("deleteOpenProject closed job: JOB_CLOSED_DELETE_MESSAGE, no stack", async () => {
+    const sql = await db();
+    await closeJob(sql, "alice", "job-a");
+    const res = await callServerFn("deleteProject", () => deleteOpenProject(sql, "alice", "job-a"));
+    assert.ok(!res.ok && res.error.message === JOB_CLOSED_DELETE_MESSAGE);
+    assertNoStack(await body(res.error));
+  });
+
+  it("UnauthorizedError: message, name and status 401 survive; no stack", async () => {
+    const res = await callServerFn("loadWorkspace", async () => {
+      throw new UnauthorizedError();
+    });
+    assert.ok(!res.ok);
+    assert.equal(res.error.message, "Unauthorized");
+    assert.equal(res.error.name, "UnauthorizedError");
+    assert.equal((res.error as { status?: number }).status, 401);
+    const text = await body(res.error);
+    assert.ok(text.includes("Unauthorized"), text);
+    assertNoStack(text);
+  });
+
+  it("validator message (createProject 'Enter a 5-digit US ZIP.'): survives without a stack", async () => {
+    const res = await callServerFn("createProject", async () => {
+      throw new Error("Enter a 5-digit US ZIP.");
+    });
+    assert.ok(!res.ok && res.error.message === "Enter a 5-digit US ZIP.");
+    assertNoStack(await body(res.error));
+  });
+
+  it("PublicError: message, name and code survive; no stack, no cause", async () => {
+    const res = await callServerFn("extractSheet", async () => {
+      throw new PublicError("Too many tries.", { code: "RATE_LIMITED", status: 429 });
+    });
+    assert.ok(!res.ok);
+    assert.equal(res.error.message, "Too many tries.");
+    assert.equal(res.error.name, "PublicError");
+    assert.equal((res.error as { code?: string }).code, "RATE_LIMITED");
+    assert.equal((res.error as { cause?: unknown }).cause, undefined);
+    const text = await body(res.error);
+    assert.ok(text.includes("RATE_LIMITED"), text);
+    assertNoStack(text);
+  });
+
+  it("development still returns the original error (with its stack)", async () => {
+    process.env.NODE_ENV = "development";
+    const sql = await db();
+    const res = await callServerFn("closeProject", () => closeJob(sql, "alice", "nope"));
+    assert.ok(!res.ok && res.error.stack?.includes(".ts:"));
   });
 });
 

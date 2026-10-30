@@ -146,11 +146,14 @@ describe("public-error: the ref id and details go to the server log only", () =>
 });
 
 describe("public-error: intentional errors pass through unchanged", () => {
-  it("every allowlisted message is kept, same object, in production", () => {
+  it("every allowlisted message is kept, rebuilt without a stack, in production", () => {
     for (const message of PUBLIC_MESSAGES) {
       const { logs, logger } = capture();
       const err = new Error(message);
-      assert.equal(toBrowserError(err, { where: "x", production: true, logger }), err, message);
+      const out = toBrowserError(err, { where: "x", production: true, logger }) as Error;
+      assert.notEqual(out, err, "production never returns the original (it carries the server stack)");
+      assert.equal(out.message, message);
+      assert.equal(out.stack, undefined, message);
       assert.equal(logs.length, 0, "public errors are not logged as server errors");
     }
   });
@@ -176,15 +179,25 @@ describe("public-error: intentional errors pass through unchanged", () => {
     const fu = new ForecastUnavailableError("Forecast unavailable: custom text");
     for (const err of [unauthorized, crossSite, fu]) {
       assert.ok(isPublicError(err));
-      assert.equal(toBrowserError(err, { where: "x", production: true, logger: () => {} }), err);
+      const out = toBrowserError(err, { where: "x", production: true, logger: () => {} }) as Error;
+      assert.equal(out.message, err.message);
+      assert.equal(out.name, err.name);
+      assert.equal(out.stack, undefined);
+      assert.ok(isPublicError(out), "a rebuilt public error is still public");
     }
+    const out = toBrowserError(unauthorized, { where: "x", production: true, logger: () => {} }) as { status?: number };
+    assert.equal(out.status, 401);
   });
 
   it("a PublicError keeps its message and code", () => {
     const err = new PublicError("Too many tries. Wait 15 minutes.", { code: "ACCOUNT_LOCKED", status: 429 });
-    const out = toBrowserError(err, { where: "x", production: true, logger: () => {} });
-    assert.equal(out, err);
-    assert.equal((out as PublicError).code, "ACCOUNT_LOCKED");
+    const out = toBrowserError(err, { where: "x", production: true, logger: () => {} }) as PublicError;
+    assert.equal(out.message, err.message);
+    assert.equal(out.name, "PublicError");
+    assert.equal(out.code, "ACCOUNT_LOCKED");
+    assert.equal(out.status, 429);
+    assert.equal(out.stack, undefined);
+    assert.equal((out as { cause?: unknown }).cause, undefined);
   });
 
   it("an already-sanitized message is not sanitized twice", () => {
@@ -207,6 +220,8 @@ describe("public-error: development keeps details", () => {
     const err = internalError();
     assert.equal(toBrowserError(err, { where: "x", production: false, logger }), err);
     assert.equal(logs.length, 1);
+    const pub = new Error("Project not found.");
+    assert.equal(toBrowserError(pub, { where: "x", production: false, logger }), pub, "dev returns public errors as is");
     assert.equal(publicMessageOr(err, { where: "x", production: false, logger }), err.message);
   });
 
