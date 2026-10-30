@@ -76,6 +76,11 @@ export type RunExtractDeps = {
   readers?: TextReaders;
   /** True when `input.jobId` is this user's closed job (server: isJobClosed). */
   jobClosed?: (jobId: string) => Promise<boolean>;
+  /**
+   * Shared (database) per-user limit. When set it replaces the in-memory `rate` store; the server
+   * passes the shared-database limiter (item 3). `message` overrides the default text.
+   */
+  limit?: (userId: string) => Promise<{ ok: true } | { ok: false; retryAfterSec: number; message?: string }>;
 };
 
 class Timeout extends Error {
@@ -280,10 +285,12 @@ export async function runExtract(deps: RunExtractDeps): Promise<ExtractResponse>
   }
   let input = checked.input;
 
-  const slot = takeRateSlot(deps.rate, deps.userId, now());
+  const slot: { ok: true } | { ok: false; retryAfterSec: number; message?: string } = deps.limit
+    ? await deps.limit(deps.userId)
+    : takeRateSlot(deps.rate, deps.userId, now());
   if (!slot.ok) {
     return done(
-      fail("RATE_LIMITED", "Too many sheets in a minute. Try again shortly.", slot.retryAfterSec),
+      fail("RATE_LIMITED", slot.message || "Too many sheets in a minute. Try again shortly.", slot.retryAfterSec),
       "none",
       "RATE_LIMITED",
     );

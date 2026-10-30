@@ -121,6 +121,8 @@ Copy [`.env.example`](.env.example) for a commented template.
 | `AZURE_DOCINTEL_KEY` | No | Key fallback only. Prefer managed identity. |
 | `AZURE_OPENAI_API_KEY` | No | Key fallback only. Prefer managed identity. |
 | `AZURE_AUTH_MODE` | No | `identity` = managed identity only, keys never used. Default `auto` (managed identity, then key). |
+| `TRUSTED_PROXY_HOPS` | **PAVE: set this from IT's answer** | How many trusted proxies in front of the app add an entry to `X-Forwarded-For`. The app reads the client IP that many entries from the **right**, so a value the browser makes up on the left is ignored. Default `1`, which is right for the Vercel practice copy (Vercel overwrites the header with the real client IP). Examples: App Service alone `1`, Front Door or Application Gateway in front of App Service `2`. `0` ignores the header and uses the socket address. |
+| `CLIENT_IP_HEADER` | No (**PAVE: set this from IT's answer** if the ingress has one) | Name of a header the ingress sets itself and removes from incoming requests, e.g. `X-Azure-ClientIP`. When set, it is the only header read for the client IP. Leave unset otherwise. |
 
 All Azure settings stay on the server. The browser never sees endpoints or keys.
 
@@ -142,7 +144,13 @@ The image has a Docker `HEALTHCHECK` on this path. On Azure, point the probes at
 
 - Give the container app a **system-assigned managed identity**. That is how it signs in to Azure AI without keys (see the next section).
 - Store `BETTER_AUTH_SECRET` and `DATABASE_URL` as secrets (Container Apps secrets or Key Vault references), not plain settings.
-- The sheet reader's rate limit (10 extracts per user per minute) is kept in memory per container. With more than one replica, each replica counts separately. For the beta, run **one replica**.
+- Rate limits and the sign-in lockout live in the shared database (table `rate_limits`), so every replica counts the same tries: 30 sign-in/sign-up tries per IP per minute; 5 sign-in tries per account per 15 minutes, then that account is locked 15 minutes (the card shows the time to try again); 50 unsuccessful sign-ins per IP per 15 minutes, then sign-in is paused on that network for up to 15 minutes; 10 sheet reads per user per minute; 60 weather lookups per IP per minute (lookups served from the 15-minute cache don't count). If the database is down, sign-in and sheet reading stop (fail closed) and weather falls back to a per-container limit.
+- Stored limiter keys are HMAC'd with a key derived from `BETTER_AUTH_SECRET`, so changing that secret also resets every limit and lock.
+- **Known issues (sign-in limits), before a company deploy:**
+  - There is no per-IP daily cap on sign-up yet (only the 30-per-minute rate shared with sign-in). One is needed before a company deploy.
+  - Clicking Sign in twice after 4 wrong tries can lock the user out of their own account: both clicks count as tries, so the double click can be the 5th and 6th. Lockout v2 changes this.
+- **Ask IT** before go-live, and set `TRUSTED_PROXY_HOPS` / `CLIENT_IP_HEADER` from the answer: the exact proxy chain in front of the container; whether it appends to or overwrites `X-Forwarded-For` (and adds a `:port`); whether it sets its own client-IP header and strips it from clients; and that nobody can reach the container directly, around the proxy. If the app can't find a client IP, it skips the per-IP limits for that request (it never puts everyone in one bucket), keeps the per-account lockout, and logs one `[rate-limit] client IP unknown` warning.
+- With more than one replica, run migrations once per release as a separate job (`RUN_MIGRATIONS=false` on the app) so two containers don't race to apply them.
 - Uploads are capped by `MAX_UPLOAD_MB` (default 10 MB). If a proxy or gateway sits in front of the container, let it accept request bodies at least that large.
 - Allow outbound HTTPS to your Postgres server, your Azure AI endpoints, `api.weather.gov` / `api.open-meteo.com` (weather forecasts), and `api.zippopotam.us` (ZIP code to location lookup).
 
