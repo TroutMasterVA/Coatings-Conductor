@@ -31,6 +31,8 @@ import { ensureDbReady, getPglite } from "../db";
 import { authSecret } from "./secret.server";
 import { emailAndPasswordEnabled } from "./email-password";
 import { loginLockout } from "./login-lockout.server";
+import { betterAuthRateLimit } from "../rate-limit/better-auth-limit";
+import { getSql } from "../db";
 import { pgliteDialect } from "./pglite-dialect";
 import { trustedHostsFromEnv, trustedOriginsFromEnv } from "./preview";
 
@@ -97,6 +99,11 @@ export const auth = betterAuth({
   // window and reduces auth flicker. See the `auth` skill for the full
   // flicker-prevention guidance (gate on `isPending`; SSR the session).
   session: { cookieCache: { enabled: true, maxAge: 300 } },
+
+  // Better Auth's own limiter (on in production): sign-in/sign-up are left to our shared-database
+  // login lockout; a request with no single trusted IP is skipped rather than put in one bucket
+  // shared by everyone; password/email-changing paths count in the shared database (item 3).
+  rateLimit: betterAuthRateLimit({ getSql }),
 
   // Local email/password — toggled only via `./email-password` (not a plugin).
   ...(emailAndPasswordEnabled ? { emailAndPassword: { enabled: true } } : {}),

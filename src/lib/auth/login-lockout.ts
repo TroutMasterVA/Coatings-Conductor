@@ -17,6 +17,18 @@ export const ACCOUNT_LOCKED = {
   message: "This account is locked. Try again later.",
 };
 
+/** Per-IP cap on sign-in attempts that did not succeed (item 3, PO): 30 per 15 min, then locked 15 min. */
+export const LOGIN_IP_FAIL_MAX = 30;
+export const LOGIN_IP_FAIL_WINDOW_MS = 15 * 60 * 1000;
+export const LOGIN_IP_LOCK_MS = 15 * 60 * 1000;
+
+/** Login fails closed when the shared limiter database can't be reached. */
+export const SIGNIN_UNAVAILABLE = {
+  status: 503 as const,
+  code: "SIGNIN_UNAVAILABLE",
+  message: "Sign-in is unavailable. Try again shortly.",
+};
+
 export function normalizeLoginEmail(email: string): string {
   return email.trim().toLowerCase();
 }

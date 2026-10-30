@@ -1,10 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { bundleDays, scoreHour, type RawHour } from "./score-windows";
-import {
-  FORECAST_RATE_LIMIT_MESSAGE,
-  forecastCacheFresh,
-  takeForecastSlot,
-} from "./forecast-cap";
+import { FORECAST_RATE_LIMIT_MESSAGE, forecastCacheFresh } from "./forecast-cap";
 import type { Environmentals, ForecastBundle } from "./types";
 import { ForecastUnavailableError, MIN_USABLE_HOURS, fetchWithTimeout } from "./forecast-sources";
 import { sheetWindow, type WxHour } from "./noaa";
@@ -21,15 +17,28 @@ function forecastStore(): ForecastMem {
   return globalForecast.__ccForecastCap__;
 }
 
-async function forecastClientKey(): Promise<string> {
+/** Client IP per TRUSTED_PROXY_HOPS / CLIENT_IP_HEADER, else the socket peer, else null (item 3). */
+async function forecastClientIp(): Promise<string | null> {
   try {
-    const { getRequest } = await import("@tanstack/react-start/server");
+    const { getRequest, getRequestIP } = await import("@tanstack/react-start/server");
+    const { clientIpConfigFromEnv, resolveClientIp, warnNoClientIpOnce } = await import(
+      "./rate-limit/client-ip"
+    );
     const req = getRequest();
-    const fwd = req?.headers.get("x-forwarded-for");
-    if (fwd) return fwd.split(",")[0]!.trim() || "local";
-    return req?.headers.get("x-real-ip") ?? "local";
+    let peer: string | undefined;
+    try {
+      peer = getRequestIP();
+    } catch {
+      peer = undefined;
+    }
+    const res = resolveClientIp(req?.headers, peer, clientIpConfigFromEnv());
+    if (res.ip === null) {
+      warnNoClientIpOnce(res.reason);
+      return null;
+    }
+    return res.ip;
   } catch {
-    return "local";
+    return null;
   }
 }
 
@@ -95,9 +104,12 @@ export const loadForecast = createServerFn({ method: "POST" })
       return { ok: true, forecast: cached.forecast };
     }
 
-    const capKey = `${await forecastClientKey()}:${data.zip}`;
-    const slot = takeForecastSlot(now, store.stamps.get(capKey) ?? []);
-    store.stamps.set(capKey, slot.stamps);
+    // Per client IP only (no ZIP), shared database; fails open to the per-process stamps (item 3).
+    const [{ getSql }, { takeForecastSlotShared }] = await Promise.all([
+      import("./db"),
+      import("./rate-limit/app-limits"),
+    ]);
+    const slot = await takeForecastSlotShared(getSql, await forecastClientIp(), store.stamps, now);
     if (!slot.ok) {
       return { ok: false, error: FORECAST_RATE_LIMIT_MESSAGE };
     }

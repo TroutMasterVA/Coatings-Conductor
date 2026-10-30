@@ -27,7 +27,7 @@ const extractAuth = createMiddleware({ type: "function" })
   });
 
 const g = globalThis as typeof globalThis & { __ccExtractRate__?: RateStore };
-/** In-memory, per instance. Multi-instance deploys get 10/min per user per instance. */
+/** In-memory, per instance. Unused when the shared-database `limit` is passed (item 3). */
 function rateStore(): RateStore {
   g.__ccExtractRate__ ??= new Map();
   return g.__ccExtractRate__;
@@ -71,6 +71,14 @@ export const extractSheet = createServerFn({ method: "POST" })
       azure: azureFromEnv(),
       onDevice: onDeviceProvider,
       rate: rateStore(),
+      // Shared database limit (item 3); fails closed. The in-memory store above is only the type's fallback.
+      limit: async (userId) => {
+        const [{ getSql }, { takeExtractSlotShared }] = await Promise.all([
+          import("../db"),
+          import("../rate-limit/app-limits"),
+        ]);
+        return takeExtractSlotShared(getSql, userId);
+      },
       maxFileBytes: maxFileBytes(),
       log: (entry) => console.info(JSON.stringify(entry)),
       // Closed job -> { ok: false, error: { code: "JOB_CLOSED" } } (CONTRACT.md "Job closeout").
