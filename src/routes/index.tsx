@@ -38,6 +38,7 @@ import {
 } from "@/lib/extract-flags";
 import { callExtractSheet, loadUploadLimitBytes } from "@/lib/extract-server";
 import { loadForecast } from "@/lib/forecast";
+import { shownForecast } from "@/lib/forecast-state";
 import { applySheetSurface } from "@/lib/noaa";
 import {
   DEFAULT_CALIBRATION,
@@ -175,6 +176,8 @@ function App({ user }: { user: AppUser | null }) {
   const [zip, setZip] = useState("");
   const [card, setCard] = useState<FieldCardData | null>(null);
   const [forecast, setForecast] = useState<ForecastBundle | null>(null);
+  /** ZIP the current `forecast` was loaded for (D4: a forecast for another ZIP is stale). */
+  const [forecastZip, setForecastZip] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractState, setExtractState] = useState<ExtractState>({ kind: "idle" });
   const [uploadLimit, setUploadLimit] = useState<number | null>(null);
@@ -460,10 +463,11 @@ function App({ user }: { user: AppUser | null }) {
   const readFailed = extractState.kind === "error" || (extractState.kind === "done" && needsAzureReader(extractState.result));
   const gate = useMemo(() => sheetGate(card, readFailed), [card, readFailed]);
   const scored = useMemo(() => {
-    const open = gatedForecast(gate, forecast);
+    // D4: a failed, stale or missing forecast is never scored, so no GO can outlive it.
+    const open = gatedForecast(gate, shownForecast({ forecast, loadedZip: forecastZip, error: wxError }, zip));
     if (!open || !card) return null;
     return applySheetSurface(rescoreForecast(open, card.environmentals, scoringSite), card.environmentals, scoringSite);
-  }, [gate, forecast, card, scoringSite]);
+  }, [gate, forecast, forecastZip, wxError, zip, card, scoringSite]);
 
   function remember(next: FieldCardData, nextZip: string) {
     const entry: SavedCard = {
@@ -571,12 +575,15 @@ function App({ user }: { user: AppUser | null }) {
         data: { zip: nextZip, environmentals: active.environmentals },
       });
       if (!result.ok) {
+        setForecast(null);
         setWxError(result.error);
         return;
       }
       setForecast(result.forecast);
+      setForecastZip(nextZip);
       remember(active, nextZip);
     } catch (err) {
+      setForecast(null);
       setWxError(err instanceof Error ? err.message : "Forecast failed");
     } finally {
       setWxLoading(false);
