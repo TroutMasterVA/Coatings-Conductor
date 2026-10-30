@@ -19,6 +19,16 @@ export type Environmentals = {
   dewPointSpreadMinF: number | null;
   precipitationAllowed: boolean;
   windMaxMph: number | null;
+  /**
+   * Material (product) temperature limits at mixing / application. Optional: written only when the
+   * sheet (or a hand edit) states them; absent or null = Not stated. Scored only against a reading
+   * taken on site (never air or surface), see material-temp.ts.
+   */
+  materialTempMinF?: number | null;
+  materialTempMaxF?: number | null;
+  /** The sheet's "Normal" material band next to absolute min/max rows: shown as info, never scored. */
+  materialNormalTempMinF?: number | null;
+  materialNormalTempMaxF?: number | null;
   directSunNotes: string;
   notes: string;
   additional: string[];
@@ -159,6 +169,14 @@ export type DayWindow = {
   bestRange: string | null;
   limiting: string[];
   hours: HourWindow[];
+  /** "Measure material temp before mixing": set only when the sheet states a material limit and the day has no valid reading. */
+  materialLine?: string;
+  /**
+   * "Air is outside the material range. Measure and condition material.": set whenever any counted
+   * hour has it (no valid reading, forecast air outside the material range), so it shows alongside
+   * the first reason instead of hiding behind it (QA D2, Oct 30).
+   */
+  airMaterialLine?: string;
 };
 
 export type ForecastBundle = {

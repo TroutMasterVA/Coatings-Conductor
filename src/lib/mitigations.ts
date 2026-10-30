@@ -42,6 +42,9 @@ export type SiteContext = {
   customMitigationIds?: string[];
   /** Optional on-site gauge reading for the surface (°F), saved with the job's site. */
   measuredSurfaceTempF?: number | null;
+  /** Optional thermometer reading of the material (product) itself (°F), with the time it was taken (ISO). Counts for 4 hours. */
+  measuredMaterialTempF?: number | null;
+  measuredMaterialAt?: string | null;
 };
 
 export const SUBSTRATES: {

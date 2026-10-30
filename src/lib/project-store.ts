@@ -8,7 +8,8 @@ import { openOwnedProject, readOwnedProject, throwProjectNotFound, type SetStatu
 import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE } from "@/lib/guest-import";
 import { claimGuestWorkspace } from "@/lib/guest-claim";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
-import type { SiteContext, SubstrateId } from "@/lib/mitigations";
+import type { SiteContext } from "@/lib/mitigations";
+import { savedSite } from "@/lib/saved-site";
 import { decodeSavedExtract, saveJobCard, encodeSavedExtract, parseSavedExtract } from "@/lib/job-extract";
 import type { SavedExtract } from "@/lib/extract/provider";
 import { withPublicWarnings } from "@/lib/extract/public-warnings";
@@ -76,14 +77,7 @@ function toFull(row: ProjectRow): ProjectFull {
   return {
     ...toSummary(row),
     calibration: { ...DEFAULT_CALIBRATION, ...parseJson<Partial<Calibration>>(row.calibration_json, {}) },
-    site: {
-      substrate: (site.substrate ?? "bare_steel") as SubstrateId,
-      mitigations: site.mitigations ?? [],
-      customMitigationIds: site.customMitigationIds ?? [],
-      moistureTolerant: site.moistureTolerant,
-      discipline: site.discipline,
-      bodies: site.bodies,
-    },
+    site: savedSite(site),
     card: parseJson<FieldCardData | null>(row.card_json, null),
     extract: withPublicWarnings(decodeSavedExtract(row.extract_json), () => {}),
     pdsText: row.pds_text ?? "",

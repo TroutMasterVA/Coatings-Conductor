@@ -38,7 +38,9 @@ import {
 } from "@/lib/extract-flags";
 import { callExtractSheet, loadUploadLimitBytes } from "@/lib/extract-server";
 import { loadForecast } from "@/lib/forecast";
+import { shownForecast } from "@/lib/forecast-state";
 import { applySheetSurface } from "@/lib/noaa";
+import { materialLimits } from "@/lib/material-temp";
 import {
   DEFAULT_CALIBRATION,
   loadLegacyLearning,
@@ -175,6 +177,8 @@ function App({ user }: { user: AppUser | null }) {
   const [zip, setZip] = useState("");
   const [card, setCard] = useState<FieldCardData | null>(null);
   const [forecast, setForecast] = useState<ForecastBundle | null>(null);
+  /** ZIP the current `forecast` was loaded for (D4: a forecast for another ZIP is stale). */
+  const [forecastZip, setForecastZip] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractState, setExtractState] = useState<ExtractState>({ kind: "idle" });
   const [uploadLimit, setUploadLimit] = useState<number | null>(null);
@@ -456,14 +460,28 @@ function App({ user }: { user: AppUser | null }) {
     [site, calibration, custom],
   );
 
+  // Material temp (Item 5): a reading counts for 4 hours and "today" is the site date, so a job with
+  // a stated material limit is re-scored once a minute.
+  const hasMaterialLimit = Boolean(card && materialLimits(card.environmentals));
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasMaterialLimit) return;
+    setClock(Date.now());
+    const id = window.setInterval(() => setClock(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, [hasMaterialLimit, site.measuredMaterialAt]);
+
   /** No verdict anywhere unless a sheet loaded: never scored against default or empty limits. */
   const readFailed = extractState.kind === "error" || (extractState.kind === "done" && needsAzureReader(extractState.result));
   const gate = useMemo(() => sheetGate(card, readFailed), [card, readFailed]);
   const scored = useMemo(() => {
-    const open = gatedForecast(gate, forecast);
+    // D4: a failed, stale or missing forecast is never scored, so no GO can outlive it.
+    const open = gatedForecast(gate, shownForecast({ forecast, loadedZip: forecastZip, error: wxError }, zip));
     if (!open || !card) return null;
-    return applySheetSurface(rescoreForecast(open, card.environmentals, scoringSite), card.environmentals, scoringSite);
-  }, [gate, forecast, card, scoringSite]);
+    // Only a job with a material limit reads the ticking clock; every other job scores as before.
+    const now = hasMaterialLimit ? new Date(clock) : undefined;
+    return applySheetSurface(rescoreForecast(open, card.environmentals, scoringSite, now ? { now } : undefined), card.environmentals, scoringSite, now);
+  }, [gate, forecast, forecastZip, wxError, zip, card, scoringSite, clock, hasMaterialLimit]);
 
   function remember(next: FieldCardData, nextZip: string) {
     const entry: SavedCard = {
@@ -575,12 +593,15 @@ function App({ user }: { user: AppUser | null }) {
         data: { zip: nextZip, environmentals: active.environmentals },
       });
       if (!result.ok) {
+        setForecast(null);
         setWxError(result.error);
         return;
       }
       setForecast(result.forecast);
+      setForecastZip(nextZip);
       remember(active, nextZip);
     } catch (err) {
+      setForecast(null);
       setWxError(err instanceof Error ? err.message : "Forecast failed");
     } finally {
       setWxLoading(false);
@@ -965,6 +986,7 @@ function App({ user }: { user: AppUser | null }) {
               site={scoringSite}
               onSite={setSite}
               paused={flags.unverifiedTemps}
+              now={hasMaterialLimit ? new Date(clock) : undefined}
             />
             <LearningPanel
               calibration={calibration}
