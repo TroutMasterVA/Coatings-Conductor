@@ -231,7 +231,7 @@ function qualKind(q: string): Qual {
 }
 
 type Target = "ambient" | "substrate";
-type LabelHit = { targets: Target[]; ambiguous: boolean; start: number; end: number };
+type LabelHit = { targets: Target[]; ambiguous: boolean; start: number; end: number; words: string[] };
 
 function targetsOf(word: string): Target | null | "other" {
   const w = word.toLowerCase();
@@ -264,6 +264,7 @@ function labelGroups(s: string): LabelHit[] {
       ambiguous: cur.seps.some((x) => /^\s+$/.test(x)),
       start: cur.start,
       end: cur.end,
+      words: cur.words,
     });
     cur = null;
   };
@@ -330,8 +331,41 @@ export type TempGate = {
  * (air/ambient/surface/substrate) governs it in the same clause. Silent → nothing, never a guess.
  */
 export function temperatureGates(raw: string): TempGate[] {
-  const out: TempGate[] = [];
   const t = normalizeTempText(raw);
+  const out: TempGate[] = scanClauseGates(t, (g) => g.targets);
+  // Unit-column table: "Environmental conditions °F °C air and surface temp 20 to 120 -7 to 49".
+  for (const m of t.matchAll(
+    new RegExp(
+      String.raw`°F\s*\/?\s*°C\s+((?:air|ambient|surface|substrate)(?:\s*(?:,|and|&|\/)\s*(?:air|ambient|surface|substrate))*)\s+temp(?:erature)?s?\.?\s+(${NUM})${RANGE_SEP}(${NUM})(?![\d.]|\s*°)`,
+      "gi",
+    ),
+  )) {
+    const targets = new Set<Target>();
+    for (const w of m[1].split(/[^a-z]+/i)) {
+      const tt = targetsOf(w);
+      if (tt === "ambient" || tt === "substrate") targets.add(tt);
+    }
+    const lo = Number(m[2]);
+    const hi = Number(m[3]);
+    for (const target of targets)
+      out.push({ target, kind: "range", lo: Math.min(lo, hi), hi: Math.max(lo, hi), quote: m[0] });
+  }
+  return out.filter((g) => g.lo >= -60 && g.lo <= 400 && (g.hi === null || g.hi <= 400));
+}
+
+/** A gate found in one clause, for whichever targets `pick` assigns to the governing label group. */
+type ClauseGate<T extends string> = { target: T; kind: Qual | "range"; lo: number; hi: number | null; quote: string };
+
+/**
+ * The clause scan shared by the air/surface gates and the material gates: a number counts only when
+ * it carries °F/°C AND a label group governs it in the same clause. `pick` names the group's targets.
+ */
+function scanClauseGates<T extends string>(
+  t: string,
+  pick: (g: LabelHit, clause: string) => T[],
+  skipHit?: (clause: string, start: number, end: number) => boolean,
+): ClauseGate<T>[] {
+  const out: ClauseGate<T>[] = [];
   for (const c of clauses(t)) {
     const temps = tempsInClause(c);
     if (!temps.length) continue;
@@ -360,17 +394,19 @@ export function temperatureGates(raw: string): TempGate[] {
         g = groups.find((x) => x.start >= tp.end && x.start - tp.end <= 45);
         between = g ? c.slice(tp.end, g.start) : "";
       }
-      if (!g || g.ambiguous || !g.targets.length) return;
+      const targets = g ? pick(g, c) : [];
+      if (!g || g.ambiguous || !targets.length) return;
       if (BLOCKER_RE.test(between)) return;
       // "if the surface temperature is 35°F to 60°F" is a condition, not the limit.
       const lead = c.slice(Math.max(0, Math.min(g.start, tp.start) - 12), tp.start);
       if (/\b(if|unless)\b/i.test(lead)) return;
+      if (skipHit?.(c, Math.min(g.start, tp.start), Math.max(g.end, tp.end))) return;
 
       const quote = c.slice(Math.min(g.start, tp.start), Math.max(g.end, tp.end)).trim();
       const negated = /\b(?:not|never|avoid)\b/i.test(
         c.slice(Math.max(0, tp.start - 40), tp.start),
       );
-      for (const target of g.targets) {
+      for (const target of targets) {
         if (tp.hi !== null) {
           if (pre || post) continue; // "minimum 10-20°F" is unclear; skip.
           out.push({
@@ -391,24 +427,7 @@ export function temperatureGates(raw: string): TempGate[] {
       }
     });
   }
-  // Unit-column table: "Environmental conditions °F °C air and surface temp 20 to 120 -7 to 49".
-  for (const m of t.matchAll(
-    new RegExp(
-      String.raw`°F\s*\/?\s*°C\s+((?:air|ambient|surface|substrate)(?:\s*(?:,|and|&|\/)\s*(?:air|ambient|surface|substrate))*)\s+temp(?:erature)?s?\.?\s+(${NUM})${RANGE_SEP}(${NUM})(?![\d.]|\s*°)`,
-      "gi",
-    ),
-  )) {
-    const targets = new Set<Target>();
-    for (const w of m[1].split(/[^a-z]+/i)) {
-      const tt = targetsOf(w);
-      if (tt === "ambient" || tt === "substrate") targets.add(tt);
-    }
-    const lo = Number(m[2]);
-    const hi = Number(m[3]);
-    for (const target of targets)
-      out.push({ target, kind: "range", lo: Math.min(lo, hi), hi: Math.max(lo, hi), quote: m[0] });
-  }
-  return out.filter((g) => g.lo >= -60 && g.lo <= 400 && (g.hi === null || g.hi <= 400));
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -566,10 +585,11 @@ export type TableLimits = { gates: TempGate[]; rhMax: number | null };
  * the Maximum row of a humidity column. A "Normal" row is the recommended band, used only when the
  * table has no Minimum/Maximum row. Units come from each cell or the column header ("(°F)", "%").
  */
-export function conditionTableLimits(raw: string): TableLimits {
-  const t = normalizeTempText(raw);
-  const gates: TempGate[] = [];
-  let rhMax: number | null = null;
+type ConditionTable = { cols: Col[]; rows: { label: string; cells: Cell[] }[]; quote: string };
+
+/** Every condition table that reads cleanly (header columns, then labelled rows). */
+function conditionTables(t: string): ConditionTable[] {
+  const out: ConditionTable[] = [];
   for (const h of tableHeaders(t)) {
     const rows = readTableRows(t, h.end, h.cols);
     if (!rows.length) continue;
@@ -578,6 +598,17 @@ export function conditionTableLimits(raw: string): TableLimits {
       .split(/\n/)
       .slice(0, 3)
       .join(" ");
+    out.push({ cols: h.cols, rows, quote });
+  }
+  return out;
+}
+
+export function conditionTableLimits(raw: string): TableLimits {
+  const t = normalizeTempText(raw);
+  const gates: TempGate[] = [];
+  let rhMax: number | null = null;
+  for (const { cols, rows, quote } of conditionTables(t)) {
+    const h = { cols };
     const hasLimitRows = rows.some((r) => /^(min|max)/.test(r.label));
     for (const r of rows) {
       const kind: Qual | "range" | null = /^min/.test(r.label)
@@ -638,6 +669,90 @@ function applyTempGates(env: Environmentals, gates: TempGate[]): void {
       env[maxK] = g.lo;
     }
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Material (product) temperature                                      */
+/* ------------------------------------------------------------------ */
+
+/** "temperature of (the) product" / "product temperature": the product itself, not "this product should…". */
+const PRODUCT_TEMP_LABEL = /\btemperature\s+of\s+(?:the\s+)?(?:mixed\s+)?product\b|\bproduct\s+temperatures?\b/i;
+/**
+ * Advice, storage or spray-setup numbers near a material label are not application limits
+ * ("Condition material to 65–75°F … for best workability", "Store at 40–90°F", "Pressure is for a
+ * material temperature of 68°F").
+ */
+const MATERIAL_ADVICE =
+  /\b(?:condition(?:ed|ing)?|best|workab\w*|ideal(?:ly)?|optim\w*|prefer\w*|recommend\w*|typical(?:ly)?|normal(?:ly)?|stor(?:e|ed|age|ing)|ship\w*|warehous\w*|pressure|indicative|guide)\b/i;
+
+export type MaterialTemp = {
+  minF: number | null;
+  maxF: number | null;
+  /** A table's "Normal" material band when the table also has absolute Minimum/Maximum rows: info only. */
+  normalMinF: number | null;
+  normalMaxF: number | null;
+};
+
+function materialPick(g: LabelHit, clause: string): "material"[] {
+  if (g.words.some((w) => /^material$/i.test(w))) return ["material"];
+  if (g.words.some((w) => /^product$/i.test(w)) && PRODUCT_TEMP_LABEL.test(clause)) return ["material"];
+  return [];
+}
+
+/**
+ * Material (product) temperature limits from the sheet: "Material: 40°F (4.5°C) minimum",
+ * "Temperature of product must be above 59°F [15°C]", "minimum 50°F … maximum 110°F … air, surface
+ * and material", or the "Material" column of a condition table. Absolute Minimum/Maximum rows are
+ * the limit (same rule as surface); a "Normal" row is the limit only when the table has no
+ * Minimum/Maximum row, else it is kept as info. A unit is required; silent → nothing.
+ */
+export function materialTempFromText(raw: string): MaterialTemp {
+  const out: MaterialTemp = { minF: null, maxF: null, normalMinF: null, normalMaxF: null };
+  const t = normalizeTempText(maskStandards(raw ?? ""));
+  const sane = (n: number) => n >= -60 && n <= 400;
+  const gates = scanClauseGates(t, materialPick, (c, start, end) =>
+    MATERIAL_ADVICE.test(c.slice(Math.max(0, start - 40), Math.min(c.length, end + 30))),
+  ).filter((g) => sane(g.lo) && (g.hi === null || sane(g.hi)));
+  for (const { cols, rows } of conditionTables(normalizeTempText(raw ?? ""))) {
+    const i = cols.findIndex((c) => c.word === "material");
+    if (i < 0) continue;
+    const hasLimitRows = rows.some((r) => /^(min|max)/.test(r.label));
+    for (const r of rows) {
+      const cell = r.cells[i];
+      if (!cell || cell.kind !== "temp") continue;
+      if (/^min/.test(r.label) && cell.hi === null && sane(cell.lo)) gates.push({ target: "material", kind: "min", lo: cell.lo, hi: null, quote: "" });
+      else if (/^max/.test(r.label) && cell.hi === null && sane(cell.lo)) gates.push({ target: "material", kind: "max", lo: cell.lo, hi: null, quote: "" });
+      else if (!/^(min|max)/.test(r.label) && cell.hi !== null && sane(cell.lo) && sane(cell.hi)) {
+        const lo = Math.min(cell.lo, cell.hi);
+        const hi = Math.max(cell.lo, cell.hi);
+        if (hasLimitRows) {
+          out.normalMinF ??= lo;
+          out.normalMaxF ??= hi;
+        } else gates.push({ target: "material", kind: "range", lo, hi, quote: "" });
+      }
+    }
+  }
+  // First stated value wins per side; a range fills only when both sides are open (as applyTempGates).
+  for (const g of gates) {
+    if (g.kind === "range") {
+      if (out.minF == null && out.maxF == null) {
+        out.minF = g.lo;
+        out.maxF = g.hi;
+      }
+    } else if (g.kind === "min") {
+      if (out.minF == null && (out.maxF == null || g.lo < out.maxF)) out.minF = g.lo;
+    } else if (out.maxF == null && (out.minF == null || g.lo > out.minF)) out.maxF = g.lo;
+  }
+  return out;
+}
+
+/** Writes only the material keys the sheet states (absent = Not stated, so older cards read the same). */
+function applyMaterialTemp(env: Environmentals, m: MaterialTemp): void {
+  if (m.minF != null) env.materialTempMinF = m.minF;
+  if (m.maxF != null) env.materialTempMaxF = m.maxF;
+  if (m.minF == null && m.maxF == null) return;
+  if (m.normalMinF != null) env.materialNormalTempMinF = m.normalMinF;
+  if (m.normalMaxF != null) env.materialNormalTempMaxF = m.normalMaxF;
 }
 
 /** Max RH only from a humidity-labelled phrase; a stated minimum, a cure note or a test condition is not a limit. */
@@ -895,6 +1010,7 @@ export function heuristicExtract(text: string): FieldCardData {
   applyTempGates(env, [...temperatureGates(maskStandards(t)), ...table.gates]);
   env.relativeHumidityMax = relativeHumidityMaxFromText(t) ?? table.rhMax;
   env.dewPointSpreadMinF = dewPointSpreadFromText(t);
+  applyMaterialTemp(env, materialTempFromText(t));
 
   const storageRange = firstMatch(t, [
     /stor(?:e|age)[^\n]{0,40}?(\d+\s*°?\s*[CF][^\n]{0,20}\d+\s*°?\s*[CF])/i,

@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { DEW_SPREAD_DEFAULT_F } from "../lib/score-windows.ts";
 import { LIMIT_FIELDS, LIMIT_LABEL, TEXT_LIMIT_FIELDS, notStatedFlag } from "../lib/limit-fields.ts";
-import { editLimit, FROM_SHEET, limitSource, SSPC_DEW_DEFAULT_TEXT, USER_EDITED, type LimitSource } from "../lib/limit-source.ts";
+import { MATERIAL_LIMIT_FIELDS, MATERIAL_LIMIT_LABEL, materialNormalText } from "../lib/material-temp.ts";
+import { editLimit, editMaterialLimit, FROM_SHEET, limitSource, SSPC_DEW_DEFAULT_TEXT, USER_EDITED, type LimitSource } from "../lib/limit-source.ts";
 import type { ClientProvenance } from "../lib/extract-client.ts";
 import type { Environmentals, FieldCardData } from "../lib/types.ts";
 
@@ -91,6 +92,26 @@ export function LimitsPanel({
             </label>
           );
         })}
+        {MATERIAL_LIMIT_FIELDS.map(({ key, label, unit }) => {
+          const path = `environmentals.${key}`;
+          const src = limitSource(path, card, asRead, provenance);
+          return (
+            <label key={key} className="block" data-testid={`limit-${key}`}>
+              <span className="text-xs font-medium text-muted">
+                {label} {unit}
+              </span>
+              <Input
+                inputMode="decimal"
+                aria-label={`${label} ${unit}`}
+                className="mt-1 h-9 font-mono"
+                value={env[key] ?? ""}
+                disabled={!onEnvironmentals}
+                onChange={(e) => onEnvironmentals?.(editMaterialLimit(env, key, e.target.value))}
+              />
+              <SourceLine src={src} flag={notStatedFlag(MATERIAL_LIMIT_LABEL[key])} testId={`limit-${key}`} />
+            </label>
+          );
+        })}
         <label className="flex items-end gap-2 pb-1 text-sm text-fg">
           <input
             type="checkbox"
@@ -102,6 +123,11 @@ export function LimitsPanel({
           Dry only
         </label>
       </div>
+      {materialNormalText(env) ? (
+        <p className="mt-2 text-xs text-muted" data-testid="material-normal">
+          Sheet&apos;s normal material range {materialNormalText(env)} (info only, not scored)
+        </p>
+      ) : null}
       <p className="mt-4 text-xs font-medium uppercase tracking-wide text-muted">Times &amp; film (editable, not scored)</p>
       <div className="mt-2 grid gap-3 sm:grid-cols-2">
         {TEXT_LIMIT_FIELDS.map(({ path, label }) => {

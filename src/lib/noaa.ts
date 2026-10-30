@@ -14,6 +14,7 @@ import type { Environmentals, ForecastBundle } from "./types";
 import type { SiteContext } from "./mitigations";
 import { LIMIT_LABEL, notStatedFlag, unstatedLimitKeys, type LimitKey } from "./limit-fields.ts";
 import { NOT_STATED_LIMIT_BLOCKS_GO, WIND_ADVISORY, workWindowCheck, condensationRisk, type ScoreOptions } from "./score-windows.ts";
+import { dateKeyIn, materialHour, readingFromSite } from "./material-temp.ts";
 
 /** Surface temperature for the checks: a gauge reading, or the sun-model estimate (always labelled). */
 export type SurfaceInput = { valueF: number; kind: "measured" | "estimate" };
@@ -364,7 +365,23 @@ export async function sheetWindow(
  * Re-check the NOAA table with the job's surface temperature: the saved gauge reading when present
  * ("measured"), else the sun-model estimate from the scored strip ("estimate, verify with gauge").
  */
-export function applySheetSurface(forecast: ForecastBundle, env: Environmentals, site: SiteContext): ForecastBundle {
+/**
+ * The material (product) temperature rule on one hourly-list line, from the same helper as the day
+ * rows. A fresh reading outside the sheet's material limit fails the hour; every other material line
+ * (measure, air outside the range, not stated) is a flag. The CAUTION itself comes from the day row
+ * ("GO · CAUTION — …"), so the two views agree.
+ */
+export function withMaterialCheck(check: HourCheck, env: Environmentals, site: SiteContext, timeZone: string, now: Date = new Date()): HourCheck {
+  const hourDateKey = dateKeyIn(timeZone, new Date(check.startIso)) ?? check.startIso.slice(0, 10);
+  const m = materialHour({ env, reading: readingFromSite(site), hourDateKey, timeZone, now, airF: check.hour.tempF });
+  const checks = m.check ? [...check.checks, { name: "Material temp", status: m.check.status, reason: m.check.reason }] : check.checks;
+  const extra = [...m.reasons, ...m.notes].filter((l) => l !== m.check?.reason);
+  const flags = [...(check.flags ?? []), ...extra.filter((l) => !(check.flags ?? []).includes(l))];
+  const verdict: HourVerdict = m.effect === "nogo" && check.verdict !== "outside" ? "nogo" : check.verdict;
+  return { ...check, checks, flags, verdict };
+}
+
+export function applySheetSurface(forecast: ForecastBundle, env: Environmentals, site: SiteContext, now: Date = new Date()): ForecastBundle {
   const sheet = forecast.sheet;
   if (!sheet) return forecast;
   const est = new Map<string, number>();
@@ -380,7 +397,7 @@ export function applySheetSurface(forecast: ForecastBundle, env: Environmentals,
     const e = est.get(c.startIso);
     const surface: SurfaceInput | null =
       measured != null ? { valueF: measured, kind: "measured" } : e != null ? { valueF: e, kind: "estimate" } : null;
-    return workWindowCheck(checkHour(c.hour, env, surface), sheet.timezone, site.mitigations.includes("night_shift"));
+    return workWindowCheck(withMaterialCheck(checkHour(c.hour, env, surface), env, site, sheet.timezone, now), sheet.timezone, site.mitigations.includes("night_shift"));
   });
   return { ...forecast, sheet: { ...sheet, hours } };
 }

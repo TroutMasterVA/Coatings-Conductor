@@ -29,6 +29,7 @@ import { BACKUP_LABEL, type LimitCheck, type SheetWindow } from "@/lib/noaa";
 import type { DayWindow, Environmentals, FieldCardData, ForecastBundle, HourWindow, WindowStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { WINDOWS_PAUSED } from "@/lib/extract-flags";
+import { MATERIAL_READING_HOURS, materialLimits, materialRangeText, readingFromSite, readingIsFresh, readingTimeText } from "@/lib/material-temp";
 
 const selectClass =
   "flex h-11 w-full rounded-md bg-surface-2 px-3 text-sm text-fg shadow-[0_0_0_1px_rgba(255,255,255,0.08)] transition-[box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40";
@@ -147,6 +148,11 @@ function DayCard({ day, night }: { day: DayWindow; night?: boolean }) {
       </p>
       {day.workRange ? <p className="mt-0.5 text-xs text-muted">Counted hours {day.workRange}</p> : null}
       {day.limiting[0] ? <p className="mt-1 line-clamp-2 text-xs text-muted">{day.limiting[0]}</p> : null}
+      {day.materialLine ? (
+        <p className="mt-1 text-xs font-medium text-caution" data-testid="day-material-line">
+          {day.materialLine}
+        </p>
+      ) : null}
       <div className="mt-3">
         <HourStrip hours={day.hours} night={night} />
       </div>
@@ -232,6 +238,54 @@ function MitPickGrid({
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Thermometer reading of the material (product) itself. Shown only when the sheet (or a hand edit)
+ * states a material limit. Saved with the time it was taken; counts for 4 hours, today only.
+ */
+export function MaterialReadingField({
+  environmentals,
+  site,
+  onSite,
+  now,
+  timeZone,
+}: {
+  environmentals?: Environmentals;
+  site: SiteContext;
+  onSite: (site: SiteContext) => void;
+  now?: Date;
+  /** The forecast's (site's) zone: the same "today" the verdicts use. */
+  timeZone?: string;
+}) {
+  const lim = materialLimits(environmentals);
+  if (!lim) return null;
+  const reading = readingFromSite(site);
+  const fresh = readingIsFresh(reading, now ?? new Date(), timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
+  return (
+    <div className="mt-3" data-testid="material-reading">
+      <Label htmlFor="measured-material">Measured material temp (°F)</Label>
+      <Input
+        id="measured-material"
+        type="number"
+        inputMode="decimal"
+        className="mt-1"
+        placeholder="Thermometer in the product"
+        value={site.measuredMaterialTempF ?? ""}
+        onChange={(e) => {
+          const v = e.target.value.trim() === "" ? null : Number(e.target.value);
+          const ok = v != null && Number.isFinite(v);
+          onSite({ ...site, measuredMaterialTempF: ok ? v : null, measuredMaterialAt: ok ? new Date().toISOString() : null });
+        }}
+      />
+      <p className="mt-1 text-xs text-muted" data-testid="material-reading-time">
+        {reading
+          ? `Taken ${readingTimeText(reading.at)} · ${fresh ? `counts until ${readingTimeText(new Date(Date.parse(reading.at) + MATERIAL_READING_HOURS * 3_600_000).toISOString())}` : "no longer counts, measure again"}`
+          : "No reading yet."}{" "}
+        Sheet: {materialRangeText(lim)}. A reading counts for {MATERIAL_READING_HOURS} hours, today only. Air is never used in its place.
+      </p>
     </div>
   );
 }
@@ -440,6 +494,7 @@ export function WeatherPanel({
               Empty: surface checks use the sun estimate, labelled “estimate, verify with gauge”.
             </p>
           </div>
+          <MaterialReadingField environmentals={environmentals} site={site} onSite={onSite} now={now} timeZone={forecast?.timezone} />
           <p className="mt-2 text-xs leading-relaxed text-muted">
             {sub.note} On a sunny {example.airF}°F afternoon this face estimates about{" "}
             <span className="font-mono text-fg">{example.substrateF}°F</span>

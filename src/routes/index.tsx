@@ -39,6 +39,7 @@ import {
 import { callExtractSheet, loadUploadLimitBytes } from "@/lib/extract-server";
 import { loadForecast } from "@/lib/forecast";
 import { applySheetSurface } from "@/lib/noaa";
+import { materialLimits } from "@/lib/material-temp";
 import {
   DEFAULT_CALIBRATION,
   loadLegacyLearning,
@@ -456,14 +457,27 @@ function App({ user }: { user: AppUser | null }) {
     [site, calibration, custom],
   );
 
+  // Material temp (Item 5): a reading counts for 4 hours and "today" is the site date, so a job with
+  // a stated material limit is re-scored once a minute.
+  const hasMaterialLimit = Boolean(card && materialLimits(card.environmentals));
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasMaterialLimit) return;
+    setClock(Date.now());
+    const id = window.setInterval(() => setClock(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, [hasMaterialLimit, site.measuredMaterialAt]);
+
   /** No verdict anywhere unless a sheet loaded: never scored against default or empty limits. */
   const readFailed = extractState.kind === "error" || (extractState.kind === "done" && needsAzureReader(extractState.result));
   const gate = useMemo(() => sheetGate(card, readFailed), [card, readFailed]);
   const scored = useMemo(() => {
     const open = gatedForecast(gate, forecast);
     if (!open || !card) return null;
-    return applySheetSurface(rescoreForecast(open, card.environmentals, scoringSite), card.environmentals, scoringSite);
-  }, [gate, forecast, card, scoringSite]);
+    // Only a job with a material limit reads the ticking clock; every other job scores as before.
+    const now = hasMaterialLimit ? new Date(clock) : undefined;
+    return applySheetSurface(rescoreForecast(open, card.environmentals, scoringSite, now ? { now } : undefined), card.environmentals, scoringSite, now);
+  }, [gate, forecast, card, scoringSite, clock, hasMaterialLimit]);
 
   function remember(next: FieldCardData, nextZip: string) {
     const entry: SavedCard = {
@@ -961,6 +975,7 @@ function App({ user }: { user: AppUser | null }) {
               site={scoringSite}
               onSite={setSite}
               paused={flags.unverifiedTemps}
+              now={hasMaterialLimit ? new Date(clock) : undefined}
             />
             <LearningPanel
               calibration={calibration}

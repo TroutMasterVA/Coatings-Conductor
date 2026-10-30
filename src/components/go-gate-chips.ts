@@ -16,6 +16,9 @@ export function goGateChips(card: FieldCardData): string[] {
   if (env.substrateTempMinF != null || env.substrateTempMaxF != null) {
     chips.push(`Substrate ${formatTempRange(env.substrateTempMinF, env.substrateTempMaxF)}`);
   }
+  if (env.materialTempMinF != null || env.materialTempMaxF != null) {
+    chips.push(`Material ${formatTempRange(env.materialTempMinF, env.materialTempMaxF)}`);
+  }
   if (env.dewPointSpreadMinF != null) {
     chips.push(`Dew spread ≥ ${env.dewPointSpreadMinF}°F`);
   } else {
