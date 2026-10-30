@@ -1,10 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
-import { closeJob, deleteOpenProject, GUEST_CLOSED_BY, statusFields, throwWriteRefused, type JobStatus } from "@/lib/job-close";
+import { closeJob, deleteOpenProject, throwWriteRefused, type JobStatus } from "@/lib/job-close";
 import { listProjectRows, toRowSummary, type ProjectRow } from "@/lib/project-rows";
 import { openOwnedProject, readOwnedProject, throwProjectNotFound, type SetStatus } from "@/lib/project-access";
-import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE, remapGuestImportInput } from "@/lib/guest-import";
+import { accountRejectsGuestImport, NOT_YOUR_JOB_MESSAGE } from "@/lib/guest-import";
+import { claimGuestWorkspace } from "@/lib/guest-claim";
 import { DEFAULT_CALIBRATION, mergeCustomMitigation, type CustomMitigationInput } from "@/lib/learning";
 import type { SiteContext, SubstrateId } from "@/lib/mitigations";
 import { decodeSavedExtract, saveJobCard, encodeSavedExtract, parseSavedExtract } from "@/lib/job-extract";
@@ -320,83 +321,21 @@ export const importGuestWorkspace = createServerFn({ method: "POST" })
     const custom = Array.isArray(input.custom) ? input.custom.slice(0, 40) : [];
     return { projects, custom, lastProjectId: input.lastProjectId ?? null, claim: input.claim === true };
   })
-  .handler(async ({ context, data }): Promise<{ imported: number; skipped: boolean; importedIds: string[]; customOk: boolean }> => {
-    const [existing, existingCustom] = await Promise.all([listRows(context.userId), loadCustom(context.userId)]);
-    if (!data.claim && accountRejectsGuestImport(existing.length, existingCustom.length)) {
-      return { imported: 0, skipped: true, importedIds: [], customOk: false };
-    }
-    const importedIds: string[] = [];
-    let customOk = true;
-    const minted = remapGuestImportInput({
-      projects: data.projects,
-      custom: data.custom,
-      lastProjectId: data.lastProjectId,
-    });
-    const sql = await getSql();
-    const now = new Date().toISOString();
-    let imported = 0;
-    for (const [i, p] of minted.projects.entries()) {
-      const guestId = data.projects[i]?.id;
-      const name = String(p.name ?? "").trim();
-      const zip = String(p.zip ?? "").replace(/\D/g, "").slice(0, 5);
-      if (!name || zip.length !== 5) continue;
-      const id = p.id;
-      const cal = p.calibration ?? DEFAULT_CALIBRATION;
-      const site = p.site ?? defaultSite();
-      const card = p.card ?? null;
-      const extract = card ? parseSavedExtract(p.extract) : null;
-      const pdsText = typeof p.pdsText === "string" ? p.pdsText : "";
-      const recents = Array.isArray(p.recents) ? p.recents : [];
-      const outcomes = Array.isArray(p.outcomes) ? p.outcomes : [];
-      const lastOpened = p.lastOpenedAt || now;
-      const updated = p.updatedAt || now;
-      // A job closed on this device stays closed (read-only record) in the account.
-      // closedBy is always "This device" (the browser's value is not trusted); a missing or invalid
-      // closedAt falls back to the import time.
-      const guestStatus = statusFields({ status: p.status, closed_at: p.closedAt ?? null });
-      const closed =
-        guestStatus.status === "closed"
-          ? { status: "closed", closedAt: guestStatus.closedAt ?? now, closedBy: GUEST_CLOSED_BY }
-          : { status: "open", closedAt: null, closedBy: null };
-      try {
-      await sql`
-        insert into projects (
-          id, user_id, name, zip, archived, calibration_json, site_json, card_json, extract_json, pds_text,
-          recents_json, outcomes_json, created_at, updated_at, last_opened_at,
-          status, closed_at, closed_by
-        ) values (
-          ${id}, ${context.userId}, ${name}, ${zip}, ${Boolean(p.archived)},
-          ${JSON.stringify(cal)}, ${JSON.stringify(site)}, ${card ? JSON.stringify(card) : null},
-          ${encodeSavedExtract(extract)}, ${pdsText}, ${JSON.stringify(recents)}, ${JSON.stringify(outcomes)},
-          ${now}, ${updated}, ${lastOpened},
-          ${closed.status}, ${closed.closedAt}, ${closed.closedBy}
-        )
-        on conflict (id) do nothing
-      `;
-      } catch {
-        continue;
+  .handler(
+    async ({
+      context,
+      data,
+    }): Promise<{ imported: number; alreadyMoved: number; skipped: boolean; importedIds: string[]; customOk: boolean }> => {
+      const [existing, existingCustom] = await Promise.all([listRows(context.userId), loadCustom(context.userId)]);
+      if (!data.claim && accountRejectsGuestImport(existing.length, existingCustom.length)) {
+        return { imported: 0, alreadyMoved: 0, skipped: true, importedIds: [], customOk: false };
       }
-      imported += 1;
-      if (typeof guestId === "string") importedIds.push(guestId);
-    }
-    for (const c of minted.custom) {
-      if (!c?.id || !c?.label) continue;
-      try {
-      await sql`
-        insert into custom_mitigations (id, user_id, label, payload_json, created_at, updated_at)
-        values (${c.id}, ${context.userId}, ${c.label}, ${JSON.stringify(c)}, ${c.createdAt || now}, ${now})
-        on conflict (id) do nothing
-      `;
-      } catch {
-        customOk = false;
-      }
-    }
-    const last = minted.lastProjectId ?? minted.projects[0]?.id ?? null;
-    if (last) {
-      await sql`
-        insert into user_prefs (user_id, last_project_id) values (${context.userId}, ${last})
-        on conflict (user_id) do update set last_project_id = ${last}
-      `;
-    }
-    return { imported, skipped: false, importedIds, customOk };
-  });
+      // Idempotent per (user, device item): a repeat claim returns the account's existing copy.
+      const sql = await getSql();
+      const res = await claimGuestWorkspace(sql, context.userId, data, {
+        now: new Date().toISOString(),
+        fallbackSite: defaultSite,
+      });
+      return { ...res, skipped: false };
+    },
+  );

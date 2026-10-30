@@ -3,6 +3,7 @@ import { createFileRoute, Link, Navigate } from "@tanstack/react-router";
 import { authClient, authEnabled } from "@/lib/auth/client";
 import { loginCardMessage } from "@/lib/auth/login-lockout";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { loginNavigatesHome } from "@/lib/login-redirect";
 import { BootShell } from "@/components/boot-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,7 +26,7 @@ function Login() {
   const [error, setError] = useState<string | null>(null);
 
   if (isPending) return <BootShell message="Opening the stand…" />;
-  if (user) return <Navigate to="/" />;
+  if (loginNavigatesHome({ user, submitting: busy })) return <Navigate to="/" />;
 
   async function handleEmail(e: FormEvent) {
     e.preventDefault();

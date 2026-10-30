@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { LimitsPanel } from "@/components/limits-panel";
 import type { ClientProvenance } from "@/lib/extract-client";
 import { UnstatedLimits } from "@/components/unstated-limits";
+import { TodayVerdictLine } from "@/components/today-verdict";
 import { bestStretchLabel, dayHourIndex, hourLine, hourListLabel, hourReadings, hourText, STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
 import { Check, CloudSun, Loader2, MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -81,7 +82,7 @@ function SheetLimitChecks({ sheet, timezone, night, days }: { sheet: SheetWindow
                 {" · "}
                 {h.checks
                   .filter((c) => c.status !== "pass" || h.verdict === "go")
-                  .map((c) => `${CHECK_TEXT[c.status]}: ${c.reason}`)
+                  .map((c) => (c.status === "not-stated" ? c.reason : `${CHECK_TEXT[c.status]}: ${c.reason}`))
                   .join(" · ")}
                 {(h.flags ?? []).map((f) => ` · ${f}`).join("")}
               </span>
@@ -138,7 +139,7 @@ function DayCard({ day, night }: { day: DayWindow; night?: boolean }) {
           <p className="text-xs font-medium uppercase tracking-wide text-muted">{day.weekday}</p>
           <p className="font-mono text-sm text-fg">{day.dateLabel}</p>
         </div>
-        <Badge variant={statusVariant(day.status)}>{day.status}</Badge>
+        <Badge variant={statusVariant(day.status)}>{day.status === "nogo" ? "no-go" : day.status}</Badge>
       </div>
       <p className="mt-2 font-mono text-sm text-fg">{bestStretchLabel(day)}</p>
       <p className="mt-0.5 text-xs text-muted">
@@ -253,6 +254,7 @@ export function WeatherPanel({
   onSite,
   paused,
   blocked,
+  now,
 }: {
   zip: string;
   onZip: (v: string) => void;
@@ -275,6 +277,8 @@ export function WeatherPanel({
   paused?: boolean;
   /** No sheet, or the sheet couldn't be read: this message replaces every verdict (no GO/CAUTION/NO-GO). */
   blocked?: string;
+  /** Clock for the "today" line (tests); defaults to now. */
+  now?: Date;
 }) {
   const forecast = blocked ? null : forecastProp;
   const days = forecast?.days ?? [];
@@ -581,6 +585,8 @@ export function WeatherPanel({
         </div>
       ) : forecast ? (
         <div className="rise-in space-y-4">
+          {/* Reached only when the sheet gate is open: the blocked branch above replaces every verdict. */}
+          <TodayVerdictLine forecast={forecast} gate={{ ok: true }} env={environmentals} now={now} />
           <div className="rounded-xl bg-surface p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.08)] sm:p-5">
             <p className="text-base font-medium leading-snug text-fg">{forecast.headline}</p>
             <p className="mt-2 text-xs text-muted">

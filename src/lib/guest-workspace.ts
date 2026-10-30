@@ -127,29 +127,120 @@ export function signedInJobList<T extends { id: string }>(serverJobs: T[]): T[] 
   return serverJobs.filter((p) => p && !device.has(p.id));
 }
 
-export type ClaimResult = { outcome: "declined" | "suppressed" | "empty" | "imported" | "partial"; imported: number; kept: number };
+export type ClaimResult = {
+  /** "busy": another claim (this tab or another tab) is already asking or moving; nothing was asked. */
+  outcome: "declined" | "suppressed" | "empty" | "imported" | "partial" | "busy";
+  imported: number;
+  kept: number;
+};
+
+/** One claim per account at a time in this tab: a second caller shares the first one's result. */
+const inflightClaims = new Map<string, Promise<ClaimResult>>();
+
+/** Cross-tab marker: a tab is showing the move prompt or moving jobs for this account. */
+export const CLAIM_LOCK_KEY = "fieldcard.guestClaim.inflight.v1";
+/** A tab that closed mid-claim can't leave the lock forever. */
+export const CLAIM_LOCK_TTL_MS = 2 * 60 * 1000;
+/** Per tab (sessionStorage): "Not now" was answered for this account; don't ask again until a new tab. */
+export const CLAIM_NOT_NOW_KEY = "fieldcard.guestClaim.notNow.v1";
+
+function claimLockKey(accountId: string): string {
+  return `${CLAIM_LOCK_KEY}:${accountId}`;
+}
+
+function takeClaimLock(accountId: string, now: number): boolean {
+  try {
+    const held = Number(localStorage.getItem(claimLockKey(accountId)) ?? "");
+    if (Number.isFinite(held) && held > 0 && now - held < CLAIM_LOCK_TTL_MS) return false;
+    localStorage.setItem(claimLockKey(accountId), String(now));
+  } catch {
+    // No storage: the server still adds each device job at most once.
+  }
+  return true;
+}
+
+function releaseClaimLock(accountId: string) {
+  try {
+    localStorage.removeItem(claimLockKey(accountId));
+  } catch {
+    // ignore
+  }
+}
+
+function tabSession(): Storage | null {
+  try {
+    return typeof sessionStorage !== "undefined" ? sessionStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function notNowThisTab(accountId: string): boolean {
+  return Boolean(accountId) && tabSession()?.getItem(`${CLAIM_NOT_NOW_KEY}:${accountId}`) === "1";
+}
+
+function rememberNotNow(accountId: string) {
+  if (!accountId) return;
+  try {
+    tabSession()?.setItem(`${CLAIM_NOT_NOW_KEY}:${accountId}`, "1");
+  } catch {
+    // ignore
+  }
+}
 
 /**
  * Claim device jobs into the signed-in account, only when `confirm` says yes. Declining imports
  * nothing and leaves the device copy as-is (hidden while signed in). On a full import the device
  * store is cleared; on a partial one only the jobs that did not import are kept on the device.
  */
-export async function claimGuestJobs(
+export function claimGuestJobs(
   confirm: (n: number, names: string[]) => boolean | ClaimChoice | Promise<boolean | ClaimChoice>,
   importer: GuestImporter = importGuestWorkspace,
   accountId = "",
+): Promise<ClaimResult> {
+  // A remount, a re-run effect or a double click while a claim is open joins it: one prompt, one request.
+  const running = inflightClaims.get(accountId);
+  if (running) return running;
+  const run = runClaim(confirm, importer, accountId).finally(() => inflightClaims.delete(accountId));
+  inflightClaims.set(accountId, run);
+  return run;
+}
+
+async function runClaim(
+  confirm: (n: number, names: string[]) => boolean | ClaimChoice | Promise<boolean | ClaimChoice>,
+  importer: GuestImporter,
+  accountId: string,
 ): Promise<ClaimResult> {
   const dump = read();
   const n = dump.projects.length;
   if (n === 0) return { outcome: "empty", imported: 0, kept: 0 };
   if (accountId && guestClaimSuppressed(accountId)) return { outcome: "suppressed", imported: 0, kept: n };
+  if (notNowThisTab(accountId)) return { outcome: "declined", imported: 0, kept: n };
+  if (accountId && !takeClaimLock(accountId, Date.now())) return { outcome: "busy", imported: 0, kept: n };
+  try {
+    return await askAndMove(dump, confirm, importer, accountId);
+  } finally {
+    if (accountId) releaseClaimLock(accountId);
+  }
+}
+
+async function askAndMove(
+  dump: GuestStore,
+  confirm: (n: number, names: string[]) => boolean | ClaimChoice | Promise<boolean | ClaimChoice>,
+  importer: GuestImporter,
+  accountId: string,
+): Promise<ClaimResult> {
+  const n = dump.projects.length;
   const choice = await confirm(n, dump.projects.map((p) => p.name));
   if (choice === "dont-ask") {
     // Imports nothing; device jobs stay hidden while signed in; this device is not asked again.
     if (accountId) localStorage.setItem(claimDontAskKey(accountId), "1");
     return { outcome: "declined", imported: 0, kept: n };
   }
-  if (choice !== true && choice !== "move") return { outcome: "declined", imported: 0, kept: n };
+  if (choice !== true && choice !== "move") {
+    rememberNotNow(accountId);
+    return { outcome: "declined", imported: 0, kept: n };
+  }
   let res: Awaited<ReturnType<GuestImporter>>;
   try {
     res = await importer({

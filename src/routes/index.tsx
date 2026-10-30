@@ -153,8 +153,14 @@ function siteFromCard(card: FieldCardData, prev?: SiteContext): SiteContext {
 
 function Home() {
   const { user, isPending } = useCurrentUserState();
-  if (isPending) return <BootShell message="Opening the stand…" />;
-  return <App key={user?.id ?? "guest"} user={user} />;
+  // Boot screen only on the first session load. A session refetch (e.g. on window focus after the
+  // move prompt closes) keeps the last settled user, so App is not remounted and doesn't re-run
+  // its guest carry-over (P1: duplicate carry-over and a second prompt).
+  const settled = useRef<{ user: AppUser | null } | null>(null);
+  if (!isPending) settled.current = { user };
+  if (!settled.current) return <BootShell message="Opening the stand…" />;
+  const shown = settled.current.user;
+  return <App key={shown?.id ?? "guest"} user={shown} />;
 }
 
 function App({ user }: { user: AppUser | null }) {

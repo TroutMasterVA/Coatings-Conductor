@@ -148,7 +148,7 @@ The image has a Docker `HEALTHCHECK` on this path. On Azure, point the probes at
 - **Ask IT** before go-live, and set `TRUSTED_PROXY_HOPS` / `CLIENT_IP_HEADER` from the answer: the exact proxy chain in front of the container; whether it appends to or overwrites `X-Forwarded-For` (and adds a `:port`); whether it sets its own client-IP header and strips it from clients; and that nobody can reach the container directly, around the proxy. If the app can't find a client IP, it skips the per-IP limits for that request (it never puts everyone in one bucket), keeps the per-account lockout, and logs one `[rate-limit] client IP unknown` warning.
 - With more than one replica, run migrations once per release as a separate job (`RUN_MIGRATIONS=false` on the app) so two containers don't race to apply them.
 - Uploads are capped by `MAX_UPLOAD_MB` (default 10 MB). If a proxy or gateway sits in front of the container, let it accept request bodies at least that large.
-- Allow outbound HTTPS to your Postgres server, your Azure AI endpoints, and `api.weather.gov` / `api.open-meteo.com` (weather forecasts).
+- Allow outbound HTTPS to your Postgres server, your Azure AI endpoints, `api.weather.gov` / `api.open-meteo.com` (weather forecasts), and `api.zippopotam.us` (ZIP code to location lookup).
 
 ### Rolling back a bad release
 
