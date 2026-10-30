@@ -106,9 +106,11 @@ export async function processPick(raw: File | undefined | null, deps: PickDeps):
         text = "";
         pages = undefined;
       }
-      if (text) deps.onText(text);
     }
     const out = await deps.onUpload(file, text, pages);
+    // QA #55 D2: a PDF's text reaches the paste box only through a reader that accepted it (the
+    // page's onUpload, via pasteBoxAfterUpload). With no reader at all, show it here as before.
+    if (kind === "pdf" && text && !out) deps.onText(text);
     if (out && !out.ok) return done({ kind: "failed", name, message: out.message, signIn: out.signIn });
     return done({ kind: "loaded", name, chars: text ? text.length : undefined });
   } catch (err) {
@@ -144,4 +146,24 @@ export function takePickedFile(input: { files: ArrayLike<File> | null; value: st
   const file = input.files?.[0];
   input.value = "";
   return file;
+}
+
+/**
+ * Paste box after an upload (QA #55 D2). Only a finished read puts the file's text in the box. A
+ * refused or failed upload never fills it, and clears text an earlier upload left there (so
+ * "Build job card" stays disabled and never rebuilds from a file that was not loaded). Text the
+ * user typed or pasted is kept. `state` null = a newer pick superseded this one: leave the box.
+ */
+export function pasteBoxAfterUpload(args: {
+  current: string;
+  /** Text the previous successful upload put in the box, if any. */
+  previousUploadText: string | null;
+  pdfText: string;
+  state: ExtractState | null;
+}): string {
+  const { current, previousUploadText, pdfText, state } = args;
+  if (!state) return current;
+  if (state.kind === "done") return pdfText || current;
+  if (state.kind === "error") return previousUploadText != null && current === previousUploadText ? "" : current;
+  return current;
 }

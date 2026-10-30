@@ -28,7 +28,7 @@ import {
 } from "@/lib/extract-client";
 import { gatedForecast, sheetGate } from "@/lib/sheet-gate";
 import { JOB_CLOSED_MESSAGE } from "@/lib/job-close";
-import { uploadOutcome, type UploadOutcome } from "@/lib/upload-sheet";
+import { pasteBoxAfterUpload, uploadOutcome, type UploadOutcome } from "@/lib/upload-sheet";
 import {
   flagsForResult,
   flagsForSaved,
@@ -550,9 +550,13 @@ function App({ user }: { user: AppUser | null }) {
   }
 
   async function handleUpload(file: File, pdfText: string, pages?: string[]): Promise<UploadOutcome> {
-    uploadRef.current = { file, text: pdfText, pages };
-    if (pdfText) setText(pdfText);
-    return uploadOutcome(await runExtract({ file, text: pdfText, pages }), signedIn);
+    const previousUploadText = uploadRef.current?.text ?? null;
+    const state = await runExtract({ file, text: pdfText, pages });
+    // QA #55 D2: only a finished read fills the paste box; a refused/failed file never does.
+    if (state?.kind === "done") uploadRef.current = { file, text: pdfText, pages };
+    else if (state?.kind === "error") uploadRef.current = null;
+    setText((current) => pasteBoxAfterUpload({ current, previousUploadText, pdfText, state }));
+    return uploadOutcome(state, signedIn);
   }
 
   async function handleForecast(active: FieldCardData | null = card, nextZip = zip) {
