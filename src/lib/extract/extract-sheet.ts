@@ -2,6 +2,7 @@ import { createMiddleware, createServerFn } from "@tanstack/react-start";
 import type { ExtractRequest, ExtractResponse } from "./provider.ts";
 import { EXTRACT_DEFAULT_MAX_FILE_MB, runExtract, type RateStore } from "./extract-core.ts";
 import { onDeviceProvider } from "./on-device-provider.ts";
+import { publicErrors } from "../errors/server-fn-middleware.ts";
 
 /**
  * Like `authMiddleware`, but a missing session becomes `userId: null` so the handler can return
@@ -44,12 +45,14 @@ function maxFileBytes(): number {
 }
 
 /** Public upload limit so the UI shows the same number the server enforces. No auth; no secrets. */
-export const getExtractLimits = createServerFn({ method: "GET" }).handler(
+export const getExtractLimits = createServerFn({ method: "GET" })
+  .middleware([publicErrors])
+  .handler(
   async (): Promise<{ maxUploadMb: number }> => ({ maxUploadMb: maxUploadMb() }),
 );
 
 export const extractSheet = createServerFn({ method: "POST" })
-  .middleware([extractAuth])
+  .middleware([publicErrors, extractAuth])
   .validator((input: ExtractRequest): ExtractRequest => {
     // Coerce shape only. Size, base64 and magic-byte checks happen in runExtract (before decoding)
     // so they come back as coded errors instead of a thrown 500.
