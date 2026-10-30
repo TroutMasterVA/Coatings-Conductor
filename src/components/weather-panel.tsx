@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { LimitsPanel } from "@/components/limits-panel";
 import type { ClientProvenance } from "@/lib/extract-client";
 import { UnstatedLimits } from "@/components/unstated-limits";
+import { TodayVerdictLine } from "@/components/today-verdict";
 import { bestStretchLabel, dayHourIndex, hourLine, hourListLabel, hourReadings, hourText, STRIP_LAST_HOUR, stripHours, stripLabel } from "@/lib/hour-strip";
 import { Check, CloudSun, Loader2, MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -253,6 +254,7 @@ export function WeatherPanel({
   onSite,
   paused,
   blocked,
+  now,
 }: {
   zip: string;
   onZip: (v: string) => void;
@@ -275,6 +277,8 @@ export function WeatherPanel({
   paused?: boolean;
   /** No sheet, or the sheet couldn't be read: this message replaces every verdict (no GO/CAUTION/NO-GO). */
   blocked?: string;
+  /** Clock for the "today" line (tests); defaults to now. */
+  now?: Date;
 }) {
   const forecast = blocked ? null : forecastProp;
   const days = forecast?.days ?? [];
@@ -581,6 +585,8 @@ export function WeatherPanel({
         </div>
       ) : forecast ? (
         <div className="rise-in space-y-4">
+          {/* Reached only when the sheet gate is open: the blocked branch above replaces every verdict. */}
+          <TodayVerdictLine forecast={forecast} gate={{ ok: true }} env={environmentals} now={now} />
           <div className="rounded-xl bg-surface p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.08)] sm:p-5">
             <p className="text-base font-medium leading-snug text-fg">{forecast.headline}</p>
             <p className="mt-2 text-xs text-muted">
