@@ -1,3 +1,4 @@
+import { impossibleZip } from "@/lib/zip-check";
 import { NOT_YOUR_JOB_MESSAGE } from "@/lib/guest-import";
 import { GUEST_CLOSED_BY, JOB_CLOSED_DELETE_MESSAGE, JOB_CLOSED_MESSAGE, statusFields, type CloseResult } from "@/lib/job-close";
 import { guestTrust, planExtractSave } from "@/lib/job-extract";
@@ -269,6 +270,8 @@ export function guestCreateProject(name: string, zip: string, seed?: Partial<Pro
   const zipped = zip.replace(/\D/g, "").slice(0, 5);
   if (!trimmed) throw new Error("Project name is required.");
   if (zipped.length !== 5) throw new Error("Enter a 5-digit US ZIP.");
+  const bad = impossibleZip(zipped);
+  if (bad) throw new Error(bad);
   const now = new Date().toISOString();
   const full: ProjectFull = {
     id: crypto.randomUUID(),

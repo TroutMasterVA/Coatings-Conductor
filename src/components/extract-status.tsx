@@ -9,6 +9,7 @@ import {
   provenanceRows,
   SHEET_QUOTE_LABEL,
   retryCopy,
+  sizeRefusalHint,
   type ExtractState,
   type ServerIssue,
 } from "@/lib/extract-client";
@@ -54,10 +55,16 @@ export function ExtractNotice({ state }: { state: ExtractState }) {
   }
   if (state.kind === "error") {
     const message = state.issue === "RATE_LIMITED" ? issueText(state.issue, left) : state.message;
+    const hint = sizeRefusalHint(state);
     return (
-      <p role="alert" className="no-print mb-3 rounded-lg bg-nogo-soft px-3 py-2 text-sm text-ink">
-        {message}
-      </p>
+      <div role="alert" className="no-print mb-3 rounded-lg bg-nogo-soft px-3 py-2 text-sm text-ink">
+        <p>{message}</p>
+        {hint ? (
+          <p className="mt-1" data-testid="size-refusal-hint">
+            {hint}
+          </p>
+        ) : null}
+      </div>
     );
   }
   if (state.kind !== "done") return null;
